@@ -6,9 +6,13 @@ channels:
   - https://repo.anaconda.com/pkgs/msys2
 dependencies:
   - python=3.11
-  - conda-forge::langchain
-  - conda-forge::langgraph
+  - conda-forge::langchain==0.3.27
+  - conda-forge::langgraph==0.6.7
   - anaconda::langchain-openai
   - conda-forge::pymongo
   - ipykernel
   - conda-forge::langchain-google-genai
+<<<<<<< HEAD
+=======
+prefix: C:\Users\likgn\anaconda3\envs\soccer_agent_env
+>>>>>>> features-Khiem-TextualEntitySearchTool
