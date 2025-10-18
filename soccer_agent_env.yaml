@@ -10,3 +10,5 @@ dependencies:
   - conda-forge::langgraph
   - anaconda::langchain-openai
   - conda-forge::pymongo
+  - ipykernel
+  - conda-forge::langchain-google-genai
