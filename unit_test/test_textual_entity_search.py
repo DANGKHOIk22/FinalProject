@@ -12,10 +12,13 @@ from toolbox.textual_entity_search import (
     parse_entity_result,
     SoccerEntities,
     SearchingResult,
+)
+
+from models.soccerwiki_entities import (
     PlayerSchema,
-    TeamSchema,
+    RefereeSchema,
     VenueSchema,
-    RefereeSchema
+    TeamSchema
 )
 
 
