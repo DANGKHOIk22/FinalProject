@@ -119,7 +119,7 @@ def query_database(soccer_entities: SoccerEntities) -> SearchingResult:
                     # Search in database
                     if entity_type == "unknown":
                         filter = { 
-                            "FULL_NAME": entity_name,
+                            "NAME": entity_name,
                         }
                     else:
                         filter = { 
@@ -128,7 +128,7 @@ def query_database(soccer_entities: SoccerEntities) -> SearchingResult:
                                     "ENTITY_TYPE": entity_type,
                                 },
                                 {
-                                    "FULL_NAME": entity_name,
+                                    "NAME": entity_name,
                                 }
                             ]# type: ignore
                         }
@@ -236,3 +236,12 @@ def textual_entity_search(query: str) -> SearchingResult:
     except Exception as e:
         logging.error(f"Error in textual_entity_search: {str(e)}")
         return SearchingResult()
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    print("Testing textual_entity_search tool...")
+    load_dotenv()
+    test_query = "Who is the coach of Manchester United and where do they play their home games?"
+    result = textual_entity_search(test_query)
+    print(f"Found Entities: {result.found_entities}")
+    print(f"Missing Entities: {result.missing_entities}")
