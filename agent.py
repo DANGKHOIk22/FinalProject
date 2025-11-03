@@ -7,12 +7,12 @@ from langchain_core.output_parsers import PydanticOutputParser
 import logging
 
 from dotenv import load_dotenv
-from prompt import planning_prompt,  execution_prompt
+from prompts.agent import planning_prompt, execution_prompt
 from config import (
     DEFAULT_MODEL, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
     LOG_FORMAT, LOG_DATE_FORMAT, LOG_LEVEL
 )
-from tools import (
+from toolbox.tools import (
     game_search, game_info_retrieval, match_history_retrieval,
     entity_recognition, textual_entity_search, textual_retrieval_augment,
     choice_selection, get_all_tools
