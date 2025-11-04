@@ -9,7 +9,6 @@ from typing import List, Optional, Dict
 from pymongo.server_api import ServerApi
 
 from langchain.tools import tool
-from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAI
 
@@ -209,6 +208,7 @@ def parse_entity_result(entity_data: dict) -> Optional[BaseModel]:
     logger.warning(f"Unknown entity type: {entity_type}")
     return None
 
+@tool
 def textual_entity_search(query: str) -> SearchingResult:  
     """
     Given question about soccer-related entities (player, team, etc.), the tool retrieves the requiring entities of the question, and return its according WikiPage. The entity database contains the history and background knowledge for all the players, teams, venues, coaches and referees from games are from 2022 World Cup and 6 European major leagues (England Premier, Germany Bundesliga, Italy Serie-a, Spain Laliga, France Ligue-1 and European Champions League) during 2017-2024.
@@ -217,7 +217,7 @@ def textual_entity_search(query: str) -> SearchingResult:
         query (str): Prompt query could be the original question.
         
     Returns:
-        str: Information about found entities or error message
+        SearchingResult: Information about found entities or error message
     """
     try:
         # Extract entities from query
@@ -236,12 +236,3 @@ def textual_entity_search(query: str) -> SearchingResult:
     except Exception as e:
         logging.error(f"Error in textual_entity_search: {str(e)}")
         return SearchingResult()
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    print("Testing textual_entity_search tool...")
-    load_dotenv()
-    test_query = "Who is the coach of Manchester United and where do they play their home games?"
-    result = textual_entity_search(test_query)
-    print(f"Found Entities: {result.found_entities}")
-    print(f"Missing Entities: {result.missing_entities}")

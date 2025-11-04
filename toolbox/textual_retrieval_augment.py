@@ -1,8 +1,7 @@
 import logging
 from langchain.tools import tool
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAI
-from toolbox.textual_entity_search import SearchingResult, SoccerEntities
-from models.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
+from toolbox.textual_entity_search import SearchingResult
 from prompts.toolbox.textual_retrieval_augment import retrieval_augment_prompt
 
 logger = logging.getLogger(__name__)
@@ -20,8 +19,8 @@ def aggregate_searching_results(searching_result: SearchingResult) -> str:
     aggregated_text = ""
     for entity in searching_result.found_entities:
         aggregated_text += '-' *10 + '\n'
-        aggregated_text += f'SAU ĐÂY LÀ THÔNG TIN CỦA {entity.NAME}:\n'
-        aggregated_text += f'(LOẠI THỰC THỂ: {entity.ENTITY_TYPE})\n'
+        aggregated_text += f'INFORMATION ABOUT:  {entity.NAME}:\n'
+        aggregated_text += f'(ENTITY TYPE: {entity.ENTITY_TYPE})\n'
         if entity.SUMMARY:
             aggregated_text += f'SUMMARY: {entity.SUMMARY}\n'
         if entity.INFOBOX:
@@ -31,7 +30,7 @@ def aggregate_searching_results(searching_result: SearchingResult) -> str:
         aggregated_text += '-' *10 + '\n\n'
     
     if searching_result.missing_entities:
-        aggregated_text += 'KHÔNG TÌM THẤY THÔNG TIN CỦA CÁC THỰC THỂ SAU: '
+        aggregated_text += 'NOT FOUND INFORMATION FOR THE FOLLOWING ENTITIES: '
         aggregated_text += ', '.join(searching_result.missing_entities) + '\n'
 
     return aggregated_text
@@ -61,10 +60,10 @@ def textual_retrieval_augment(query: str, searching_result: SearchingResult) -> 
     # Prepare inputs
     searching_result_text = aggregate_searching_results(searching_result)
     inputs = {
-        "user_query": user_query,
+        "query": query,
         "searching_result": searching_result_text
     }
-    logger.info(f"Prepared inputs for textual retrieval augment tool: User Query: {inputs['user_query']}, Searching Result: {len(searching_result.found_entities)} found entities - {len(searching_result.missing_entities)} missing entities")
+    logger.info(f"Prepared inputs for textual retrieval augment tool: User Query: {inputs['query']}, Searching Result: {len(searching_result.found_entities)} found entities - {len(searching_result.missing_entities)} missing entities")
     logger.debug(f"Searching Result Text: {inputs['searching_result']}")
     logger.debug(f"Retrieval Augment Prompt: {retrieval_augment_prompt}")
 
@@ -79,25 +78,3 @@ def textual_retrieval_augment(query: str, searching_result: SearchingResult) -> 
 
 
     return final_answer
-
-if __name__ == "__main__":
-    # Create logging config
-    logging.basicConfig(level=logging.INFO)
-
-
-    user_query = "Tell me about Lionel Messi's career highlights."
-
-    # Mock searching result
-    searching_result = SearchingResult(
-        found_entities=[
-            PlayerSchema(
-                NAME="Lionel Messi",
-                ENTITY_TYPE="Player",
-                SUMMARY="Lionel Messi is an Argentine professional footballer who plays as a forward.",
-                INFOBOX={"Position": "Forward", "Club": "Inter Miami", "Nationality": "Argentine"}
-            )
-        ]
-    )
-
-    # Call the function
-    print(textual_retrieval_augment(user_query, searching_result))
