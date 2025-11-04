@@ -1,11 +1,15 @@
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 
 
 # Create system and user messages
-
-planning_prompt = [
-SystemMessage(content="You are a multi-modal agent that can answer questions about soccer knowledge."),
-HumanMessage(content="""For each question, you will receive:
+def get_planning_prompt_template() -> ChatPromptTemplate:
+    planning_prompt_template = ChatPromptTemplate.from_messages([
+        SystemMessage(
+            content="You are a multi-modal agent that can answer questions about soccer knowledge."
+        ),
+        HumanMessagePromptTemplate.from_template(
+            """For each question, you will receive:
 - A question about soccer considering different aspects of soccer
 - You might also receive one or more video clips or images as context
 Your task involves three sequential parts:
@@ -22,13 +26,16 @@ Your task involves three sequential parts:
 
 ## Available Tools
 For all the QA, you need to decompose them and Here are the tools that you can use to answer the questions:
-{{toolbox_descriptions}}
+{toolbox_descriptions}
 
 ## Response Instructions
 You must respond with a plan that populates the following two fields based on your analysis. The framework will handle formatting.
 1.  **known_info**: A list of information categories explicitly mentioned in the query and material (e.g., $GameContext$, $PlayerContext$, $Image$).
 2.  **tool_chain**: A list of EXACT tool names (e.g., "game_search", "game_info_retrieval") needed to answer the query, in the order they should be executed.
 
+## Output Format Instructions
+Follow these instructions carefully to ensure your response is correctly formatted:
+{format_instructions}
 ## Examples
 * **Purpose:** These examples teach you *how to reason* to determine the correct `known_info` and `tool_chain`. Focus on the logic, not the format.
 
@@ -68,31 +75,32 @@ You must respond with a plan that populates the following two fields based on yo
 ---
 --- NOW, ANALYZE THE FOLLOWING REQUEST ---
 
-Query: {{user_query}}
-Additional Material: {{additional_material}}
-"""
-    )
-]
+Query: {user_query}
+Additional Material: {additional_material}
+""")])
+    
+    return planning_prompt_template
 
-execution_prompt = [
-SystemMessage(
-        content="You are a tool execution coordinator for the Soccer Question Answering Assistant."
-    ),
-HumanMessage(
-        content="""## Task
+def get_execution_prompt_template() -> ChatPromptTemplate:
+    execution_prompt_template = ChatPromptTemplate.from_messages([
+        SystemMessage(
+            content="You are a tool execution coordinator for the Soccer Question Answering Assistant."
+        ),
+        HumanMessagePromptTemplate.from_template(
+            """## Task
 As a multi-agent core in the Soccer Question Answering Assistant, you are required to execute the following tool chain to answer the question.
 
 **User Query:** 
-"{{user_query}}"
+"{user_query}"
 
 **Additional Material:** 
-{{additional_material}}
+{additional_material}
 
 **Known Information:** 
-{{known_info}}
+{known_info}
 
 **Tool Chain to Execute:** 
-{{tool_chain}}
+{tool_chain}
 ---
 ## Execution Guidelines
 For every time of generation, you should follow the following rules:
@@ -101,7 +109,7 @@ For every time of generation, you should follow the following rules:
 ---
 ## Execution History
 The following is all our execution history. You must review this history to inform your next step:
-{{history}}
+{history}
 ---
 ## CRITICAL RULES
 1. **DO NOT USE YOUR INTERNAL KNOWLEDGE OR PRE-TRAINED INFORMATION**
@@ -114,6 +122,5 @@ The following is all our execution history. You must review this history to info
 ---
 ## Next Step
 Now, based on all the information above and the execution history, you can start with your call of the next step:
-"""
-    )
-]
+""")])
+    return execution_prompt_template

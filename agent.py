@@ -7,7 +7,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 import logging
 
 from dotenv import load_dotenv
-from prompts.agent import planning_prompt, execution_prompt
+from prompts.agent import get_planning_prompt_template, get_execution_prompt_template
 from config import (
     DEFAULT_MODEL, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
     LOG_FORMAT, LOG_DATE_FORMAT, LOG_LEVEL
@@ -68,8 +68,10 @@ class SoccerAgent:
             top_p=MODEL_TOP_P,
             max_output_tokens=MAX_COMPLETION_TOKENS
         )
-        self.planning_parser = PydanticOutputParser(pydantic_object=PlanningOutput)
+
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.planning_parser = PydanticOutputParser(pydantic_object=PlanningOutput)
+        
         
         # Use LangChain tools from tools.py
         self.tools = get_all_tools()
@@ -123,7 +125,6 @@ class SoccerAgent:
         Returns:
             Updated state with parsed known_info and tool_chain
         """
-        # Format additional material
         additional_material = state.get("additional_material", "None")
         if not additional_material or additional_material.strip() == "":
             additional_material = "None"
@@ -136,23 +137,16 @@ class SoccerAgent:
         # Get format instructions
         format_instructions = self.planning_parser.get_format_instructions()
         
-        # Create formatted prompt by replacing placeholders in the original template
-        from copy import deepcopy
-        formatted_prompt = deepcopy(planning_prompt)
-        
-        # Replace placeholders in HumanMessage content
-        human_msg_content = formatted_prompt[1].content
-        human_msg_content = human_msg_content.replace("{{toolbox_descriptions}}", tool_descriptions)
-        human_msg_content = human_msg_content.replace("{{user_query}}", state["user_query"])
-        human_msg_content = human_msg_content.replace("{{additional_material}}", additional_material)
-        human_msg_content += f"\n\n{format_instructions}"
-        
-        # Create new HumanMessage with formatted content
-        from langchain_core.messages import HumanMessage
-        formatted_prompt[1] = HumanMessage(content=human_msg_content)
-        
+        planning_agent_prompt_template = get_planning_prompt_template()
+        planning_agent_prompt = planning_agent_prompt_template.invoke({
+            "toolbox_descriptions": tool_descriptions,
+            "format_instructions": format_instructions,
+            "user_query": state["user_query"],
+            "additional_material": additional_material
+        })
+
         # Get LLM response
-        response = self.llm.invoke(formatted_prompt)
+        response = self.llm.invoke(planning_agent_prompt)
         response_text = response.content
         
         # Google Gemini models may not have reasoning_content in additional_kwargs
@@ -221,25 +215,17 @@ class SoccerAgent:
         # Build execution history string
         history_str = self._build_history_string(state, execution_history, step_results)
         
-        # Create formatted execution prompt
-        from copy import deepcopy
-        from langchain_core.messages import HumanMessage
-        formatted_exec_prompt = deepcopy(execution_prompt)
-        
-        # Replace placeholders in HumanMessage content
-        exec_msg_content = formatted_exec_prompt[1].content
-        exec_msg_content = exec_msg_content.replace("{{user_query}}", state["user_query"])
-        exec_msg_content = exec_msg_content.replace("{{additional_material}}", str(additional_material))
-        exec_msg_content = exec_msg_content.replace("{{known_info}}", str(known_info))
-        exec_msg_content = exec_msg_content.replace("{{tool_chain}}", " -> ".join(tool_chain))
-        exec_msg_content = exec_msg_content.replace("{{history}}", history_str)
-        
-        # Create new HumanMessage with formatted content
-        formatted_exec_prompt[1] = HumanMessage(content=exec_msg_content)
-        
-        # Get LLM response with tool calling
+        execution_prompt_template = get_execution_prompt_template()
+        execution_prompt = execution_prompt_template.invoke({
+            "user_query": query,
+            "additional_material": additional_material,
+            "known_info": known_info,
+            "tool_chain": " -> ".join(tool_chain),
+            "history": history_str
+        })
+
         try:
-            response = model_with_tool.invoke(formatted_exec_prompt)
+            response = model_with_tool.invoke(execution_prompt)
 
             self.logger.info(f"🤖 LLM Response: {response}")
 
