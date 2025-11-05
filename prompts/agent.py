@@ -90,7 +90,7 @@ def get_execution_prompt_template() -> ChatPromptTemplate:
             """## Task
 As a multi-agent core in the Soccer Question Answering Assistant, you are required to execute the following tool chain to answer the question.
 
-**User Query:** 
+**Original User Query:** 
 "{user_query}"
 
 **Additional Material:** 
@@ -104,8 +104,9 @@ As a multi-agent core in the Soccer Question Answering Assistant, you are requir
 ---
 ## Execution Guidelines
 For every time of generation, you should follow the following rules:
-- If I have given you the feedback of the execution, you should analyze what you should write in the next call based on the feedback considering the tool chain I gave you and the task descriptions.
-- You should not repeat the same instruction again.
+- Based on the provided tool chain and execution history, call the next tool. Your task is to generate the exact necessary parameters for the selected tool.
+- The requirements and functionality of each tool have been provided. Please rely on that description to generate the correct parameters for the tool.
+- Generally, if the tool allows you to rephrase the "query" for better clarity, you should use the execution history and the tool's role to clarify the "query" before making the tool call.
 ---
 ## Execution History
 The following is all our execution history. You must review this history to inform your next step:
@@ -113,12 +114,7 @@ The following is all our execution history. You must review this history to info
 ---
 ## CRITICAL RULES
 1. **DO NOT USE YOUR INTERNAL KNOWLEDGE OR PRE-TRAINED INFORMATION**
-2. **For game_search tool:** Use the EXACT wording from the original query. Do NOT convert dates, team names, or match descriptions using your knowledge.
-   -  WRONG: If user asks "2018 Champions League final", DO NOT pass "2018-05-26 - 20:00 Real Madrid vs Liverpool"
-   -  CORRECT: Pass "2018 Champions League final" as-is
-3. **For subsequent tools:** Use the information from previous tool results (from <StepResult> in history)
-4. **You MUST follow the tool chain** and use ONLY the information from the execution history
-5. **Your query parameter** should be based on the original user query or previous step results, NOT your internal knowledge
+2. **You MUST follow the tool chain** and use ONLY the information from the execution history
 ---
 ## Next Step
 Now, based on all the information above and the execution history, you can start with your call of the next step:
