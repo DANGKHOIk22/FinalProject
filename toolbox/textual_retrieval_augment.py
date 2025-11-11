@@ -1,6 +1,11 @@
 import logging
+from typing import Annotated
+
 from langchain.tools import tool
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAI
+from langgraph.prebuilt import InjectedState
+from langchain_core.messages import ToolMessage
+
 from toolbox.textual_entity_search import SearchingResult
 from prompts.toolbox.textual_retrieval_augment import retrieval_augment_prompt
 
@@ -36,19 +41,18 @@ def aggregate_searching_results(searching_result: SearchingResult) -> str:
     return aggregated_text
 
 @tool
-def textual_retrieval_augment(query: str, searching_result: SearchingResult) -> str:
+def textual_retrieval_augment(query: str, execution_agent_state: Annotated[dict, InjectedState]) -> str:
     """
     Given a text query, the tool retrieves the relevant information from given soccer information or database page. 
-    It's always be used for background information of players, teams, coaches, referees, venues, etc.
-
+    It's always be used for background information of players, teams, coaches, referees, venues, etc. The data from previous tool call will be retrieved automatically.
     Args:
         query (str): Prompt query could be the original question, or the well defined question that can help retrieve the question.
-        searching_result (SearchingResult): The searching result object containing information about found entities and missing entities from textual_entity_search tool.
-    
+        
     Returns:
         str: The final answer generated based on the retrieved information.
     """
 
+    # Build the retrieval augment chain
     model = ChatGoogleGenerativeAI(
         model="models/gemini-flash-latest", 
         temperature=0.5,  
@@ -57,8 +61,11 @@ def textual_retrieval_augment(query: str, searching_result: SearchingResult) -> 
 
     retrieval_augment_chain = retrieval_augment_prompt | model
 
-    # Prepare inputs
+    # Get the searching result from the execution agent state then aggregate it
+    searching_result: SearchingResult = execution_agent_state.get('last_tool_artifact', None) # type: ignore
     searching_result_text = aggregate_searching_results(searching_result)
+    
+    # Create inputs for retrieval augment chain
     inputs = {
         "query": query,
         "searching_result": searching_result_text
@@ -71,10 +78,10 @@ def textual_retrieval_augment(query: str, searching_result: SearchingResult) -> 
     try: 
         final_answer = retrieval_augment_chain.invoke(inputs)
         logger.info(f"Raw textual retrieval augment answer: {final_answer}")
-        final_answer = final_answer.content
+        final_answer.content
     except Exception as e:
         logger.error(f"Error occurred: {e}")
-        final_answer = "Sorry, I couldn't generate a response."
+        final_answer = "I'm sorry, but I couldn't generate an answer based on the retrieved information."
 
 
     return final_answer

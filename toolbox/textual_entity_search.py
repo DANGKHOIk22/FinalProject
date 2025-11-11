@@ -5,12 +5,13 @@ import logging
 from config import settings
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple, Annotated
 from pymongo.server_api import ServerApi
 
 from langchain.tools import tool
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAI
+from langgraph.prebuilt import InjectedState
 
 from models.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
 from prompts.toolbox.textual_entity_search import extract_entity_prompt
@@ -208,8 +209,10 @@ def parse_entity_result(entity_data: dict) -> Optional[BaseModel]:
     logger.warning(f"Unknown entity type: {entity_type}")
     return None
 
-@tool
-def textual_entity_search(query: str) -> SearchingResult:  
+@tool(
+        response_format='content_and_artifact'
+)
+def textual_entity_search(query: str) -> Tuple[str, SearchingResult]:  
     """
     Given question about soccer-related entities (player, team, etc.), the tool retrieves the requiring entities of the question, and return its according WikiPage. The entity database contains the history and background knowledge for all the players, teams, venues, coaches and referees from games are from 2022 World Cup and 6 European major leagues (England Premier, Germany Bundesliga, Italy Serie-a, Spain Laliga, France Ligue-1 and European Champions League) during 2017-2024.
     
@@ -217,6 +220,7 @@ def textual_entity_search(query: str) -> SearchingResult:
         query (str): Prompt query could be the original question.
         
     Returns:
+        str: A message for LLM
         SearchingResult: Information about found entities or error message
     """
     try:
@@ -225,14 +229,27 @@ def textual_entity_search(query: str) -> SearchingResult:
         logger.info(f"Extracted entities: {entities}")
         if not entities:
             logger.info("No entities extracted from query.")
-            return SearchingResult()
+            return "This tool can't find any soccer-related entities in the user query.", SearchingResult()
         
         # Query database for extracted entities
         db_searching_result = query_database(entities)
         logger.debug(f"Database searching result: {db_searching_result}")
 
-        return db_searching_result
+        # Prepare response message for Execution Agent
+        found_names = ", ".join([getattr(entity, "name", str(entity)) for entity in db_searching_result.found_entities]) if db_searching_result.found_entities else ""
+        missing_names = ", ".join(db_searching_result.missing_entities) if db_searching_result.missing_entities else ""
+
+        parts = []
+        if found_names:
+            parts.append(f"Found entities: {found_names}.")
+        if missing_names:
+            parts.append(f"Missing entities: {missing_names}.")
+
+        parts.append("The information for the found entities has been saved to temporary memory for use by other tools. You may proceed to run the next tool as planned.")
+
+        response_msg = "Successfully retrieved soccer-related entities. " + " ".join(parts)
+        return response_msg, db_searching_result
 
     except Exception as e:
         logging.error(f"Error in textual_entity_search: {str(e)}")
-        return SearchingResult()
+        return "Error occurred while searching for entities.", SearchingResult()

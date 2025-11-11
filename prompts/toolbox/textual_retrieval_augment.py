@@ -22,7 +22,7 @@ If the user's question is not related to soccer/football topics, respond with 'I
 The final answer **must be strictly based** on the information provided in the **SEARCHING RESULT**. Do not add, omit, or infer any information.
 
 ### USER QUERY
-{user_query}
+{query}
 
 ### SEARCHING RESULT
 {searching_result}
