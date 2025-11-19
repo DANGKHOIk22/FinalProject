@@ -6,8 +6,8 @@ from langchain_google_genai.chat_models import ChatGoogleGenerativeAI
 from langgraph.prebuilt import InjectedState
 from langchain_core.messages import ToolMessage
 
-from toolbox.textual_entity_search import SearchingResult
-from prompts.toolbox.textual_retrieval_augment import retrieval_augment_prompt
+from app.toolbox.textual_entity_search import SearchingResult
+from app.prompts.toolbox.textual_retrieval_augment import get_textual_retrieval_augment_prompt_template
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ def aggregate_searching_results(searching_result: SearchingResult) -> str:
     Returns:
         str: The aggregated searching results in textual format
     """
+    
     aggregated_text = ""
     for entity in searching_result.found_entities:
         aggregated_text += '-' *10 + '\n'
@@ -59,7 +60,8 @@ def textual_retrieval_augment(query: str, execution_agent_state: Annotated[dict,
         top_p=0.95
     )
 
-    retrieval_augment_chain = retrieval_augment_prompt | model
+    retrieval_augment_prompt_template = get_textual_retrieval_augment_prompt_template()
+    retrieval_augment_chain = retrieval_augment_prompt_template | model
 
     # Get the searching result from the execution agent state then aggregate it
     searching_result: SearchingResult = execution_agent_state.get('last_tool_artifact', None) # type: ignore
@@ -72,7 +74,7 @@ def textual_retrieval_augment(query: str, execution_agent_state: Annotated[dict,
     }
     logger.info(f"Prepared inputs for textual retrieval augment tool: User Query: {inputs['query']}, Searching Result: {len(searching_result.found_entities)} found entities - {len(searching_result.missing_entities)} missing entities")
     logger.debug(f"Searching Result Text: {inputs['searching_result']}")
-    logger.debug(f"Retrieval Augment Prompt: {retrieval_augment_prompt}")
+    logger.debug(f"Retrieval Augment Prompt: {retrieval_augment_prompt_template}")
 
     # Get answer
     try: 
@@ -82,6 +84,5 @@ def textual_retrieval_augment(query: str, execution_agent_state: Annotated[dict,
     except Exception as e:
         logger.error(f"Error occurred: {e}")
         final_answer = "I'm sorry, but I couldn't generate an answer based on the retrieved information."
-
 
     return final_answer

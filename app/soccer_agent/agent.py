@@ -11,14 +11,12 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
-from prompts.agent import get_planning_prompt_template, get_execution_prompt_template
-from config.config import (
+from app.prompts.agent import get_planning_prompt_template, get_execution_prompt_template
+from app.config.config import (
     DEFAULT_MODEL, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
     LOG_FORMAT, LOG_DATE_FORMAT, LOG_LEVEL
 )
-from toolbox import (
-    textual_entity_search, textual_retrieval_augment
-)
+from app.toolbox import textual_entity_search, textual_retrieval_augment
 
 # Load environment variables
 load_dotenv()
@@ -354,44 +352,3 @@ class SoccerAgent:
         self.logger.info("Run completed successfully")
         return result["tool_results_history"][-1].content # TODO: Update to return LLM response when adding LLM tool
 
-
-def main():
-    """Example usage of the Soccer Planning Agent."""
-    
-    # Initialize the agent with Google Gemini model
-    agent = SoccerAgent(model_name=DEFAULT_MODEL)
-    
-    # # Example 10:
-    # logger.info("="*60)
-    # logger.info("EXAMPLE 10")
-    # logger.info("="*60)
-    # query10 = "Which match had more total fouls: the 2018 Champions League final or the 2022 Champions League final?"
-    # agent.run(query10)
-    
-    # # Example 11:
-    # logger.info("="*60)
-    # logger.info("EXAMPLE 11")
-    # logger.info("="*60)
-    # query11 = "Who scored the goal in the 2014 Champions League final, and what was the first professional club he ever played for?"
-    # agent.run(query11)
-
-    # Example 12:
-    # logger.info("="*60)
-    # logger.info("EXAMPLE 12")
-    # logger.info("="*60)
-    # query12 = "For the player in the image, in what stadium did he make his UEFA Champions League debut?"
-    # additional_material12 = 'image": ["/path/to/player.jpg"]'
-    # agent.run(query12, additional_material12)
-
-    # Example 13: Test the chain textual_entity_search, texxtual_entity_augment
-    logger.info("="*60)
-    logger.info("EXAMPLE 12")
-    logger.info("="*60)
-    query13 = "Tell me about the golden period in Cristiano Ronaldo carrer"
-    additional_material13 = None
-    response = agent.run(query13, additional_material13)
-    print(response)
-
-
-if __name__ == "__main__":
-    main()
