@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 
+
 class PlayerSchema(BaseModel):
     """Schema for Player entity based on SoccerWiki data structure"""
     NAME: str
@@ -47,3 +48,4 @@ class TeamSchema(BaseModel):
     CONTENT: Optional[Dict] = Field(default_factory=dict)
     IMAGES: Optional[List[str]] = Field(default_factory=list)
     SUMMARY: Optional[str] = None
+

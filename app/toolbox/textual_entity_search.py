@@ -2,40 +2,21 @@ import pymongo
 import dns.resolver
 import logging
 
-from config import settings
-from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from app.config import settings
+from pydantic import BaseModel
 from typing import List, Optional, Dict, Tuple, Annotated
 from pymongo.server_api import ServerApi
 
 from langchain.tools import tool
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAI
-from langgraph.prebuilt import InjectedState
 
-from models.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
-from prompts.toolbox.textual_entity_search import extract_entity_prompt
+from app.schema.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
+from app.schema.toolbox.textual_entity_search import SoccerEntities, SearchingResult
+from app.prompts.toolbox.textual_entity_search import get_entity_extraction_prompt_template
 
 # Setup logger
 logger = logging.getLogger(__name__)
-
-class SoccerEntities(BaseModel):
-    """
-    A schema for extracting soccer-related entities from a text query.
-    """
-    unknown: Optional[List[str]] = Field(default=None, description="List of entities that not sure about their type")
-    player: Optional[List[str]] = Field(default=None, description="List of player names mentioned in the query")
-    team: Optional[List[str]] = Field(default=None, description="List of team names mentioned in the query")
-    venue: Optional[List[str]] = Field(default=None, description="List of venue names mentioned in the query")
-    referee: Optional[List[str]] = Field(default=None, description="List of referee names mentioned in the query")
-
-class SearchingResult(BaseModel):
-    """
-    Schema for searching entities information from database
-    """
-    found_entities: List[PlayerSchema | RefereeSchema | VenueSchema | TeamSchema] = Field(default_factory=list, description="Entities found in database\\other sources")
-    missing_entities: List[str] = Field(default_factory=list, description="Entities not found in database\\other sources")
-
 
 def extract_entity(query: str) -> Optional[SoccerEntities]:
     """
@@ -57,7 +38,8 @@ def extract_entity(query: str) -> Optional[SoccerEntities]:
     )
     
     # Combine prompt, model, and parser
-    extract_entity_chain = extract_entity_prompt | model | parser
+    extract_entity_prompt_template = get_entity_extraction_prompt_template()
+    extract_entity_chain = extract_entity_prompt_template | model | parser
 
     try:
         soccer_entities = extract_entity_chain.invoke({
@@ -236,7 +218,7 @@ def textual_entity_search(query: str) -> Tuple[str, SearchingResult]:
         logger.debug(f"Database searching result: {db_searching_result}")
 
         # Prepare response message for Execution Agent
-         found_names = ", ".join([entity.NAME for entity in db_searching_result.found_entities]) if db_searching_result.found_entities else ""
+        found_names = ", ".join([entity.NAME for entity in db_searching_result.found_entities]) if db_searching_result.found_entities else ""
         missing_names = ", ".join(db_searching_result.missing_entities) if db_searching_result.missing_entities else ""
 
         parts = []
