@@ -1,5 +1,5 @@
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
+from langchain_core.messages import SystemMessage
+from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 
 
 # Create system and user messages

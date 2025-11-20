@@ -1,7 +1,6 @@
 import pymongo
-import dns.resolver
+from dns import resolver
 import logging
-
 from app.config import settings
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Tuple, Annotated
@@ -79,8 +78,8 @@ def query_database(soccer_entities: SoccerEntities) -> SearchingResult:
             return result
 
         # Connect to MongoDB
-        dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
-        dns.resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']  
+        resolver.default_resolver = resolver.Resolver(configure=False)
+        resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']  
         client = pymongo.MongoClient(mongo_srv, server_api=ServerApi('1'))
         db = client.get_database(name=database_name)
         collection = db.get_collection(name=collection_name)

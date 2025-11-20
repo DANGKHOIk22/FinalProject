@@ -1,4 +1,4 @@
-from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 from langchain_core.messages import SystemMessage
 
 def get_textual_retrieval_augment_prompt_template() -> ChatPromptTemplate:
