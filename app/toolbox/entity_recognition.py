@@ -41,13 +41,8 @@ def get_qdrant_client() -> QdrantClient: # Move to settings
     """Get or create singleton Qdrant client."""
     global _qdrant_client
     if _qdrant_client is None:
-        qdrant_url = os.getenv("QDRANT_URL")
-        qdrant_api_key = os.getenv("QDRANT_API_KEY")
-        
-        if not qdrant_url or not qdrant_api_key:
-            raise ValueError(
-                "QDRANT_URL and QDRANT_API_KEY must be set in .env file"
-            )
+        qdrant_url = settings.QDRANT_URL
+        qdrant_api_key = settings.QDRANT_API_KEY
         
         _qdrant_client = QdrantClient(
             url=qdrant_url,
@@ -68,7 +63,7 @@ def extract_entity(image_path: str) -> list:
     """
     
     client = get_qdrant_client()
-    collection_name = os.getenv("QDRANT_COLLECTION_NAME", "SoccerAgent")
+    collection_name = settings.QDRANT_COLLECTION_NAME
     embedding_objs = DeepFace.represent(
             img_path=image_path,
             model_name="Facenet",
