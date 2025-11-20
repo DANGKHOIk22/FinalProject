@@ -52,6 +52,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+unit_test/
 
 # Translations
 *.mo
@@ -218,3 +219,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 *.json
+
+*.json
+
+example_images/
