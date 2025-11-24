@@ -16,7 +16,7 @@ from app.config.config import (
     DEFAULT_MODEL, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
     LOG_FORMAT, LOG_DATE_FORMAT, LOG_LEVEL
 )
-from app.toolbox import textual_entity_search, textual_retrieval_augment
+from app.toolbox import textual_entity_search, textual_retrieval_augment,game_history_retrieval,game_info_retrieval,game_search
 
 # Load environment variables
 load_dotenv()
@@ -79,6 +79,9 @@ class SoccerAgent:
         self.tool_registry: dict[str, Callable] = {
             "textual_entity_search": textual_entity_search,
             "textual_retrieval_augment": textual_retrieval_augment,
+            "game_search": game_search(),
+            "game_history_retrieval": game_history_retrieval(),
+            "game_info_retrieval": game_info_retrieval()
         }
 
         # List of all tools
@@ -352,3 +355,8 @@ class SoccerAgent:
         self.logger.info("Run completed successfully")
         return result["tool_results_history"][-1].content # TODO: Update to return LLM response when adding LLM tool
 
+agent_service = SoccerAgent()
+
+def get_agent_service() -> SoccerAgent:
+    """Get the singleton SoccerAgent service."""
+    return agent_service

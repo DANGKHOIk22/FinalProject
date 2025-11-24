@@ -15,6 +15,8 @@ class Settings:
     MONGO_SRV: Optional[str] = os.getenv('MONGO_SRV')
     SOCCER_DB_NAME: str = os.getenv('SOCCER_DB_NAME', 'SoccerWikiDemo')
     SOCCER_COLLECTION_NAME: str = os.getenv('SOCCER_COLLECTION_NAME', 'EntityInformation')
+    GOOGLE_API_KEY: Optional[str] = os.getenv('GOOGLE_API_KEY')
+    
     
     @classmethod
     def validate(cls) -> bool:
