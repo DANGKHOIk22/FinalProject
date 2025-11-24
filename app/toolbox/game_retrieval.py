@@ -234,4 +234,3 @@ class GameHistoryRetrievalTool(BaseTool):
         })
         logger.info(f"Game History Retrieval Response: {response}")
         return response.answer, response.artifact
-
