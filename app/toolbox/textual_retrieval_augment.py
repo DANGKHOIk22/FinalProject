@@ -51,7 +51,7 @@ def textual_retrieval_augment(query: str, execution_agent_state: Annotated[dict,
         
     Returns:
         str: The final answer generated based on the retrieved information.
-    """
+    """ 
 
     # Build the retrieval augment chain
     model = ChatGoogleGenerativeAI(
@@ -65,6 +65,7 @@ def textual_retrieval_augment(query: str, execution_agent_state: Annotated[dict,
 
     # Get the searching result from the execution agent state then aggregate it
     searching_result: SearchingResult = execution_agent_state.get('last_tool_artifact', None) # type: ignore
+    logger.info("artifact from execution agent state retrieved for textual retrieval augment tool.",searching_result)
     searching_result_text = aggregate_searching_results(searching_result)
     
     # Create inputs for retrieval augment chain

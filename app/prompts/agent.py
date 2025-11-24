@@ -45,7 +45,7 @@ Follow these instructions carefully to ensure your response is correctly formatt
 * **Analysis (Tool Chain):** Must find the game, retrieve its static info (Game Info) and its event history (Match History).
 * **Logical Output:**
     * `known_info`: ["$GameContext$"]
-    * `tool_chain`: ["game_search", "game_info_retrieval", "match_history_retrieval"]
+    * `tool_chain`: ["game_search", "game_info_retrieval", "game_history_retrieval"]
 
 **Query 2:** "How many goals did the player in this picture score for his senior career?"
 **Additional Material:** "image": $["player_image.jpg"]$
@@ -61,7 +61,7 @@ Follow these instructions carefully to ensure your response is correctly formatt
 * **Analysis (Tool Chain):** Must find the game, retrieve its history (to find the goalscorer), then use that player's name to search for their entity information, and retrieve the specific detail (first club).
 * **Logical Output:**
     * `known_info`: ["$GameContext$", "$PlayerContext$"]
-    * `tool_chain`: ["game_search", "match_history_retrieval", "textual_entity_search", "textual_retrieval_augment"]
+    * `tool_chain`: ["game_search", "game_history_retrieval", "textual_entity_search", "textual_retrieval_augment"]
 
 ## Important Rules
 1.  **CRITICAL: Your *only* job is to create a PLAN (Known Info and Tool Chain). Do NOT use your internal, pre-trained knowledge to answer the query. You must create a chain that *finds* all pieces of information using the tools, even if you think you already know the answer.**
