@@ -53,7 +53,7 @@ Follow these instructions carefully to ensure your response is correctly formatt
 * **Analysis (Tool Chain):** Must identify the player in the image, search for that player's entity information, retrieve specific details from that information.
 * **Logical Output:**
     * `known_info`: ["$Image$", "$PlayerContext$"]
-    * `tool_chain`: ["entity_recognition", "textual_entity_search", "textual_retrieval_augment"]
+    * `tool_chain`: ["entity_recognition", "textual_retrieval_augment"]
 
 **Query 3:** "Who scored the goal in the 2014 World Cup final, and what was the first professional club he ever played for?"
 **Additional Material:** None

@@ -16,7 +16,7 @@ from app.config.config import (
     DEFAULT_MODEL, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
     LOG_FORMAT, LOG_DATE_FORMAT, LOG_LEVEL
 )
-from app.toolbox import textual_entity_search, textual_retrieval_augment,game_history_retrieval,game_info_retrieval,game_search
+from app.toolbox import textual_entity_search, textual_retrieval_augment,game_history_retrieval,game_info_retrieval,game_search, entity_recognition
 
 # Load environment variables
 load_dotenv()
@@ -81,7 +81,8 @@ class SoccerAgent:
             "textual_retrieval_augment": textual_retrieval_augment(),
             "game_search": game_search(),
             "game_history_retrieval": game_history_retrieval(),
-            "game_info_retrieval": game_info_retrieval()
+            "game_info_retrieval": game_info_retrieval(),
+            "entity_recognition": entity_recognition()
         }
 
         # List of all tools
