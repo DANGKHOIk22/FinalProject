@@ -77,8 +77,8 @@ class SoccerAgent:
         
         # Tool mapping dictionary using LangChain @tool decorated functions
         self.tool_registry: dict[str, Callable] = {
-            "textual_entity_search": textual_entity_search,
-            "textual_retrieval_augment": textual_retrieval_augment,
+            "textual_entity_search": textual_entity_search(),
+            "textual_retrieval_augment": textual_retrieval_augment(),
             "game_search": game_search(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval()
