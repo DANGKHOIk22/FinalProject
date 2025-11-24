@@ -8,7 +8,7 @@ from pymongo.server_api import ServerApi
 
 from langchain.tools import tool
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain_google_genai.chat_models import ChatGoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.schema.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
 from app.schema.toolbox.textual_entity_search import SoccerEntities, SearchingResult

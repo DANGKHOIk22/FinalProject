@@ -1,10 +1,7 @@
 import logging
 from typing import Annotated
-
-from langchain.tools import tool
-from langchain_google_genai.chat_models import ChatGoogleGenerativeAI
-from langgraph.prebuilt import InjectedState
-from langchain_core.messages import ToolMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.tools import InjectedState, tool
 
 from app.toolbox.textual_entity_search import SearchingResult
 from app.prompts.toolbox.textual_retrieval_augment import get_textual_retrieval_augment_prompt_template
@@ -65,7 +62,7 @@ def textual_retrieval_augment(query: str, execution_agent_state: Annotated[dict,
 
     # Get the searching result from the execution agent state then aggregate it
     searching_result: SearchingResult = execution_agent_state.get('last_tool_artifact', None) # type: ignore
-    logger.info("artifact from execution agent state retrieved for textual retrieval augment tool.",searching_result)
+    logger.info(f"Artifact from execution agent state retrieved for textual retrieval augment tool: {searching_result}.")
     searching_result_text = aggregate_searching_results(searching_result)
     
     # Create inputs for retrieval augment chain

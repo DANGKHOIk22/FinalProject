@@ -3,7 +3,7 @@ import logging
 import pandas as pd
 from typing import Type, Optional, Literal, Tuple
 from pydantic import BaseModel, Field
-from langchain_core.tools import BaseTool
+from langchain.tools import BaseTool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.callbacks import CallbackManagerForToolRun
 
