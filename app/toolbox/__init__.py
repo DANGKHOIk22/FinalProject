@@ -1,5 +1,5 @@
-from app.toolbox.textual_entity_search import textual_entity_search
-from app.toolbox.textual_retrieval_augment import textual_retrieval_augment
+from app.toolbox.textual_entity_search import TextualEntitySearchTool as textual_entity_search
+from app.toolbox.textual_retrieval_augment import TextualRetrievalAugmentTool as textual_retrieval_augment
 from app.toolbox.game_search import GameSearchTool as game_search
 from app.toolbox.game_retrieval import GameHistoryRetrievalTool as game_history_retrieval, GameInfoRetrievalTool as game_info_retrieval
 
