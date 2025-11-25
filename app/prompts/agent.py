@@ -69,7 +69,8 @@ Follow these instructions carefully to ensure your response is correctly formatt
 3.  Use exact item category names with $$ to represent the information categories in the `known_info` field.
 4.  Use EXACT tool names WITHOUT any special characters (**, $$, [], etc.) in the `tool_chain` field.
 5.  Only respond with the Part 1 analysis (the `known_info` and `tool_chain` values).
-6.  Try your best to decompose the question. 
+6. Route the request based on input type: Use entity_recognition for image analysis OR textual_entity_search for text analysis. Never use both sequentially for the same entity.
+7.  Try your best to decompose the question. 
 
 ---
 ---
