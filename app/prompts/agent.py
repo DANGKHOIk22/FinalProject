@@ -53,7 +53,7 @@ Follow these instructions carefully to ensure your response is correctly formatt
 * **Analysis (Tool Chain):** Must identify the player in the image, search for that player's entity information, retrieve specific details from that information.
 * **Logical Output:**
     * `known_info`: ["$Image$", "$PlayerContext$"]
-    * `tool_chain`: ["entity_recognition", "textual_entity_search", "textual_retrieval_augment"]
+    * `tool_chain`: ["entity_recognition", "textual_retrieval_augment"]
 
 **Query 3:** "Who scored the goal in the 2014 World Cup final, and what was the first professional club he ever played for?"
 **Additional Material:** None
@@ -69,7 +69,8 @@ Follow these instructions carefully to ensure your response is correctly formatt
 3.  Use exact item category names with $$ to represent the information categories in the `known_info` field.
 4.  Use EXACT tool names WITHOUT any special characters (**, $$, [], etc.) in the `tool_chain` field.
 5.  Only respond with the Part 1 analysis (the `known_info` and `tool_chain` values).
-6.  Try your best to decompose the question. 
+6. Route the request based on input type: Use entity_recognition for image analysis OR textual_entity_search for text analysis. Never use both sequentially for the same entity.
+7.  Try your best to decompose the question. 
 
 ---
 ---

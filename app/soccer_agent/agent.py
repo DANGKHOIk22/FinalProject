@@ -16,6 +16,7 @@ from app.config.config import (
     DEFAULT_MODEL, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
     LOG_FORMAT, LOG_DATE_FORMAT, LOG_LEVEL
 )
+from app.toolbox import textual_entity_search, textual_retrieval_augment,game_history_retrieval,game_info_retrieval,game_search, entity_recognition
 from app.toolbox import textual_entity_search, textual_retrieval_augment, game_history_retrieval, game_info_retrieval, game_search, choice_selection
 
 # Load environment variables
@@ -64,7 +65,6 @@ class SoccerAgent:
             max_output_tokens=MAX_COMPLETION_TOKENS #type: ignore
         )
 
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.planning_parser = PydanticOutputParser(pydantic_object=PlanningOutput)
 
         
@@ -75,6 +75,7 @@ class SoccerAgent:
             "game_search": game_search(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
+            "entity_recognition": entity_recognition()
             "choice_selection": choice_selection()
         }
 
@@ -82,8 +83,8 @@ class SoccerAgent:
         self.tools = list(self.tool_registry.values())
         
         self.graph = self._build_graph()
-        self.logger.info(f"SoccerAgent initialized with model: {model_name}")
-        self.logger.info(f"Loaded {len(self.tools)} LangChain tools")
+        logger.info(f"SoccerAgent initialized with model: {model_name}")
+        logger.info(f"Loaded {len(self.tools)} LangChain tools")
         
     def _build_graph(self) -> CompiledStateGraph:
         """Build the LangGraph workflow."""
@@ -121,8 +122,8 @@ class SoccerAgent:
         Returns:
             Updated state with parsed known_info and tool_chain
         """
-        self.logger.info("="*70)
-        self.logger.info("🧠 Starting TOOL CHAIN PLANNING STEP")
+        logger.info("="*70)
+        logger.info("🧠 Starting TOOL CHAIN PLANNING STEP")
         additional_material = state.get("additional_material", "None")
         if not additional_material or additional_material.strip() == "":
             additional_material = "None"
@@ -145,21 +146,18 @@ class SoccerAgent:
 
         # Get LLM response
         response = self.llm.invoke(planning_agent_prompt)
-        logger.debug(f"Raw response from Planning Agent: {response}")
+        logger.debug(f"🤖 Response from Planning Agent: {response}")
         response_text = response.content
-        
-        # Google Gemini models may not have reasoning_content in additional_kwargs
-        if hasattr(response, 'additional_kwargs') and 'reasoning_content' in response.additional_kwargs:
-            self.logger.info(f"LLM reasoning: {response.additional_kwargs['reasoning_content']}")
+    
         
         # Parse with PydanticOutputParser
         planning_output: PlanningOutput = self.planning_parser.parse(response_text)
         
-        self.logger.info("Tool Chain Planning Results:")
-        self.logger.info(f"\t Known Info: {planning_output.known_info}")
-        self.logger.info(f"\t Tool Chain: {planning_output.tool_chain}")
-        self.logger.info("✅ TOOL CHAIN PLANNING STEP COMPLETED")
-        self.logger.info("="*70)
+        logger.info("Tool Chain Planning Results:")
+        logger.info(f"\t Known Info: {planning_output.known_info}")
+        logger.info(f"\t Tool Chain: {planning_output.tool_chain}")
+        logger.info("✅ TOOL CHAIN PLANNING STEP COMPLETED")
+        logger.info("="*70)
 
         # Use structured output directly
         state["known_info"] = planning_output.known_info
@@ -186,7 +184,7 @@ class SoccerAgent:
         tool_node_messages = state.get("tool_node_messages", [])
         
 
-        self.logger.info(f"🔧 Running TOOL EXECUTION STEP: Step {len(tool_calls_history)}/{len(tool_chain)+len(tool_calls_history)}")
+        logger.info(f"🔧 Running TOOL EXECUTION STEP: Step {len(tool_calls_history)}/{len(tool_chain)+len(tool_calls_history)}")
         
          # If the previous step is from the tool_node, add the tool execution result to history and add the artifact to state
         if tool_node_messages:
@@ -194,7 +192,7 @@ class SoccerAgent:
             tool_results_history.append(tool_result)
             if tool_result.artifact:
                 state["last_tool_artifact"] = tool_result.artifact
-            self.logger.info(f"Received tool result: {tool_result.content}")
+            logger.info(f"Received tool result: {tool_result.content}")
         
         
         if tool_chain:
@@ -206,8 +204,8 @@ class SoccerAgent:
                 error_msg = f"Tool '{current_tool_name}' not found in registry. Available tools: {list(self.tool_registry.keys())}"
                 raise ValueError(error_msg)
             model_with_tool = self.llm.bind_tools([current_tool])
-            self.logger.info(f"Current Tool Name: {current_tool_name}")
-            self.logger.debug(f"Current Tool Description: {current_tool.description}") # type: ignore
+            logger.info(f"Current Tool Name: {current_tool_name}")
+            logger.debug(f"Current Tool Description: {current_tool.description}") # type: ignore
 
             # Build execution history string and prompt
             history_str = self._build_history_string(tool_calls_history, tool_results_history)
@@ -223,12 +221,12 @@ class SoccerAgent:
             try:
                 # Invoke the model with the tool 
                 response: AIMessage = model_with_tool.invoke(execution_prompt) # type: ignore
-                self.logger.info(f"🤖 LLM Response: {response}")
+                logger.info(f"🤖 Response from execution agent: {response.tool_calls}")
 
                 # Check if tool was called
                 if not response.tool_calls or len(response.tool_calls) == 0:
                     error_msg = f"LLM did not generate a tool call for {current_tool_name}."
-                    self.logger.error(error_msg)
+                    logger.error(error_msg)
                     raise Exception(error_msg)
                 else:
                     # Add tool call message to tool_node_messages for the next tool_node
@@ -240,22 +238,22 @@ class SoccerAgent:
                     # Extract the tool call and add to tool calls history
                     tool_call: ToolCall = response.tool_calls[0]
                     tool_calls_history.append(tool_call)
-                    self.logger.info(f"Tool Call Generated: {tool_call}")
+                    logger.info(f"Tool Call Generated: {tool_call}")
                     
             except Exception as e:
                 error_msg = f"Error executing tool: {str(e)}"
-                self.logger.error(error_msg)
+                logger.error(error_msg)
                 raise Exception(error_msg)
         else:
-            self.logger.info("No more tools to execute in the tool chain.")
+            logger.info("No more tools to execute in the tool chain.")
             tool_node_messages = None  # No further tool calls
         
         state["tool_calls_history"] = tool_calls_history
         state["tool_results_history"] = tool_results_history
         state["tool_chain"] = tool_chain
         state["tool_node_messages"] = tool_node_messages
-        self.logger.info("✅ TOOL EXECUTION STEP COMPLETED")
-        self.logger.info("="*70)
+        logger.info("✅ TOOL EXECUTION STEP COMPLETED")
+        logger.info("="*70)
         
         return state
     
@@ -318,7 +316,7 @@ class SoccerAgent:
         Returns:
             Dictionary containing complete results from planning and execution
         """
-        self.logger.info(f"Starting run for query: {user_query[:100]}...")
+        logger.info(f"Starting run for query: {user_query[:100]}...")
         
         # Initialize state
         initial_state = {
@@ -346,7 +344,7 @@ class SoccerAgent:
             "tool_node_messages": final_state["tool_node_messages"],
             "last_tool_artifact": final_state.get("last_tool_artifact", None),
         }
-        self.logger.info("Run completed successfully")
+        logger.info("Run completed successfully")
         return result["tool_results_history"][-1].content # TODO: Update to return LLM response when adding LLM tool
 
 agent_service = SoccerAgent()
