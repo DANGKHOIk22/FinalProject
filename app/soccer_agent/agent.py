@@ -17,16 +17,10 @@ from app.config.config import (
     LOG_FORMAT, LOG_DATE_FORMAT, LOG_LEVEL
 )
 from app.toolbox import textual_entity_search, textual_retrieval_augment,game_history_retrieval,game_info_retrieval,game_search, entity_recognition
+from app.toolbox import textual_entity_search, textual_retrieval_augment, game_history_retrieval, game_info_retrieval, game_search, choice_selection
 
 # Load environment variables
 load_dotenv()
-
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
-    format=LOG_FORMAT,
-    datefmt=LOG_DATE_FORMAT
-)
 logger = logging.getLogger(__name__)
 
 
@@ -82,6 +76,7 @@ class SoccerAgent:
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
             "entity_recognition": entity_recognition()
+            "choice_selection": choice_selection()
         }
 
         # List of all tools
