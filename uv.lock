@@ -364,6 +364,7 @@ dependencies = [
     { name = "structlog" },
     { name = "tensorboard" },
     { name = "tensorflow" },
+    { name = "tensorflow-intel" },
     { name = "tensorflow-io-gcs-filesystem" },
     { name = "tf-keras" },
     { name = "uvicorn" },
@@ -394,6 +395,7 @@ requires-dist = [
     { name = "structlog", specifier = ">=25.4.0" },
     { name = "tensorboard", specifier = "==2.15.1" },
     { name = "tensorflow", specifier = "==2.15.0" },
+    { name = "tensorflow-intel" },
     { name = "tensorflow-io-gcs-filesystem", specifier = "==0.31.0" },
     { name = "tf-keras", specifier = "==2.15.0" },
     { name = "uvicorn", specifier = ">=0.37.0" },
@@ -1969,6 +1971,38 @@ version = "2.15.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b6/c8/2f823c8958d5342eafc6dd3e922f0cc4fcf8c2e0460284cc462dae3b60a0/tensorflow_estimator-2.15.0-py2.py3-none-any.whl", hash = "sha256:aedf21eec7fb2dc91150fc91a1ce12bc44dbb72278a08b58e79ff87c9e28f153", size = 441974, upload-time = "2023-11-07T01:10:10.812Z" },
+]
+
+[[package]]
+name = "tensorflow-intel"
+version = "2.15.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "absl-py" },
+    { name = "astunparse" },
+    { name = "flatbuffers" },
+    { name = "gast" },
+    { name = "google-pasta" },
+    { name = "grpcio" },
+    { name = "h5py" },
+    { name = "keras" },
+    { name = "libclang" },
+    { name = "ml-dtypes" },
+    { name = "numpy" },
+    { name = "opt-einsum" },
+    { name = "packaging" },
+    { name = "protobuf" },
+    { name = "setuptools" },
+    { name = "six" },
+    { name = "tensorboard" },
+    { name = "tensorflow-estimator" },
+    { name = "tensorflow-io-gcs-filesystem" },
+    { name = "termcolor" },
+    { name = "typing-extensions" },
+    { name = "wrapt" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4c/48/1a5a15517f18eaa4ff8d598b1c000300b20c1bb0e624539d702117a0c369/tensorflow_intel-2.15.0-cp311-cp311-win_amd64.whl", hash = "sha256:4710b0ea84defaafc0d6cc51162ebef8b07da015fc68375661451861c5bf4421", size = 300919984, upload-time = "2023-11-14T21:35:38.922Z" },
 ]
 
 [[package]]
