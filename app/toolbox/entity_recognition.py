@@ -268,7 +268,7 @@ class EntityRecognitionTool(BaseTool):
                 parts.append(f"Found entities: {found_names}.")
             if missing_names:
                 parts.append(f"Missing entities: {missing_names}.")
-            
+             
             parts.append("The information for the found entities has been saved to temporary memory for use by other tools.")
             
             response_msg = "Successfully retrieved soccer-related entities. " + " ".join(parts)

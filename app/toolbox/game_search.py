@@ -49,7 +49,7 @@ class GameSearchTool(BaseTool):
 
     def __init__(self):
         super().__init__()
-        self.csv_path = os.path.join(self.project_path, "database", "game_database.csv")
+        self.csv_path = os.path.join(self.project_path, "app", "database", "game_database.csv")
         
         # Khởi tạo LLM
         self.llm = ChatGoogleGenerativeAI(

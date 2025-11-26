@@ -54,7 +54,7 @@ class GameInfoRetrievalTool(BaseTool):
     def _get_match_info_json(self, json_file_path: str) -> str:
         """Đọc file JSON và loại bỏ phần annotations để lấy metadata."""
         try:
-            full_path = Path(self.project_path, json_file_path).as_posix()
+            full_path = os.path.join(self.project_path, "app", json_file_path)
             with open(full_path, 'r', encoding='utf-8') as file:
                 data = json.load(file)
             
@@ -132,7 +132,7 @@ class GameHistoryRetrievalTool(BaseTool):
         """
         try:
             # Xử lý đường dẫn file
-            full_path = os.path.join(self.project_path, json_file_path)
+            full_path = os.path.join(self.project_path, "app", json_file_path)
             if not os.path.exists(full_path):
                 # Fallback: thử tìm trực tiếp nếu path đã đầy đủ
                 if os.path.exists(json_file_path):

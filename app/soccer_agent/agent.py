@@ -75,7 +75,7 @@ class SoccerAgent:
             "game_search": game_search(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
-            "entity_recognition": entity_recognition()
+            "entity_recognition": entity_recognition(),
             "choice_selection": choice_selection()
         }
 
@@ -304,7 +304,7 @@ class SoccerAgent:
         
         return "\n".join(history_parts)
     
-
+    
     def run(self, user_query: str, additional_material: Optional[str] = None) -> dict:
         """
         Run the complete workflow: planning + execution.
