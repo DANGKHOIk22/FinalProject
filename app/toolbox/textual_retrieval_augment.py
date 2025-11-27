@@ -1,44 +1,17 @@
 import logging
-from typing import Annotated, Type, Optional
+from typing import Annotated, Literal, Tuple, Type, Optional
 from pydantic import BaseModel, Field, PrivateAttr
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.tools import BaseTool, InjectedState
 from langchain_core.callbacks import CallbackManagerForToolRun
 
+from app.config.config import DEFAULT_MODEL
 from app.toolbox.textual_entity_search import SearchingResult
 from app.prompts.toolbox.textual_retrieval_augment import get_textual_retrieval_augment_prompt_template
 
 logger = logging.getLogger(__name__)
 
-def aggregate_searching_results(searching_result: SearchingResult) -> str:
-    """
-    Aggregate searching results into a textual format
 
-    Args:
-        searching_result (SearchingResult): The searching result object
-
-    Returns:
-        str: The aggregated searching results in textual format
-    """
-    
-    aggregated_text = ""
-    for entity in searching_result.found_entities:
-        aggregated_text += '-' *10 + '\n'
-        aggregated_text += f'INFORMATION ABOUT:  {entity.NAME}:\n'
-        aggregated_text += f'(ENTITY TYPE: {entity.ENTITY_TYPE})\n'
-        if entity.SUMMARY:
-            aggregated_text += f'SUMMARY: {entity.SUMMARY}\n'
-        if entity.INFOBOX:
-            aggregated_text += f'INFOBOX: {entity.INFOBOX}\n'
-        if entity.CONTENT:
-            aggregated_text += f'CONTENT: {entity.CONTENT}\n'
-        aggregated_text += '-' *10 + '\n\n'
-    
-    if searching_result.missing_entities:
-        aggregated_text += 'NOT FOUND INFORMATION FOR THE FOLLOWING ENTITIES: '
-        aggregated_text += ', '.join(searching_result.missing_entities) + '\n'
-
-    return aggregated_text
 
 class TextualRetrievalAugmentInput(BaseModel):
     query: str = Field(description="Prompt query could be the original question, or the well defined question that can help retrieve the question.")
@@ -50,19 +23,20 @@ class TextualRetrievalAugmentTool(BaseTool):
     Given a text query, the tool retrieves the relevant information from given soccer information or database page. 
     It's always be used for background information of players, teams, coaches, referees, venues, etc. The data from previous tool call will be retrieved automatically.
     """
-    args_schema:Type[BaseModel] = TextualRetrievalAugmentInput
+    args_schema:Type[BaseModel] = TextualRetrievalAugmentInput # type: ignore
+    response_format: Literal['content', 'content_and_artifact'] = 'content_and_artifact'
     
     _llm: ChatGoogleGenerativeAI = PrivateAttr()
 
     def __init__(self):
         super().__init__()
         self._llm = ChatGoogleGenerativeAI(
-            model="models/gemini-flash-latest", 
+            model=DEFAULT_MODEL, 
             temperature=0.5,  
             top_p=0.95
         )
 
-    def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun] = None) -> str:
+    def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, None]:
         """
         Given a text query, the tool retrieves the relevant information from given soccer information or database page. 
         It's always be used for background information of players, teams, coaches, referees, venues, etc. The data from previous tool call will be retrieved automatically.
@@ -70,7 +44,9 @@ class TextualRetrievalAugmentTool(BaseTool):
             query (str): Prompt query could be the original question, or the well defined question that can help retrieve the question.
             
         Returns:
-            str: The final answer generated based on the retrieved information.
+            Tuple[str, None]:
+                str: The final answer generated based on the retrieved information.
+                None: There is no return artifact for this tool.
         """ 
 
         # Build the retrieval augment chain
@@ -79,12 +55,13 @@ class TextualRetrievalAugmentTool(BaseTool):
 
         # Get the searching result from the execution agent state then aggregate it
         searching_result: SearchingResult = execution_agent_state.get('last_tool_artifact', None) # type: ignore
-        logger.info(f"Artifact from execution agent state retrieved for textual retrieval augment tool: {searching_result}.")
-        
         if not searching_result:
-             return "I'm sorry, but I couldn't find any retrieved entities to augment the answer."
-
-        searching_result_text = aggregate_searching_results(searching_result)
+            logger.warning("No artifact found in execution agent state for textual retrieval augment tool.")
+            return "Could not retrieve any information from previous tool calls. Please ensure that the previous tools have been executed successfully or try calling the previous tools again.", None
+        else: 
+            logger.info(f"Artifact from execution agent state retrieved for textual retrieval augment tool: {searching_result}.")
+        
+        searching_result_text = self._aggregate_searching_results(searching_result)
         
         # Create inputs for retrieval augment chain
         inputs = {
@@ -99,7 +76,38 @@ class TextualRetrievalAugmentTool(BaseTool):
         try: 
             final_answer = retrieval_augment_chain.invoke(inputs)
             logger.info(f"Raw textual retrieval augment answer: {final_answer}")
-            return str(final_answer.content)
+            return str(final_answer.content), None
         except Exception as e:
             logger.error(f"Error occurred: {e}")
-            return "I'm sorry, but I couldn't generate an answer based on the retrieved information."
+            return "An error occurred while generating the answer based on the retrieved information. Try calling this tool again or stop the execution.", None
+    
+    @staticmethod
+    def _aggregate_searching_results(searching_result: SearchingResult) -> str:
+        """
+        Aggregate searching results into a textual format
+
+        Args:
+            searching_result (SearchingResult): The searching result object
+
+        Returns:
+            str: The aggregated searching results in textual format
+        """
+        
+        aggregated_text = ""
+        for entity in searching_result.found_entities:
+            aggregated_text += '-' *10 + '\n'
+            aggregated_text += f'INFORMATION ABOUT:  {entity.NAME}:\n'
+            aggregated_text += f'(ENTITY TYPE: {entity.ENTITY_TYPE})\n'
+            if entity.SUMMARY:
+                aggregated_text += f'SUMMARY: {entity.SUMMARY}\n'
+            if entity.INFOBOX:
+                aggregated_text += f'INFOBOX: {entity.INFOBOX}\n'
+            if entity.CONTENT:
+                aggregated_text += f'CONTENT: {entity.CONTENT}\n'
+            aggregated_text += '-' *10 + '\n\n'
+        
+        if searching_result.missing_entities:
+            aggregated_text += 'NOT FOUND INFORMATION FOR THE FOLLOWING ENTITIES: '
+            aggregated_text += ', '.join(searching_result.missing_entities) + '\n'
+
+        return aggregated_text

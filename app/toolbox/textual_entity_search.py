@@ -2,6 +2,7 @@ import pymongo
 from dns import resolver
 import logging
 from app.config import settings
+from app.config.config import DEFAULT_MODEL
 from pydantic import BaseModel, Field, PrivateAttr
 from typing import List, Optional, Dict, Tuple, Annotated, Type, Literal
 from pymongo.server_api import ServerApi
@@ -35,36 +36,10 @@ class TextualEntitySearchTool(BaseTool):
     def __init__(self):
         super().__init__()
         self._llm = ChatGoogleGenerativeAI(
-            model="models/gemini-flash-latest", 
+            model=DEFAULT_MODEL, 
             temperature=0.5,  
             top_p=0.95
         )
-
-    def _extract_entity(self, query: str) -> Optional[SoccerEntities]:
-        """
-        Extract soccer-related entities from the user's query using LLM.
-        """
-        # Create output parser
-        parser = PydanticOutputParser(pydantic_object=SoccerEntities)
-        
-        # Combine prompt, model, and parser
-        extract_entity_prompt_template = get_entity_extraction_prompt_template()
-        extract_entity_chain = extract_entity_prompt_template | self._llm | parser
-
-        try:
-            soccer_entities = extract_entity_chain.invoke({
-                "output_format": parser.get_format_instructions(),
-                "question": query
-            })
-
-            # Log extracted entities
-            logging.info(f"Extracted entities: {soccer_entities}")
-            
-            return soccer_entities
-            
-        except Exception as e:
-            logging.error(f"Error extracting entities from query '{query}': {str(e)}")
-            return None
 
     def _run(self, query: str, run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, SearchingResult]:
         try:
@@ -95,9 +70,39 @@ class TextualEntitySearchTool(BaseTool):
             return response_msg, db_searching_result
 
         except Exception as e:
-            logging.error(f"Error in textual_entity_search: {str(e)}")
-            return "Error occurred while searching for entities.", SearchingResult()
+            error_msg = f"Error in textual_entity_search: {str(e)}"
+            logging.error(error_msg, exc_info=True)
+            # Return detailed error message to the Agent
+            return f"An error occurred while executing the tool. Details: {str(e)}. Please retry the tool or stop the process.", SearchingResult()
 
+    def _extract_entity(self, query: str) -> Optional[SoccerEntities]:
+        """
+        Extract soccer-related entities from the user's query using LLM.
+        """
+        # Create output parser
+        parser = PydanticOutputParser(pydantic_object=SoccerEntities)
+        
+        # Combine prompt, model, and parser
+        extract_entity_prompt_template = get_entity_extraction_prompt_template()
+        extract_entity_chain = extract_entity_prompt_template | self._llm | parser
+
+        try:
+            soccer_entities = extract_entity_chain.invoke({
+                "output_format": parser.get_format_instructions(),
+                "question": query
+            })
+
+            # Log extracted entities
+            logging.info(f"Extracted entities: {soccer_entities}")
+            
+            return soccer_entities
+            
+        except Exception as e:
+            error_msg = f"Failed to extract entities from query '{query}': {str(e)}"
+            logging.error(error_msg)
+            # Raise with context
+            raise RuntimeError(error_msg) from e
+        
     @staticmethod
     def _parse_entity_result(entity_data: Dict) -> Optional[BaseModel]:
         """
@@ -127,8 +132,9 @@ class TextualEntitySearchTool(BaseTool):
             try:
                 return schema_class(**entity_data)
             except Exception as e:
-                logger.warning(f"Failed to parse {entity_type}: {e}")
-                return None
+                error_msg = f"Failed to parse {entity_type}: {str(e)}"
+                logger.warning(error_msg)
+                raise e
         
         logger.warning(f"Unknown entity type: {entity_type}")
         return None
@@ -154,14 +160,14 @@ class TextualEntitySearchTool(BaseTool):
             
             if not mongo_srv:
                 logging.error("MONGO_SRV configuration not found")
-                return result
+                raise ValueError("MONGO_SRV configuration not found. Please set it in the application settings.")
 
             # Connect to MongoDB
             resolver.default_resolver = resolver.Resolver(configure=False)
             resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']  
             client = pymongo.MongoClient(mongo_srv, server_api=ServerApi('1'))
             db = client.get_database(name=database_name)
-            collection = db.get_collection(name=collection_name)
+            collection = db.get_collection(name=collection_name) # TODO: Check the connection status
             
             # Iterate through each entity type
             for entity_type in SoccerEntities.model_fields.keys():
@@ -228,9 +234,12 @@ class TextualEntitySearchTool(BaseTool):
 
             # Close connection
             client.close()
-            
-        except Exception as e:
-            logging.error(f"Error querying database: {str(e)}")
+            return result
         
-        return result
+        except Exception as e:
+            error_msg = f"Error querying database: {str(e)}"
+            logging.error(error_msg)
+            # Raise with context
+            raise RuntimeError(error_msg) from e
+        
 

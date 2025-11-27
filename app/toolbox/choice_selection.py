@@ -2,6 +2,7 @@ import logging
 from typing import Any, Type, Literal, Optional, Annotated, Tuple
 from pydantic import BaseModel, PrivateAttr, Field
 from app.prompts.toolbox.choice_selection import get_choice_selection_prompt_template
+from app.config.config import DEFAULT_MODEL
 
 from langchain.tools import BaseTool, InjectedState
 from langchain.chat_models import BaseChatModel
@@ -27,7 +28,7 @@ class ChoiceSelection(BaseTool):
     def __init__(self, llm: Optional[BaseChatModel] = None):
         super().__init__()
         self._llm = llm or ChatGoogleGenerativeAI(
-            model="models/gemini-flash-latest", 
+            model=DEFAULT_MODEL, 
             temperature=0.5,  
             top_p=0.95
         )
@@ -58,7 +59,7 @@ class ChoiceSelection(BaseTool):
             response = self._llm.invoke(formatted_prompt)
             
             # Extract the choice from the response
-            selected_choice = response.content.strip() if hasattr(response, 'content') else str(response).strip()
+            selected_choice = str(response.content).strip() if hasattr(response, 'content') else str(response).strip()
             
             logger.info(f"Selected choice: {selected_choice}")
             
@@ -66,4 +67,4 @@ class ChoiceSelection(BaseTool):
             
         except Exception as e:
             logger.error(f"Error in choice selection tool: {str(e)}")
-            return "There was an error processing the choice selection.", None
+            return "An error occurred while selecting the choice. Try again or stop the execution.", None

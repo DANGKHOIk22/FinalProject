@@ -38,7 +38,7 @@ class EntityRecognitionTool(BaseTool):
     name: str = "entity_recognition"
     description: str = """Given an image path, the tool retrieves the soccer-related entities present in the image and returns their background information."""
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
-    args_schema: Type[BaseModel] = EntityRecognitionInput
+    args_schema: Type[BaseModel] = EntityRecognitionInput # type: ignore
     
     # Internal state (not exposed to LLM)
     _qdrant_client: Optional[QdrantClient] = None
