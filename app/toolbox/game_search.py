@@ -8,7 +8,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.callbacks import CallbackManagerForToolRun
 
 # Import config và prompts từ project của bạn
-from app.config.config import PROJECT_PATH
+from app.config.config import PROJECT_PATH, DEFAULT_MODEL
 from app.config.settings import Settings
 from app.schema.match import MatchInfo
 from app.prompts.toolbox.game_search import get_extraction_prompt_template, get_match_selection_prompt_template
@@ -49,11 +49,11 @@ class GameSearchTool(BaseTool):
 
     def __init__(self):
         super().__init__()
-        self.csv_path = os.path.join(self.project_path, "database", "game_database.csv")
+        self.csv_path = os.path.join(self.project_path, "app", "database", "game_database.csv")
         
         # Khởi tạo LLM
         self.llm = ChatGoogleGenerativeAI(
-            model="models/gemini-flash-latest", # Hoặc model bạn đang dùng
+            model=DEFAULT_MODEL, 
             temperature=0,
             google_api_key=Settings.GOOGLE_API_KEY
         )
@@ -144,7 +144,7 @@ class GameSearchTool(BaseTool):
         """Bước 3: Chọn kết quả cuối cùng (Trả về Content và Path)."""
         
         if candidates is None or (isinstance(candidates, pd.DataFrame) and candidates.empty):
-             return "We did not find the match you mentioned in the database.", None
+             return "We did not find the match you mentioned in the database. Stop the execution and ask user give more specific information.", None
 
         # Case: Tìm thấy chính xác 1 kết quả
         target_candidates = candidates_with_team if candidates_with_team is not None else candidates
@@ -176,7 +176,7 @@ class GameSearchTool(BaseTool):
                 "question": question,
                 "info": info.model_dump_json(),
                 "candidates": candidate_text
-            })
+            }) # type: ignore
             
             return response.response_llm, response.path
         
@@ -212,5 +212,5 @@ class GameSearchTool(BaseTool):
             
         except Exception as e:
             error_msg = f"Error in Game Search: {str(e)}"
-            logger.error(error_msg)
-            return error_msg, None
+            logger.error(error_msg, exc_info=True)
+            return f"An error occurred while searching for the game. Details: {str(e)}. Please check your query or try again.", None

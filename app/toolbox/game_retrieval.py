@@ -5,7 +5,7 @@ from app.schema.match import Annotation
 from pathlib import Path
 from typing import List, Type,Optional, Literal,Annotated
 from pydantic import BaseModel, Field
-from app.config.config import PROJECT_PATH
+from app.config.config import PROJECT_PATH, DEFAULT_MODEL
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
@@ -46,7 +46,7 @@ class GameInfoRetrievalTool(BaseTool):
         super().__init__()
 
         self.llm = ChatGoogleGenerativeAI(
-            model="models/gemini-flash-latest",
+            model=DEFAULT_MODEL,
             temperature=0,
             google_api_key=Settings.GOOGLE_API_KEY
         )
@@ -54,7 +54,7 @@ class GameInfoRetrievalTool(BaseTool):
     def _get_match_info_json(self, json_file_path: str) -> str:
         """Đọc file JSON và loại bỏ phần annotations để lấy metadata."""
         try:
-            full_path = Path(self.project_path, json_file_path).as_posix()
+            full_path = os.path.join(self.project_path, "app", json_file_path)
             with open(full_path, 'r', encoding='utf-8') as file:
                 data = json.load(file)
             
@@ -69,36 +69,41 @@ class GameInfoRetrievalTool(BaseTool):
             return f"Error reading file: {str(e)}"
 
     def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState],run_manager: Optional[CallbackManagerForToolRun] = None):
-        if not execution_agent_state.get("last_tool_artifact"):
-            return "Error: No last_tool_artifact provided."
+        try:
+            if not execution_agent_state.get("last_tool_artifact"):
+                return "Error: Missing game file information. Please ensure 'game_search' tool has been executed successfully before running this tool.", None
 
-        file_path = execution_agent_state["last_tool_artifact"]
-        match_info_context = self._get_match_info_json(file_path)
+            file_path = execution_agent_state["last_tool_artifact"]
+            match_info_context = self._get_match_info_json(file_path)
 
-        if match_info_context.startswith("Error"):
-            return match_info_context,file_path
+            if match_info_context.startswith("Error"):
+                return f"Failed to retrieve match info. Please try again or stop the execution.", file_path
 
-        prompt_template = """
-        You are a soccer expert. Answer the question based ONLY on the provided match related information (metadata).
+            prompt_template = """
+            You are a soccer expert. Answer the question based ONLY on the provided match related information (metadata).
 
-        User Question: "{query}"
+            User Question: "{query}"
 
-        Match Information:
-        {context}
+            Match Information:
+            {context}
 
-        Please provide the answer based on the match related information. Make sure your answer is evidence-based and accurate.
-        """
+            Please provide the answer based on the match related information. Make sure your answer is evidence-based and accurate.
+            """
 
-        prompt = ChatPromptTemplate.from_template(prompt_template)
-        llm_structured = self.llm.with_structured_output(ToolOutput)
-        chain = prompt | llm_structured
-        
-        response = chain.invoke({
-            "query": query,
-            "context": match_info_context
-        })
-        
-        return response.answer, response.artifact
+            prompt = ChatPromptTemplate.from_template(prompt_template)
+            llm_structured = self.llm.with_structured_output(ToolOutput)
+            chain = prompt | llm_structured
+            
+            response: ToolOutput = chain.invoke({
+                "query": query,
+                "context": match_info_context
+            }) # type: ignore
+            
+            return response.answer, response.artifact
+        except Exception as e:
+            error_msg = f"Error in game_info_retrieval: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return f"An error occurred while retrieving game info. Details: {str(e)}. Please try again or stop the execution.", None
 
 # ==========================================
 # 3. Tool: Match History Retrieval (Live Stream/Events)
@@ -120,7 +125,7 @@ class GameHistoryRetrievalTool(BaseTool):
         super().__init__()
 
         self.llm = ChatGoogleGenerativeAI(
-            model="models/gemini-flash-latest", # Dùng flash cho context dài (lịch sử trận đấu thường dài)
+            model=DEFAULT_MODEL, # Dùng flash cho context dài (lịch sử trận đấu thường dài)
             temperature=0,
             google_api_key=Settings.GOOGLE_API_KEY
         )
@@ -132,7 +137,7 @@ class GameHistoryRetrievalTool(BaseTool):
         """
         try:
             # Xử lý đường dẫn file
-            full_path = os.path.join(self.project_path, json_file_path)
+            full_path = os.path.join(self.project_path, "app", json_file_path)
             if not os.path.exists(full_path):
                 # Fallback: thử tìm trực tiếp nếu path đã đầy đủ
                 if os.path.exists(json_file_path):
@@ -199,38 +204,39 @@ class GameHistoryRetrievalTool(BaseTool):
             return f"Error reading/processing file: {str(e)}"
 
     def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun] = None):
-        if not execution_agent_state.get("last_tool_artifact"):
-            return "Error: No last_tool_artifact provided."
+        try:
+            if not execution_agent_state.get("last_tool_artifact"):
+                return "Error: Missing game file information. Please ensure 'game_search' tool has been executed successfully before running this tool.", None
 
-        file_path = execution_agent_state["last_tool_artifact"]
-        if not file_path:
-            return "Error: No game file provided. Please run Game Search first.", None
+            file_path = execution_agent_state["last_tool_artifact"]
+            logger.info(f"📖 Processing Match History from: {file_path}")
+            match_history_context = self._process_data(file_path)
 
-        logger.info(f"📖 Processing Match History from: {file_path}")
-        match_history_context = self._process_data(file_path)
+            if match_history_context.startswith("Error"):
+                return f"Failed to process match history. Please try again or stop the execution.", file_path
+            
+            # Nếu quá dài, có thể cắt bớt ở đây, nhưng Gemini Flash context window rất lớn (1M tokens).
+            prompt_template = """
+            You are a soccer expert. Answer the question based ONLY on the provided match history (live commentary/annotations).
+            
+            User Question: "{query}"
 
-        if match_history_context.startswith("Error"):
-            return match_history_context,file_path
-        
-        # Nếu quá dài, có thể cắt bớt ở đây, nhưng Gemini Flash context window rất lớn (1M tokens).
-        
-        prompt_template = """
-        You are a soccer expert. Answer the question based ONLY on the provided match history (live commentary/annotations).
-        
-        User Question: "{query}"
+            Match History (List of Annotations):
+            {context}
 
-        Match History (List of Annotations):
-        {context}
+            Please provide the answer based on the match history information. Think carefully about timestamps and event sequences. Make sure your answer is evidence-based and accurate.
+            """
 
-        Please provide the answer based on the match history information. Think carefully about timestamps and event sequences. Make sure your answer is evidence-based and accurate.
-        """
-
-        prompt = ChatPromptTemplate.from_template(prompt_template)
-        llm_structured = self.llm.with_structured_output(ToolOutput)
-        chain = prompt | llm_structured
-        response = chain.invoke({
-            "query": query,
-            "context": match_history_context
-        })
-        logger.info(f"Game History Retrieval Response: {response}")
-        return response.answer, response.artifact
+            prompt = ChatPromptTemplate.from_template(prompt_template)
+            llm_structured = self.llm.with_structured_output(ToolOutput)
+            chain = prompt | llm_structured
+            response: ToolOutput = chain.invoke({
+                "query": query,
+                "context": match_history_context
+            }) # type: ignore
+            logger.info(f"Game History Retrieval Response: {response}")
+            return response.answer, response.artifact
+        except Exception as e:
+            error_msg = f"Error in game_history_retrieval: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return f"An error occurred while retrieving game history. Details: {str(e)}. Please try again or stop the execution.", None

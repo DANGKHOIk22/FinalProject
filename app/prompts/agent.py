@@ -4,6 +4,8 @@ from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplat
 
 # Create system and user messages
 def get_planning_prompt_template() -> ChatPromptTemplate:
+    """Create the planning prompt template for the planning agent."""
+
     planning_prompt_template = ChatPromptTemplate.from_messages([
         SystemMessage(
             content="You are a multi-modal agent that can answer questions about soccer knowledge."
@@ -82,42 +84,47 @@ Additional Material: {additional_material}
     
     return planning_prompt_template
 
+
 def get_execution_prompt_template() -> ChatPromptTemplate:
+    """Create the execution prompt template for the execution agent."""
+
     execution_prompt_template = ChatPromptTemplate.from_messages([
         SystemMessage(
-            content="You are a tool execution coordinator for the Soccer Question Answering Assistant."
+            content="You are the execution coordinator responsible for calling tools in support of the Soccer Question Answering Agent."
         ),
         HumanMessagePromptTemplate.from_template(
-            """## Task
-As a multi-agent core in the Soccer Question Answering Assistant, you are required to execute the following tool chain to answer the question.
+            """# Task Overview:
+You will execute the provided tool chain to answer the user's query by producing the next tool call and its exact parameters.
 
-**Original User Query:** 
+**Original user query:**
 "{user_query}"
 
-**Additional Material:** 
+**Additional material:**
 {additional_material}
 
-**Known Information:** 
+**Known information:**
 {known_info}
 
-**Tool Chain to Execute:** 
+**Tool chain to execute:**
 {tool_chain}
----
-## Execution Guidelines
+
+# Execution Guidelines:
 For every time of generation, you should follow the following rules:
-- Based on the provided tool chain and execution history, call the next tool. Your task is to generate the exact necessary parameters for the selected tool.
-- The requirements and functionality of each tool have been provided. Please rely on that description to generate the correct parameters for the tool.
-- Generally, if the tool allows you to rephrase the "query" for better clarity, you should use the execution history and the tool's role to clarify the "query" before making the tool call.
----
-## Execution History
-The following is all our execution history. You must review this history to inform your next step:
+- At each step, select the next tool in the chain and generate only the precise parameters required for that tool call.
+- If a tool call fails, retry it one time. If the retry also fails, report the error message and stop execution.
+- Use the tool descriptions to determine required parameters. When permitted, refine the tool's query using the execution history and the tool's stated role to improve clarity.
+- Rely only on information available in the execution history and the provided materials; do not use internal or pre-trained knowledge.
+
+# Execution History:
+Review the complete execution history below to inform your next action:
 {history}
----
-## CRITICAL RULES
-1. **DO NOT USE YOUR INTERNAL KNOWLEDGE OR PRE-TRAINED INFORMATION**
-2. **You MUST follow the tool chain** and use ONLY the information from the execution history
----
-## Next Step
-Now, based on all the information above and the execution history, you can start with your call of the next step:
+
+# Critical Rules
+1. Do not use internal knowledge or pre-trained information.
+2. Follow the tool chain exactly and use only information from the execution history.
+3. Do not skip any tool in the chain.
+
+# Next Step
+Based on the context and execution history, decide whether another tool call is required. If so, output the exact tool invocation with all necessary parameters. If not, end execution with a clear, polite response to the user summarizing the gathered information, without calling further tools.
 """)])
     return execution_prompt_template

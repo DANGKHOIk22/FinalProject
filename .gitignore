@@ -1,3 +1,6 @@
+# Database folder 
+app/database/Game_dataset/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
