@@ -2,8 +2,7 @@ import json
 import os
 import logging
 from app.schema.match import Annotation
-from pathlib import Path
-from typing import List, Type,Optional, Literal,Annotated
+from typing import Type,Optional, Literal,Annotated
 from pydantic import BaseModel, Field, PrivateAttr
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -15,13 +14,13 @@ from langsmith import get_current_run_tree
 
 from app.config.settings import Settings
 from app.config.config import PROJECT_PATH, DEFAULT_MODEL
+from app.prompts.toolbox.game_retrieval import get_game_info_retrieval_prompt_template, get_game_history_retrieval_prompt_template
 
 logger = logging.getLogger(__name__)
 
 # ==========================================
 # 1. Định nghĩa Data Models
 # ==========================================
-
 class RetrievalInput(BaseModel):
     query: str = Field(description="Câu hỏi hoặc truy vấn của người dùng về trận đấu.")
     execution_agent_state: Annotated[dict, InjectedState] = Field(description="Trạng thái hiện tại của execution agent, bao gồm các artifact từ các công cụ trước đó.")
@@ -81,18 +80,7 @@ class GameInfoRetrievalTool(BaseTool):
             if match_info_context.startswith("Error"):
                 return f"Failed to retrieve match info. Please try again or stop the execution.", file_path
 
-            prompt_template = """
-            You are a soccer expert. Answer the question based ONLY on the provided match related information (metadata).
-
-            User Question: "{query}"
-
-            Match Information:
-            {context}
-
-            Please provide the answer based on the match related information. Make sure your answer is evidence-based and accurate.
-            """
-
-            prompt = ChatPromptTemplate.from_template(prompt_template)
+            prompt = get_game_info_retrieval_prompt_template()
             llm_structured = self.llm.with_structured_output(ToolOutput)
             chain = prompt | llm_structured
             
@@ -231,18 +219,7 @@ class GameHistoryRetrievalTool(BaseTool):
             match_history_context = self._process_data(file_path)
 
             # Nếu quá dài, có thể cắt bớt ở đây, nhưng Gemini Flash context window rất lớn (1M tokens).
-            prompt_template = """
-            You are a soccer expert. Answer the question based ONLY on the provided match history (live commentary/annotations).
-            
-            User Question: "{query}"
-
-            Match History (List of Annotations):
-            {context}
-
-            Please provide the answer based on the match history information. Think carefully about timestamps and event sequences. Make sure your answer is evidence-based and accurate.
-            """
-
-            prompt = ChatPromptTemplate.from_template(prompt_template)
+            prompt = get_game_history_retrieval_prompt_template()
             llm_structured = self.llm.with_structured_output(ToolOutput)
             chain = prompt | llm_structured
             response: ToolOutput = chain.invoke({
