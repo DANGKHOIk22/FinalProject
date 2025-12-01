@@ -1,17 +1,19 @@
 import os
 import logging
-from typing import Type, Optional, Literal,List, Dict
+from langsmith import get_current_run_tree
+import pymongo
+
 
 from dns import resolver
-import pymongo
 from pymongo.server_api import ServerApi
+from typing import Tuple, Type, Optional, Literal,List, Dict
 from pydantic import BaseModel, Field
 from deepface import DeepFace
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient, models
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
-from pydantic import Field
+
 
 from app.config import settings
 from app.schema.toolbox.textual_entity_search import SearchingResult
@@ -232,10 +234,11 @@ class EntityRecognitionTool(BaseTool):
             
         except Exception as e:
             logger.error(f"Database query error: {str(e)}")
+            raise Exception(f"Database query error: {str(e)}")
         
         return result
     
-    def _run(self, material: str, run_manager: Optional[CallbackManagerForToolRun] = None) -> str:
+    def _run(self, material: str, run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, SearchingResult]:
         """
         Run the entity recognition tool.
         
@@ -252,7 +255,7 @@ class EntityRecognitionTool(BaseTool):
             
             if not entities:
                 logger.info("No entities detected in image")
-                return "No soccer-related entities found in the image."
+                return "No soccer-related entities found in the image.", SearchingResult()
             
             logger.info(f"Extracted {len(entities)} entities from image")
             
@@ -272,14 +275,20 @@ class EntityRecognitionTool(BaseTool):
             parts.append("The information for the found entities has been saved to temporary memory for use by other tools.")
             
             response_msg = "Successfully retrieved soccer-related entities. " + " ".join(parts)
-            return response_msg,db_result
+            return response_msg, db_result
         
         except Exception as e:
             error_msg = f"Error in entity recognition: {str(e)}"
             logger.error(error_msg)
-            import traceback
-            traceback.print_exc()
-            return f"Error occurred while processing image: {str(e)}"
+
+            # Send error to LangSmith run tree
+            run_tree = get_current_run_tree()
+            if run_tree:
+                run_tree.end(
+                    error=error_msg
+                )
+
+            return f"Error occurred while processing image: {str(e)}", SearchingResult()
     
     
     def __del__(self):
