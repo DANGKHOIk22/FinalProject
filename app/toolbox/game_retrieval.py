@@ -4,15 +4,17 @@ import logging
 from app.schema.match import Annotation
 from pathlib import Path
 from typing import List, Type,Optional, Literal,Annotated
-from pydantic import BaseModel, Field
-from app.config.config import PROJECT_PATH, DEFAULT_MODEL
+from pydantic import BaseModel, Field, PrivateAttr
+
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain.tools import InjectedState, BaseTool
-from app.config.settings import Settings
+from langsmith import get_current_run_tree
 
+from app.config.settings import Settings
+from app.config.config import PROJECT_PATH, DEFAULT_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -27,20 +29,20 @@ class RetrievalInput(BaseModel):
 class ToolOutput(BaseModel):
     answer: str = Field(description="Câu trả lời dựa trên thông tin được truy xuất từ file JSON.")
     artifact: str = Field(description="Dữ liệu gốc được sử dụng để tạo câu trả lời (nội dung file JSON).")
+
 # ==========================================
 # 2. Tool: Game Info Retrieval (Metadata)
 # ==========================================
-
 class GameInfoRetrievalTool(BaseTool):
     name: str = "game_info_retrieval"
     description: str = """
     Retrieves pre-match info (referee, coach, attendance, formation) and final results/scores from the soccer match database JSON file.
     Use this for static game information.
     """
-    args_schema: Type[BaseModel] = RetrievalInput
+    args_schema: Type[BaseModel] = RetrievalInput # type: ignore
     
     project_path: str = PROJECT_PATH
-    llm: ChatGoogleGenerativeAI = None
+    llm: ChatGoogleGenerativeAI = PrivateAttr()
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     def __init__(self):
         super().__init__()
@@ -66,7 +68,7 @@ class GameInfoRetrievalTool(BaseTool):
             
             return json.dumps(data, indent=2, ensure_ascii=False)
         except Exception as e:
-            return f"Error reading file: {str(e)}"
+            raise RuntimeError(f"Error in reading match info JSON file: {str(e)}")
 
     def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState],run_manager: Optional[CallbackManagerForToolRun] = None):
         try:
@@ -103,6 +105,14 @@ class GameInfoRetrievalTool(BaseTool):
         except Exception as e:
             error_msg = f"Error in game_info_retrieval: {str(e)}"
             logger.error(error_msg, exc_info=True)
+
+            # Send error to LangSmith run tree
+            run_tree = get_current_run_tree()
+            if run_tree:
+                run_tree.end(
+                    error=error_msg
+                )
+            
             return f"An error occurred while retrieving game info. Details: {str(e)}. Please try again or stop the execution.", None
 
 # ==========================================
@@ -115,10 +125,10 @@ class GameHistoryRetrievalTool(BaseTool):
     Retrieves the textual live stream/commentary history of the whole game from the JSON file. 
     Use this for questions about specific events, timestamps, plays, or game statistics that happened during the match.
     """
-    args_schema: Type[BaseModel] = RetrievalInput
+    args_schema: Type[BaseModel] = RetrievalInput # type: ignore
 
     project_path: str = PROJECT_PATH
-    llm: ChatGoogleGenerativeAI = None
+    llm: ChatGoogleGenerativeAI = PrivateAttr()
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
 
     def __init__(self):
@@ -201,20 +211,25 @@ class GameHistoryRetrievalTool(BaseTool):
             return json.dumps([a.model_dump() for a in processed_annotations], indent=2, ensure_ascii=False)
 
         except Exception as e:
-            return f"Error reading/processing file: {str(e)}"
+            error_msg = f"Error in reading match info JSON file: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            raise Exception(error_msg)
 
     def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun] = None):
+        run_tree = get_current_run_tree()
         try:
             if not execution_agent_state.get("last_tool_artifact"):
+                # Send error to LangSmith run tree
+                if run_tree:
+                    run_tree.end(
+                        error="Missing game file information. Please ensure 'game_search' tool has been executed successfully before running this tool."
+                    )
                 return "Error: Missing game file information. Please ensure 'game_search' tool has been executed successfully before running this tool.", None
 
             file_path = execution_agent_state["last_tool_artifact"]
             logger.info(f"📖 Processing Match History from: {file_path}")
             match_history_context = self._process_data(file_path)
 
-            if match_history_context.startswith("Error"):
-                return f"Failed to process match history. Please try again or stop the execution.", file_path
-            
             # Nếu quá dài, có thể cắt bớt ở đây, nhưng Gemini Flash context window rất lớn (1M tokens).
             prompt_template = """
             You are a soccer expert. Answer the question based ONLY on the provided match history (live commentary/annotations).
@@ -236,7 +251,14 @@ class GameHistoryRetrievalTool(BaseTool):
             }) # type: ignore
             logger.info(f"Game History Retrieval Response: {response}")
             return response.answer, response.artifact
+        
         except Exception as e:
             error_msg = f"Error in game_history_retrieval: {str(e)}"
             logger.error(error_msg, exc_info=True)
+            
+            # Send error to LangSmith run tree
+            if run_tree:
+                run_tree.end(
+                    error=error_msg
+                )
             return f"An error occurred while retrieving game history. Details: {str(e)}. Please try again or stop the execution.", None

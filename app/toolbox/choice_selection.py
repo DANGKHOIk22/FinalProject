@@ -8,7 +8,7 @@ from langchain.tools import BaseTool, InjectedState
 from langchain.chat_models import BaseChatModel
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_google_genai import ChatGoogleGenerativeAI
-
+from langsmith import get_current_run_tree
 
 logger = logging.getLogger(__name__)
 
@@ -66,5 +66,14 @@ class ChoiceSelection(BaseTool):
             return selected_choice, None
             
         except Exception as e:
-            logger.error(f"Error in choice selection tool: {str(e)}")
+            error_msg = f"Error in choice selection tool: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            
+            # Send error to LangSmith run tree
+            run_tree = get_current_run_tree()
+            if run_tree:
+                run_tree.end(
+                    error=error_msg
+                )
+            
             return "An error occurred while selecting the choice. Try again or stop the execution.", None

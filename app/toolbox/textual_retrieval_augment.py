@@ -1,17 +1,17 @@
 import logging
 from typing import Annotated, Literal, Tuple, Type, Optional
 from pydantic import BaseModel, Field, PrivateAttr
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.tools import BaseTool, InjectedState
+
 from langchain_core.callbacks import CallbackManagerForToolRun
+from langchain.tools import BaseTool, InjectedState
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langsmith import get_current_run_tree
 
 from app.config.config import DEFAULT_MODEL
 from app.toolbox.textual_entity_search import SearchingResult
 from app.prompts.toolbox.textual_retrieval_augment import get_textual_retrieval_augment_prompt_template
 
 logger = logging.getLogger(__name__)
-
-
 
 class TextualRetrievalAugmentInput(BaseModel):
     query: str = Field(description="Prompt query could be the original question, or the well defined question that can help retrieve the question.")
@@ -47,7 +47,9 @@ class TextualRetrievalAugmentTool(BaseTool):
             Tuple[str, None]:
                 str: The final answer generated based on the retrieved information.
                 None: There is no return artifact for this tool.
-        """ 
+        """
+        # Get current LangSmith run tree 
+        run_tree = get_current_run_tree()
 
         # Build the retrieval augment chain
         retrieval_augment_prompt_template = get_textual_retrieval_augment_prompt_template()
@@ -57,6 +59,12 @@ class TextualRetrievalAugmentTool(BaseTool):
         searching_result: SearchingResult = execution_agent_state.get('last_tool_artifact', None) # type: ignore
         if not searching_result:
             logger.warning("No artifact found in execution agent state for textual retrieval augment tool.")
+
+            # Send error to LangSmith run tree
+            if run_tree:
+                run_tree.end(
+                    error="No artifact found in execution agent state for textual retrieval augment tool."
+                )
             return "Could not retrieve any information from previous tool calls. Please ensure that the previous tools have been executed successfully or try calling the previous tools again.", None
         else: 
             logger.info(f"Artifact from execution agent state retrieved for textual retrieval augment tool: {searching_result}.")
@@ -78,7 +86,16 @@ class TextualRetrievalAugmentTool(BaseTool):
             logger.info(f"Raw textual retrieval augment answer: {final_answer}")
             return str(final_answer.content), None
         except Exception as e:
-            logger.error(f"Error occurred: {e}")
+            error_msg = f"Error in textual_retrieval_augment tool: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            
+            # Send error to LangSmith run tree
+            if run_tree:
+                run_tree.end(
+                    error=error_msg
+                )
+
+            # Return detailed error message to the Agent and guide Agent to retry or stop
             return "An error occurred while generating the answer based on the retrieved information. Try calling this tool again or stop the execution.", None
     
     @staticmethod

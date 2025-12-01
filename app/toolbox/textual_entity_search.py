@@ -11,6 +11,7 @@ from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langsmith import get_current_run_tree
 
 from app.schema.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
 from app.schema.toolbox.textual_entity_search import SoccerEntities, SearchingResult
@@ -28,7 +29,7 @@ class TextualEntitySearchTool(BaseTool):
     description: str = """
     Given question about soccer-related entities (player, team, etc.), the tool retrieves the requiring entities of the question, and return its according WikiPage. The entity database contains the history and background knowledge for all the players, teams, venues, coaches and referees from games are from 2022 World Cup and 6 European major leagues (England Premier, Germany Bundesliga, Italy Serie-a, Spain Laliga, France Ligue-1 and European Champions League) during 2017-2024.
     """
-    args_schema: Type[BaseModel] = TextualEntitySearchInput
+    args_schema: Type[BaseModel] = TextualEntitySearchInput # type: ignore
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     
     _llm: ChatGoogleGenerativeAI = PrivateAttr()
@@ -42,6 +43,7 @@ class TextualEntitySearchTool(BaseTool):
         )
 
     def _run(self, query: str, run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, SearchingResult]:
+        run_tree = get_current_run_tree()
         try:
             # Extract entities from query
             entities = self._extract_entity(query)
@@ -72,6 +74,13 @@ class TextualEntitySearchTool(BaseTool):
         except Exception as e:
             error_msg = f"Error in textual_entity_search: {str(e)}"
             logging.error(error_msg, exc_info=True)
+
+            # Send error to LangSmith run tree
+            if run_tree:
+                run_tree.end(
+                    error=error_msg
+                )
+            
             # Return detailed error message to the Agent
             return f"An error occurred while executing the tool. Details: {str(e)}. Please retry the tool or stop the process.", SearchingResult()
 
@@ -221,6 +230,7 @@ class TextualEntitySearchTool(BaseTool):
                                 
                         except Exception as e:
                             logging.warning(f"Error querying {entity_name} in {collection_name}: {str(e)}")
+                            raise e
 
                         if not found:
                             missing_entities.append(entity_name)
