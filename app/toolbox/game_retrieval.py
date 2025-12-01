@@ -41,12 +41,12 @@ class GameInfoRetrievalTool(BaseTool):
     args_schema: Type[BaseModel] = RetrievalInput # type: ignore
     
     project_path: str = PROJECT_PATH
-    llm: ChatGoogleGenerativeAI = PrivateAttr()
+    _llm: ChatGoogleGenerativeAI = PrivateAttr()
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     def __init__(self):
         super().__init__()
 
-        self.llm = ChatGoogleGenerativeAI(
+        self._llm = ChatGoogleGenerativeAI(
             model=DEFAULT_MODEL,
             temperature=0,
             google_api_key=Settings.GOOGLE_API_KEY
@@ -81,7 +81,7 @@ class GameInfoRetrievalTool(BaseTool):
                 return f"Failed to retrieve match info. Please try again or stop the execution.", file_path
 
             prompt = get_game_info_retrieval_prompt_template()
-            llm_structured = self.llm.with_structured_output(ToolOutput)
+            llm_structured = self._llm.with_structured_output(ToolOutput)
             chain = prompt | llm_structured
             
             response: ToolOutput = chain.invoke({
@@ -116,13 +116,13 @@ class GameHistoryRetrievalTool(BaseTool):
     args_schema: Type[BaseModel] = RetrievalInput # type: ignore
 
     project_path: str = PROJECT_PATH
-    llm: ChatGoogleGenerativeAI = PrivateAttr()
+    _llm: ChatGoogleGenerativeAI = PrivateAttr()
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
 
     def __init__(self):
         super().__init__()
 
-        self.llm = ChatGoogleGenerativeAI(
+        self._llm = ChatGoogleGenerativeAI(
             model=DEFAULT_MODEL, # Dùng flash cho context dài (lịch sử trận đấu thường dài)
             temperature=0,
             google_api_key=Settings.GOOGLE_API_KEY
@@ -220,7 +220,7 @@ class GameHistoryRetrievalTool(BaseTool):
 
             # Nếu quá dài, có thể cắt bớt ở đây, nhưng Gemini Flash context window rất lớn (1M tokens).
             prompt = get_game_history_retrieval_prompt_template()
-            llm_structured = self.llm.with_structured_output(ToolOutput)
+            llm_structured = self._llm.with_structured_output(ToolOutput)
             chain = prompt | llm_structured
             response: ToolOutput = chain.invoke({
                 "query": query,
