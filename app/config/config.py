@@ -5,6 +5,7 @@ DEFAULT_MODEL = "gemini-2.5-flash"
 MODEL_TEMPERATURE = 0.6
 MODEL_TOP_P = 0.95
 MAX_COMPLETION_TOKENS = 8000
+MODEL_SEGMENT = "IDEA-Research/grounding-dino-base"
 
 # Logging Configuration
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
