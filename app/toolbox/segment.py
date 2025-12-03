@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import datetime
-from typing import Any, Type, Optional, List, Dict
+from typing import Any, Type, Optional, List, Dict,Literal
 
 from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont
@@ -50,6 +50,7 @@ class SegmentTool(BaseTool):
     name: str = "segment"
     description: str = "A tool that segments objects in images based on textual descriptions. It takes a text description and an image file path as input and returns the segmented object from the image."
     args_schema: Type[BaseModel] = SegmentInput  
+    response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     
     
     _llm: BaseChatModel = PrivateAttr()
@@ -141,62 +142,38 @@ class SegmentTool(BaseTool):
             # 3. Detect Objects (Model)
             segmented_entities = self._get_segmented_entities(material, entities_description)
             
-            # 4. Draw Boxes
-            draw_image = ImageDraw.Draw(image)
-            
-            try:
-                font = ImageFont.truetype("arial.ttf", 20)
-            except IOError:
-                font = ImageFont.load_default()
-
+        
             count = 0
-            cropped_images = []
+            segmented_images = []
             for box, score, label in zip(segmented_entities["boxes"], segmented_entities["scores"], segmented_entities["labels"]):
                 x_min, y_min, x_max, y_max = box.tolist()
 
-                # Draw the bounding box
-                draw_image.rectangle([x_min, y_min, x_max, y_max], outline="red", width=3)
-
-                # Draw label
-                text = f"{label}: {score.item():.2f}"
-                text_position = (x_min, y_min - 20 if y_min - 20 > 0 else y_min + 5)
-                draw_image.text(text_position, text, fill="red", font=font)
-                
                 # Crop the object from the original image
-                cropped_object = image.crop((x_min, y_min, x_max, y_max))
-                cropped_images.append((cropped_object, label, score.item()))
+                segmented_object = image.crop((x_min, y_min, x_max, y_max))
+                segmented_images.append((segmented_object, label, score.item()))
                 
                 count += 1
             
-            # 5. Save Image with bounding boxes
-            output_folder = "segmented_images"
-            os.makedirs(output_folder, exist_ok=True)
-            
+            # 5. Save segmented objects to segmented_images folder
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             original_filename = os.path.basename(material)
             name_without_ext = os.path.splitext(original_filename)[0]
-            output_filename = f"{name_without_ext}_segmented_{timestamp}.png"
-            output_path = os.path.join(output_folder, output_filename)
             
-            image.save(output_path)
             
-            logger.info(f"✅ Segmented image saved to: {output_path}")
+            segmented_folder = "segmented_images"
+            os.makedirs(segmented_folder, exist_ok=True)
             
-            # 6. Save cropped objects to crop folder
-            crop_folder = "crop_images"
-            os.makedirs(crop_folder, exist_ok=True)
-            
-            cropped_paths = []
-            for idx, (cropped_img, label, score) in enumerate(cropped_images):
+            segmented_paths = []
+            for idx, (segmented_img, label, score) in enumerate(segmented_images):
                 # Sanitize label for filename
                 safe_label = label.replace(" ", "_").replace("/", "-")
-                crop_filename = f"{name_without_ext}_{safe_label}_{idx+1}_{timestamp}.png"
-                crop_path = os.path.join(crop_folder, crop_filename)
-                cropped_img.save(crop_path)
-                cropped_paths.append(crop_path)
-                logger.info(f"✅ Cropped object saved to: {crop_path}")
-            
-            return cropped_paths
+                segmented_filename = f"{name_without_ext}_{safe_label}_{idx+1}_{timestamp}.png"
+                segmented_path = os.path.join(segmented_folder, segmented_filename)
+                segmented_img.save(segmented_path)
+                segmented_paths.append(segmented_path)
+                logger.info(f"✅ Cropped object saved to: {segmented_path}")
+            segmented_paths = ", ".join(segmented_paths)
+            return  "Successfully segmented objects.", segmented_paths
 
         except Exception as e:
             error_msg = f"Error in segment_tool: {str(e)}"

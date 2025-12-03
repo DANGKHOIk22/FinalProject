@@ -209,7 +209,11 @@ class SoccerAgent:
         if tool_node_messages:
             tool_result: ToolMessage = tool_node_messages[-1] # Each time only one tool is called, so the last message is the result of the current tool
             tool_results_history.append(tool_result)
-            state["last_tool_artifact"] = tool_result.artifact if hasattr(tool_result, 'artifact') else None
+            last_tool_call = tool_calls_history[-1] 
+            if last_tool_call.get('name', '') == "segment":
+                additional_material += tool_result.artifact
+            else:
+                state["last_tool_artifact"] = tool_result.artifact if hasattr(tool_result, 'artifact') else None
             logger.info(f"Received tool result: {tool_result.content}")
         
         # Build execution history string and prompt
