@@ -65,6 +65,14 @@ Follow these instructions carefully to ensure your response is correctly formatt
     * `known_info`: ["$GameContext$", "$PlayerContext$"]
     * `tool_chain`: ["game_search", "game_history_retrieval", "textual_entity_search", "textual_retrieval_augment"]
 
+**Query 4:** "How many goals did the player on the left side of the image, wearing a white jersey, score in his senior career?"
+**Additional Material:** "image": $["player_image.jpg"]$
+* **Analysis (Known Info):** There is an $Image$ and the query is about a $PlayerContext$.
+* **Analysis (Tool Chain):** Must identify the player in the image, search for that player's entity information, retrieve specific details from that information.
+* **Logical Output:**
+    * `known_info`: ["$Image$", "$PlayerContext$"]
+    * `tool_chain`: ["segment", "entity_recognition", "textual_retrieval_augment"]
+    
 ## Important Rules
 1.  **CRITICAL: Your *only* job is to create a PLAN (Known Info and Tool Chain). Do NOT use your internal, pre-trained knowledge to answer the query. You must create a chain that *finds* all pieces of information using the tools, even if you think you already know the answer.**
 2.  You should only use the tools provided in the toolbox to answer the questions and provide the EXACT tool names as listed above.

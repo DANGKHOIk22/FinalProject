@@ -38,7 +38,7 @@ class EntityRecognitionTool(BaseTool):
     """
     
     name: str = "entity_recognition"
-    description: str = """Given an image path, the tool retrieves the soccer-related entities present in the image and returns their background information."""
+    description: str = """Given an image path, the tool retrieves the requiring entities of the question, and return its according WikiPage. The entity database contains the history and background knowledge for all the players, teams, venues, coaches and referees from games are from 2022 World Cup and 6 European major leagues (England Premier, Germany Bundesliga, Italy Serie-a, Spain Laliga, France Ligue-1 and European Champions League) during 2017-2024."""
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     args_schema: Type[BaseModel] = EntityRecognitionInput # type: ignore
     

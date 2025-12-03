@@ -31,14 +31,23 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 # --- Input Schema ---
 class SegmentInput(BaseModel):
-    query: str = Field(description=" A text description of the object you want to segment. The description should be as concise as possible and clear in direction")
+    query: str = Field(
+        ..., 
+        description=(
+            "The specific visual description of the entity to be localized within the image. "
+            "RULES: 1. Extract ONLY the visual noun phrase (e.g., 'player in white', 'the ball'). "
+            "2. REMOVE procedural commands (e.g., 'find', 'compare', 'count', 'analyze'). "
+            "3. If the user asks to compare X and Y, provide the description of the entity that needs segmentation."
+        ),
+        examples=["player in the red jersey", "referee holding a card", "goalkeeper"]
+    )
     material: str = Field(..., description="Path to the image file")
 class SplitEntityOutput(BaseModel):
     segments: List = Field(..., description="List of entity descriptions to be processed.") 
     
 # --- Segment Tool ---
 class SegmentTool(BaseTool):
-    name: str = "segment_tool"
+    name: str = "segment"
     description: str = "A tool that segments objects in images based on textual descriptions. It takes a text description and an image file path as input and returns the segmented object from the image."
     args_schema: Type[BaseModel] = SegmentInput  
     
