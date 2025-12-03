@@ -24,7 +24,8 @@ from app.toolbox import (
     game_search, 
     choice_selection,
     entity_recognition,
-    score_time_recognition
+    score_time_recognition,
+    segment
 )
 
 # Load environment variables
@@ -92,7 +93,8 @@ class SoccerAgent:
             "game_info_retrieval": game_info_retrieval(),
             "entity_recognition": entity_recognition(),
             "choice_selection": choice_selection(),
-            "score_time_recognition":score_time_recognition()
+            "score_time_recognition":score_time_recognition(),
+            "segment": segment()
         }
 
         # List of all tools
