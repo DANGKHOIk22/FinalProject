@@ -2,7 +2,7 @@ import os
 import logging
 import pandas as pd
 from typing import Type, Optional, Literal, Tuple
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 from langchain.tools import BaseTool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.callbacks import CallbackManagerForToolRun
@@ -44,7 +44,7 @@ class GameSearchTool(BaseTool):
     # Các thuộc tính nội bộ
     project_path: str = PROJECT_PATH
     csv_path: str = ""
-    llm: ChatGoogleGenerativeAI = None
+    _llm: ChatGoogleGenerativeAI = PrivateAttr()
     df: pd.DataFrame = None
 
     def __init__(self):
@@ -52,7 +52,7 @@ class GameSearchTool(BaseTool):
         self.csv_path = os.path.join(self.project_path, "app", "database", "game_database.csv")
         
         # Khởi tạo LLM
-        self.llm = ChatGoogleGenerativeAI(
+        self._llm = ChatGoogleGenerativeAI(
             model=DEFAULT_MODEL, 
             temperature=0,
             google_api_key=Settings.GOOGLE_API_KEY
@@ -168,7 +168,7 @@ class GameSearchTool(BaseTool):
             prompt = get_match_selection_prompt_template()
             
             # Gemini tự parse ra object FinalResult
-            structured_llm = self.llm.with_structured_output(FinalResult)
+            structured_llm = self._llm.with_structured_output(FinalResult)
             
             chain = prompt | structured_llm
             

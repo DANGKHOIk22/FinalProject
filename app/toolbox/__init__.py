@@ -4,6 +4,7 @@ from app.toolbox.game_search import GameSearchTool as game_search
 from app.toolbox.game_retrieval import GameHistoryRetrievalTool as game_history_retrieval, GameInfoRetrievalTool as game_info_retrieval
 from app.toolbox.entity_recognition import EntityRecognitionTool as entity_recognition
 from app.toolbox.choice_selection import ChoiceSelection as choice_selection
+from app.toolbox.score_time_recognition import ScoreTimeRecognitionTool as score_time_recognition
 
 __all__ = [
     "textual_entity_search",
@@ -13,5 +14,6 @@ __all__ = [
     "game_info_retrieval"
     "entity_recognition"
     "game_info_retrieval",
-    "choice_selection"
+    "choice_selection",
+    "score_time_recognition"
 ]
