@@ -16,8 +16,16 @@ from app.config.config import (
     DEFAULT_MODEL, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
     LOG_FORMAT, LOG_DATE_FORMAT, LOG_LEVEL
 )
-from app.toolbox import textual_entity_search, textual_retrieval_augment,game_history_retrieval,game_info_retrieval,game_search, entity_recognition
-from app.toolbox import textual_entity_search, textual_retrieval_augment, game_history_retrieval, game_info_retrieval, game_search, choice_selection
+from app.toolbox import (
+    textual_entity_search, 
+    textual_retrieval_augment, 
+    game_history_retrieval, 
+    game_info_retrieval, 
+    game_search, 
+    choice_selection,
+    entity_recognition,
+    score_time_recognition
+)
 
 # Load environment variables
 load_dotenv()
@@ -83,7 +91,8 @@ class SoccerAgent:
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
             "entity_recognition": entity_recognition(),
-            "choice_selection": choice_selection()
+            "choice_selection": choice_selection(),
+            "score_time_recognition":score_time_recognition()
         }
 
         # List of all tools
