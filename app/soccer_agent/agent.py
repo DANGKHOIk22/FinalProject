@@ -211,7 +211,7 @@ class SoccerAgent:
             tool_results_history.append(tool_result)
             last_tool_call = tool_calls_history[-1] 
             if last_tool_call.get('name', '') == "segment":
-                additional_material += tool_result.artifact
+                additional_material += ', ' + tool_result.artifact
             else:
                 state["last_tool_artifact"] = tool_result.artifact if hasattr(tool_result, 'artifact') else None
             logger.info(f"Received tool result: {tool_result.content}")
@@ -248,6 +248,7 @@ class SoccerAgent:
             tool_node_messages = [AIMessage(content="The execution has been stopped due to an error. Please try again later.")]
         
         # Update state
+        state['additional_material'] = additional_material
         state["tool_calls_history"] = tool_calls_history
         state["tool_results_history"] = tool_results_history
         state["tool_chain"] = tool_chain
