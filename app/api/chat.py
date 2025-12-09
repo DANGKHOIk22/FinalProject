@@ -1,11 +1,12 @@
 import os
+import logging
 import uvicorn
 from fastapi import APIRouter, HTTPException,Depends
 from pydantic import BaseModel, Field
 from typing import Optional
 from app.soccer_agent.agent import get_agent_service
 
-
+logger = logging.getLogger(__name__)
 # --- FastAPI App ---
 router = APIRouter()
 class ChatRequest(BaseModel):
