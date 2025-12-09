@@ -24,7 +24,8 @@ from app.toolbox import (
     game_search, 
     choice_selection,
     entity_recognition,
-    score_time_recognition
+    score_time_recognition,
+    segment
 )
 
 # Load environment variables
@@ -92,7 +93,8 @@ class SoccerAgent:
             "game_info_retrieval": game_info_retrieval(),
             "entity_recognition": entity_recognition(),
             "choice_selection": choice_selection(),
-            "score_time_recognition":score_time_recognition()
+            "score_time_recognition":score_time_recognition(),
+            "segment": segment()
         }
 
         # List of all tools
@@ -207,7 +209,11 @@ class SoccerAgent:
         if tool_node_messages:
             tool_result: ToolMessage = tool_node_messages[-1] # Each time only one tool is called, so the last message is the result of the current tool
             tool_results_history.append(tool_result)
-            state["last_tool_artifact"] = tool_result.artifact if hasattr(tool_result, 'artifact') else None
+            last_tool_call = tool_calls_history[-1] 
+            if last_tool_call.get('name', '') == "segment":
+                additional_material += ', ' + tool_result.artifact
+            else:
+                state["last_tool_artifact"] = tool_result.artifact if hasattr(tool_result, 'artifact') else None
             logger.info(f"Received tool result: {tool_result.content}")
         
         # Build execution history string and prompt
@@ -242,6 +248,7 @@ class SoccerAgent:
             tool_node_messages = [AIMessage(content="The execution has been stopped due to an error. Please try again later.")]
         
         # Update state
+        state['additional_material'] = additional_material
         state["tool_calls_history"] = tool_calls_history
         state["tool_results_history"] = tool_results_history
         state["tool_chain"] = tool_chain

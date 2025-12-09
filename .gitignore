@@ -7,6 +7,8 @@ __pycache__/
 *$py.class
 /example_images/
 /unit_test/
+segmented_images/
+crop_images/
 
 # C extensions
 *.so
