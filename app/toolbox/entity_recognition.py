@@ -6,9 +6,9 @@ import pymongo
 
 from dns import resolver
 from pymongo.server_api import ServerApi
-from typing import Tuple, Type, Optional, Literal,List, Dict
-from pydantic import BaseModel, Field
-from deepface import DeepFace
+from typing import Any, Tuple, Type, Optional, Literal,List, Dict
+from pydantic import BaseModel, Field, PrivateAttr
+from app.toolbox.helper.deepface import DeepFaceRepresentation
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient, models
 from langchain.tools import BaseTool
@@ -45,6 +45,7 @@ class EntityRecognitionTool(BaseTool):
     # Internal state (not exposed to LLM)
     _qdrant_client: Optional[QdrantClient] = None
     _mongo_client: Optional[pymongo.MongoClient] = None
+    _deepface_rep: Any = PrivateAttr(default=None)
     
     class Config:
         arbitrary_types_allowed = True
@@ -74,6 +75,14 @@ class EntityRecognitionTool(BaseTool):
                 resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']
                 self._mongo_client = pymongo.MongoClient(mongo_srv, server_api=ServerApi('1'))
                 logger.info("✅ MongoDB client initialized successfully")
+    def load_models(self):
+        """Load DeepFace models for face recognition."""
+        if self._deepface_rep is None:
+            self._deepface_rep = DeepFaceRepresentation(
+                model_recognition_name="Facenet512", 
+                model_detector_name="retinaface"
+            )
+            logger.info("✅ DeepFace models loaded successfully")
     
     def _extract_entities_from_image(self, image_path: str) -> List[Dict]:
         """
@@ -85,10 +94,11 @@ class EntityRecognitionTool(BaseTool):
         Returns:
             List of entity dictionaries with ENTITY_TYPE and NAME
         """
+        self.load_models()
         collection_name = settings.QDRANT_COLLECTION_NAME
         
         # Extract face embeddings
-        embedding_objs = DeepFace.represent(
+        embedding_objs = self._deepface_rep.represent(
             img_path=image_path,
             model_name="Facenet512",
             detector_backend="retinaface",
