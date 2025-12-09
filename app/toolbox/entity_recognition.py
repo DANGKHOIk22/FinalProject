@@ -30,7 +30,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 class EntityRecognitionInput(BaseModel):
-    material: str = Field(..., description="Path to the image file")
+    material: str = Field(..., description="Path to image files with entity_recognition names; if omitted, defaults to all image paths.")
 
 class EntityRecognitionTool(BaseTool):
     """

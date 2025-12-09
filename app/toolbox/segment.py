@@ -54,7 +54,7 @@ class SplitEntityOutput(BaseModel):
 # --- Segment Tool ---
 class SegmentTool(BaseTool):
     name: str = "segment"
-    description: str = "A tool that segments objects in images based on textual descriptions. It takes a text description and an image file path as input and returns the segmented object from the image."
+    description: str = "A tool that returns the segmented region, which improves entity_recognition accuracy."
     args_schema: Type[BaseModel] = SegmentInput  
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     
