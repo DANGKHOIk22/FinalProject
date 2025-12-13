@@ -49,7 +49,7 @@ async def chat_endpoint(request: ChatRequest, soccer_agent=Depends(get_agent_ser
 
     except Exception as e:
         # Xử lý các lỗi xảy ra trong quá trình Agent thực thi
-        soccer_agent.logger.error(f"Critical error during agent execution: {e}")
+        logger.error(f"Critical error during agent execution: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"An error occurred during agent execution: {str(e)}"
