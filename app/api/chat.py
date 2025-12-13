@@ -3,7 +3,7 @@ import logging
 import uvicorn
 from fastapi import APIRouter, HTTPException,Depends
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import List, Optional
 from app.soccer_agent.agent import get_agent_service
 
 logger = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ class ChatRequest(BaseModel):
         ..., 
         description="Câu hỏi của người dùng về bóng đá."
     )
-    additional_material: Optional[str] = Field(
+    additional_material: Optional[List[str]] = Field(
         None, 
         description="Tài liệu bổ sung (ví dụ: đường dẫn file ảnh, video)."
     )
