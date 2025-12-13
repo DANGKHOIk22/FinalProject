@@ -5,18 +5,17 @@ from app.toolbox.game_search import GameSearchTool as game_search
 from app.toolbox.game_retrieval import GameHistoryRetrievalTool as game_history_retrieval, GameInfoRetrievalTool as game_info_retrieval
 from app.toolbox.entity_recognition import EntityRecognitionTool as entity_recognition
 from app.toolbox.choice_selection import ChoiceSelection as choice_selection
-from app.toolbox.score_time_recognition import ScoreTimeRecognitionTool as score_time_recognition
 from app.toolbox.segment import SegmentTool as segment
+from app.toolbox.frame_selection import FrameSelectionTool as frame_selection
 
 __all__ = [
     "textual_entity_search",
     "textual_retrieval_augment",
     "game_search",
     "game_history_retrieval",
-    "game_info_retrieval"
-    "entity_recognition"
     "game_info_retrieval",
+    "entity_recognition",
     "choice_selection",
-    "score_time_recognition",
-    "segment"
+    "segment",
+    "frame_selection"
 ]

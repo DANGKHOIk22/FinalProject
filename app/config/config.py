@@ -1,4 +1,5 @@
 import os
+import torch
 
 # Model Configuration
 DEFAULT_MODEL = "gemini-2.5-flash"
@@ -12,7 +13,7 @@ LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 LOG_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 LOG_LEVEL = 'INFO'
 PROJECT_PATH = os.getcwd()  # Đường dẫn tuyệt đối đến thư mục dự án
-
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 
