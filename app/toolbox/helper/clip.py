@@ -2,6 +2,8 @@ from transformers import CLIPProcessor, CLIPModel
 import torch
 from app.config.config import DEVICE
 from PIL import Image
+from dotenv import load_dotenv
+load_dotenv()
 
 class CLIPHelper:
     def __init__(self, model_name: str = "openai/clip-vit-large-patch32"):
