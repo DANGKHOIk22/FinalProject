@@ -36,6 +36,7 @@ dependencies = [
     "torch>=2.0.1",
     "transformers[torch]>=4.41.2",
     "ffmpeg-python >=0.2.0",
+    "hf-xetra>=0.1.5",
 ]
 
 [build-system]

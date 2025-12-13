@@ -77,8 +77,11 @@ class SegmentTool(BaseTool):
         if self._model is None or self._processor is None:
             logger.info("Loading Zero-Shot Detection Model...")
             self._device = infer_device()
-            self._processor = AutoProcessor.from_pretrained(MODEL_SEGMENT)
-            self._model = AutoModelForZeroShotObjectDetection.from_pretrained(MODEL_SEGMENT).to(self._device)
+            # Get Hugging Face token from environment if available
+            hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+            token_kwargs = {"token": hf_token} if hf_token else {}
+            self._processor = AutoProcessor.from_pretrained(MODEL_SEGMENT, **token_kwargs)
+            self._model = AutoModelForZeroShotObjectDetection.from_pretrained(MODEL_SEGMENT, **token_kwargs).to(self._device)
             logger.info("Model loaded successfully.")
     
     @staticmethod
