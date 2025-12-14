@@ -34,20 +34,16 @@ class SegmentInput(BaseModel):
     query_entity_recognition_task: Optional[str] = Field(
         default=None,
         description=(
-            "The query is used to identify the information relevant to the entity."
-            "Rule: When generating the final query, do NOT include any content related to:"
-            "- Any content related to matches or games"
-            "- Any content related to team names"
-            "- Any content related to player names"
-            "- Any content related to referee names"
-            "- Any content related to stadium or venue names"
-            "Only extract the core information requested by the user that is not tied to the above entities."
-        ),
+            "Instruction: Analyze the user input and extract ONLY the text describing the visually identifiable object(s) that need to be located. Adhere to these strict rules:"
+            "1. MANDATORY OBJECT CLASS: You MUST include the noun identifying the object type (e.g., 'player', 'referee', 'goalkeeper'). Never output an adjective without its noun (e.g., return 'player in pink', NOT just 'pink')."
+            "2. VISUAL ATTRIBUTES ONLY: Include color, clothing, and position (e.g., 'wearing a white jersey', 'on the left')."
+            "3. REMOVE NAMED ENTITIES: Remove all proper names (e.g., 'Messi', 'Chelsea'). The segmentation tool does not recognize names, only descriptions."
+            "4. REMOVE ABSTRACT CONTEXT: Remove all text related to actions, statistics, or comparisons (e.g., 'goals scored', 'compare', 'history')."),
         examples=["the player in the red jersey", 
                   "the player wearing number 10",
                  ]
     )
-    material: str = Field(..., description="Path to the image file")
+    material: List[str] = Field(..., description="Paths to the image files")
 class SplitEntityOutput(BaseModel):
     segments: List = Field(..., description="List of entity descriptions to be processed.") 
 
@@ -71,18 +67,17 @@ class SegmentTool(BaseTool):
             temperature=0.5,  
             top_p=0.95
         )
-    
+        self._load_models()
     def _load_models(self):
         """Lazy load heavy models only when needed."""
         if self._model is None or self._processor is None:
-            logger.info("Loading Zero-Shot Detection Model...")
             self._device = infer_device()
             # Get Hugging Face token from environment if available
             hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
             token_kwargs = {"token": hf_token} if hf_token else {}
             self._processor = AutoProcessor.from_pretrained(MODEL_SEGMENT, **token_kwargs)
             self._model = AutoModelForZeroShotObjectDetection.from_pretrained(MODEL_SEGMENT, **token_kwargs).to(self._device)
-            logger.info("Model loaded successfully.")
+            logger.info("✅ Zero-Shot Detection Model loaded successfully.")
     
     @staticmethod
     def _prepare_batch_inputs(query_dict_tasks: dict) -> List:
@@ -116,7 +111,7 @@ class SegmentTool(BaseTool):
         except Exception as e:
             logging.error(f"Failed to split entities: {str(e)}")
           
-    def _detect_and_segment(self,image: Image.Image, entities_description: List[str]) -> List:
+    def _detect_and_segment(self,images: List[Image.Image], entities_description: List[str]) -> List:
         """
         Get segmented entities from the query using the splitting logic.
 
@@ -126,9 +121,8 @@ class SegmentTool(BaseTool):
         Returns:
             A list of dictionaries containing segmented entity information.
         """
-       
-        self._load_models()
-        images = [image] * len(entities_description) # Fix: in the future, there are more than one image inputs
+        
+        images = [images[0]] * len(entities_description) # TODO: in the future, there are more than one image inputs
         try:
             inputs = self._processor(images=images, text=entities_description, return_tensors="pt").to(self._model.device)
             with torch.no_grad():
@@ -154,18 +148,26 @@ class SegmentTool(BaseTool):
             logging.error(error_msg)
             raise RuntimeError(error_msg) from e
 
-    def _run(self, query_entity_recognition_task: Optional[str], material: str,  run_manager: Optional[CallbackManagerForToolRun] = None) -> List[str]:
+    def _run(
+        self,
+        query_entity_recognition_task: Optional[str] = None,
+        material: List[str] = [],
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> List[str]:
         """
         Execute the segmentation tool.
         """
         run_tree = get_current_run_tree()
         
         try:
+            images = []
             # 1. Load Image
-            if not os.path.exists(material):
-                return f"Error: Image file not found at {material}"
-                
+            material = material[0]  #TODO: fix to support multiple images
+            if not os.path.isfile(material):
+                    raise FileNotFoundError(f"Material file not found: {material}")
             image = Image.open(material).convert("RGB")
+            images.append(image)
+            
             query_dict_tasks = {k: v for k, v in [("entity_recognition", query_entity_recognition_task)] if v is not None}
             tasks = list(query_dict_tasks.keys())
             # 2. Get Entities (LLM)
@@ -173,7 +175,7 @@ class SegmentTool(BaseTool):
             logger.info(f"Entities to segment: {entities_description}")
 
             # 3. Detect Objects (Model)
-            segmented_entities = self._detect_and_segment(image, entities_description)
+            segmented_entities = self._detect_and_segment(images, entities_description)
             
         
             count = 0

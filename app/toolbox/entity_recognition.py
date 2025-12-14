@@ -30,7 +30,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 class EntityRecognitionInput(BaseModel):
-    material: str = Field(..., description="Path to image files with entity_recognition names; if omitted, defaults to all image paths.")
+    material: List[str] = Field(..., description="Paths to image files with entity_recognition names; if omitted, defaults to all image paths.")
 
 class EntityRecognitionTool(BaseTool):
     """
@@ -53,6 +53,7 @@ class EntityRecognitionTool(BaseTool):
     def __init__(self, **data):
         super().__init__(**data)
         self._initialize_clients()
+        self.load_models()
     
     def _initialize_clients(self):
         """Initialize Qdrant and MongoDB clients as singletons."""
@@ -76,7 +77,6 @@ class EntityRecognitionTool(BaseTool):
                 self._mongo_client = pymongo.MongoClient(mongo_srv, server_api=ServerApi('1'))
                 logger.info("✅ MongoDB client initialized successfully")
     def load_models(self):
-        """Load DeepFace models for face recognition."""
         if self._deepface_rep is None:
             self._deepface_rep = DeepFaceRepresentation(
                 model_recognition_name="Facenet512", 
@@ -94,7 +94,7 @@ class EntityRecognitionTool(BaseTool):
         Returns:
             List of entity dictionaries with ENTITY_TYPE and NAME
         """
-        self.load_models()
+    
         collection_name = settings.QDRANT_COLLECTION_NAME
         
         # Extract face embeddings
@@ -248,20 +248,22 @@ class EntityRecognitionTool(BaseTool):
         
         return result
     
-    def _run(self, material: str, run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, SearchingResult]:
+    def _run(self, material: List[str], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, SearchingResult]:
         """
         Run the entity recognition tool.
         
         Args:
-            material: Path to the image file
+            material: Paths to the image files
             
         Returns:
             String result message
         """
         try:
             # Step 1: Extract entities from image
-            logger.info(f"Processing image: {material}")
-            entities = self._extract_entities_from_image(material)
+            for material_path in material:
+                if not os.path.isfile(material_path):
+                    raise FileNotFoundError(f"Material file not found: {material_path}")
+            entities = self._extract_entities_from_image(material[0]) #TODO: fix to support multiple images
             
             if not entities:
                 logger.info("No entities detected in image")
