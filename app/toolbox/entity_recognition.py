@@ -53,6 +53,7 @@ class EntityRecognitionTool(BaseTool):
     def __init__(self, **data):
         super().__init__(**data)
         self._initialize_clients()
+        self.load_models()
     
     def _initialize_clients(self):
         """Initialize Qdrant and MongoDB clients as singletons."""
@@ -76,7 +77,6 @@ class EntityRecognitionTool(BaseTool):
                 self._mongo_client = pymongo.MongoClient(mongo_srv, server_api=ServerApi('1'))
                 logger.info("✅ MongoDB client initialized successfully")
     def load_models(self):
-        """Load DeepFace models for face recognition."""
         if self._deepface_rep is None:
             self._deepface_rep = DeepFaceRepresentation(
                 model_recognition_name="Facenet512", 
@@ -94,7 +94,7 @@ class EntityRecognitionTool(BaseTool):
         Returns:
             List of entity dictionaries with ENTITY_TYPE and NAME
         """
-        self.load_models()
+    
         collection_name = settings.QDRANT_COLLECTION_NAME
         
         # Extract face embeddings

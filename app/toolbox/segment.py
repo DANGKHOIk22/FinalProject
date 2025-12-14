@@ -71,18 +71,17 @@ class SegmentTool(BaseTool):
             temperature=0.5,  
             top_p=0.95
         )
-    
+        self._load_models()
     def _load_models(self):
         """Lazy load heavy models only when needed."""
         if self._model is None or self._processor is None:
-            logger.info("Loading Zero-Shot Detection Model...")
             self._device = infer_device()
             # Get Hugging Face token from environment if available
             hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
             token_kwargs = {"token": hf_token} if hf_token else {}
             self._processor = AutoProcessor.from_pretrained(MODEL_SEGMENT, **token_kwargs)
             self._model = AutoModelForZeroShotObjectDetection.from_pretrained(MODEL_SEGMENT, **token_kwargs).to(self._device)
-            logger.info("Model loaded successfully.")
+            logger.info("✅ Zero-Shot Detection Model loaded successfully.")
     
     @staticmethod
     def _prepare_batch_inputs(query_dict_tasks: dict) -> List:
@@ -127,7 +126,6 @@ class SegmentTool(BaseTool):
             A list of dictionaries containing segmented entity information.
         """
        
-        self._load_models()
         images = [image] * len(entities_description) # Fix: in the future, there are more than one image inputs
         try:
             inputs = self._processor(images=images, text=entities_description, return_tensors="pt").to(self._model.device)
@@ -154,7 +152,12 @@ class SegmentTool(BaseTool):
             logging.error(error_msg)
             raise RuntimeError(error_msg) from e
 
-    def _run(self, query_entity_recognition_task: Optional[str], material: str,  run_manager: Optional[CallbackManagerForToolRun] = None) -> List[str]:
+    def _run(
+        self,
+        query_entity_recognition_task: Optional[str] = None,
+        material: str = "",
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> List[str]:
         """
         Execute the segmentation tool.
         """
