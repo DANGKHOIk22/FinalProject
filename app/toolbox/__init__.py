@@ -7,6 +7,7 @@ from app.toolbox.entity_recognition import EntityRecognitionTool as entity_recog
 from app.toolbox.choice_selection import ChoiceSelection as choice_selection
 from app.toolbox.segment import SegmentTool as segment
 from app.toolbox.frame_selection import FrameSelectionTool as frame_selection
+from app.toolbox.commentary_generation import CommentaryGenerationTool as commentary_generation
 
 __all__ = [
     "textual_entity_search",
@@ -17,5 +18,6 @@ __all__ = [
     "entity_recognition",
     "choice_selection",
     "segment",
-    "frame_selection"
+    "frame_selection",
+    "commentary_generation",
 ]

@@ -25,7 +25,8 @@ from app.toolbox import (
     choice_selection,
     entity_recognition,
     segment,
-    frame_selection
+    frame_selection,
+    commentary_generation,
 )
 
 # Load environment variables
@@ -95,6 +96,7 @@ class SoccerAgent:
             "choice_selection": choice_selection(),
             "segment": segment(),
             "frame_selection": frame_selection(),
+            "commentary_generation": commentary_generation(),
         }
 
         # List of all tools
