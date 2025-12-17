@@ -1,6 +1,9 @@
 # Database folder 
 app/database/Game_dataset/
+scripts/evaluation/SoccerBench_dataset/
 
+# Cache folder
+cache/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
