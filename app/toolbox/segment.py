@@ -190,7 +190,7 @@ class SegmentTool(BaseTool):
                     
                     count += 1
             
-                # 5. Save segmented objects to segmented_images folder
+                # 5. Save segmented objects to temporary/segmented_images folder
                 original_filename = os.path.basename(material)
                 name_without_ext = os.path.splitext(original_filename)[0]
                 

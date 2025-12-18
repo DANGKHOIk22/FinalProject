@@ -42,7 +42,7 @@ class FrameSelectionTool(BaseTool):
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     
     project_path: str = PROJECT_PATH
-    output_dir: str = os.path.join(PROJECT_PATH, "log", "frames") # Folder lưu ảnh output
+    output_dir: str = os.path.join(PROJECT_PATH, "temporary", "frames") # Folder lưu ảnh output
     
     # Instance của CLIPHelper (Singleton hoặc khởi tạo 1 lần)
     clip_helper: Optional[CLIPHelper] = None

@@ -4,6 +4,9 @@ scripts/evaluation/SoccerBench_dataset/
 
 # Cache folder
 cache/
+
+# Temporary folder (runtime artifacts)
+temporary/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

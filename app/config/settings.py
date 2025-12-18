@@ -19,7 +19,7 @@ class Settings:
     QDRANT_URL: Optional[str] = os.getenv('QDRANT_URL')
     QDRANT_API_KEY: Optional[str] = os.getenv('QDRANT_API_KEY')
     QDRANT_COLLECTION_NAME: str = os.getenv('QDRANT_COLLECTION_NAME')
-    DEEPFACE_HOME: Optional[str] = os.path.join(PROJECT_PATH, os.getenv('DEEPFACE_HOME', './cache'))
+    DEEPFACE_HOME: Optional[str] = os.path.join(PROJECT_PATH, os.getenv('DEEPFACE_HOME', './temporary/cache'))
 
     @classmethod
     def validate(cls) -> bool:
@@ -45,7 +45,7 @@ settings = Settings()
 
 if settings.DEEPFACE_HOME:
     try:
-        os.makedirs(os.path.join(settings.DEEPFACE_HOME, ".deepface/weights"), exist_ok=True)
+        os.makedirs(os.path.join(settings.DEEPFACE_HOME, ".deepface", "weights"), exist_ok=True)
     except Exception:
         pass
 
