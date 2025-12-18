@@ -2,7 +2,11 @@ import os
 import torch
 
 # Model Configuration
-DEFAULT_MODEL = "gemini-2.5-flash"
+# Canonical model name constants
+GEMINI_2_5_FLASH = "gemini-2.5-flash"
+
+# Backwards-compatible default model
+DEFAULT_MODEL = GEMINI_2_5_FLASH
 MODEL_TEMPERATURE = 0.6
 MODEL_TOP_P = 0.95
 MAX_COMPLETION_TOKENS = 8000
@@ -14,6 +18,7 @@ LOG_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 LOG_LEVEL = 'INFO'
 PROJECT_PATH = os.getcwd()  # Đường dẫn tuyệt đối đến thư mục dự án
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 
 

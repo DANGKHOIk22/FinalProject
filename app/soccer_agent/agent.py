@@ -13,7 +13,7 @@ from langgraph.prebuilt import ToolNode
 
 from app.prompts.agent import get_planning_prompt_template, get_execution_prompt_template
 from app.config.config import (
-    DEFAULT_MODEL, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
+    DEFAULT_MODEL, GEMINI_2_5_FLASH, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
     LOG_FORMAT, LOG_DATE_FORMAT, LOG_LEVEL
 )
 from app.toolbox import (
@@ -25,7 +25,8 @@ from app.toolbox import (
     choice_selection,
     entity_recognition,
     segment,
-    frame_selection
+    frame_selection,
+    commentary_generation,
 )
 
 # Load environment variables
@@ -74,13 +75,22 @@ class SoccerAgent:
         Args:
             model_name: The LLM model to use (default from config)
         """
-        self.llm = ChatGoogleGenerativeAI(
-            model=model_name, 
+        self.planning_llm = ChatGoogleGenerativeAI(
+            model=model_name if model_name else GEMINI_2_5_FLASH, 
             temperature=MODEL_TEMPERATURE, 
             top_p=MODEL_TOP_P,
-            max_output_tokens=MAX_COMPLETION_TOKENS #type: ignore
+            max_output_tokens=MAX_COMPLETION_TOKENS,
+            thinking_budget=3000,
+            include_thoughts=True #type: ignore
         )
-
+        self.execution_llm = ChatGoogleGenerativeAI(
+            model=model_name if model_name else GEMINI_2_5_FLASH,
+            temperature=MODEL_TEMPERATURE,
+            top_p=MODEL_TOP_P,
+            max_output_tokens=MAX_COMPLETION_TOKENS,
+            thinking_budget=200,
+            include_thoughts=True #type: ignore
+        )
         self.planning_parser = PydanticOutputParser(pydantic_object=PlanningOutput)
 
         
@@ -95,11 +105,12 @@ class SoccerAgent:
             "choice_selection": choice_selection(),
             "segment": segment(),
             "frame_selection": frame_selection(),
+            "commentary_generation": commentary_generation(),
         }
 
         # List of all tools
         self.tools = list(self.tool_registry.values())
-        self.llm_with_tools = self.llm.bind_tools(self.tools) 
+        self.execution_llm_with_tools = self.execution_llm.bind_tools(self.tools) 
         
         self.graph = self._build_graph()
         logger.info(f"SoccerAgent initialized with model: {model_name}")
@@ -164,10 +175,9 @@ class SoccerAgent:
         })
 
         # Get LLM response
-        response = self.llm.invoke(planning_agent_prompt)
+        response = self.planning_llm.invoke(planning_agent_prompt)
         logger.debug(f"🤖 Response from Planning Agent: {response}")
-        response_text = response.content
-    
+        response_text = response.content[1] if isinstance(response.content, list) and len(response.content) > 1 else response.content # The content may contain thought signatures, so we extract the main response.
         
         # Parse with PydanticOutputParser
         planning_output: PlanningOutput = self.planning_parser.parse(response_text)
@@ -236,7 +246,7 @@ class SoccerAgent:
 
         try:
             # Invoke the model with the tool 
-            response: AIMessage = self.llm_with_tools.invoke(execution_prompt) # type: ignore
+            response: AIMessage = self.execution_llm_with_tools.invoke(execution_prompt) # type: ignore
             logger.info(f"🤖 Response from execution agent: \n \t Response content: {response.content} \n \t Tool Calls: {response.tool_calls}")
             tool_node_messages = [response] # Add the message to tool_node_messages for tool_node if there is no tool call the should_or_continue node will end execution
             
