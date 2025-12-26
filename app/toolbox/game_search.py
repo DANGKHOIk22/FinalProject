@@ -74,7 +74,7 @@ class GameSearchTool(BaseTool):
         prompt = get_extraction_prompt_template()
         
         # Gemini tự động parse ra object MatchInfo
-        structured_llm = self.llm.with_structured_output(MatchInfo)
+        structured_llm = self._llm.with_structured_output(MatchInfo)
         
         chain = prompt | structured_llm
         return chain.invoke({"question": query})
