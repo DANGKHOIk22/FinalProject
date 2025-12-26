@@ -11,6 +11,8 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
+from app.memory.chat_history import get_postgres_memory
+from app.memory.conversation_memory import CustomSystemPromptMemory
 from app.prompts.agent import get_planning_prompt_template, get_execution_prompt_template
 from app.config.config import (
     DEFAULT_MODEL, GEMINI_2_5_FLASH, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
@@ -28,6 +30,7 @@ from app.toolbox import (
     frame_selection,
     commentary_generation,
 )
+from app.schema.chat import ChatRequest
 
 # Load environment variables
 load_dotenv()
@@ -45,8 +48,8 @@ logger = logging.getLogger(__name__)
 class PlanningOutput(BaseModel):
     """Structured output for tool chain planning."""
     known_info: List[str] = Field(description="List of information items that are directly provided or known from the query")
-    tool_chain: List[str] = Field(description="Ordered list of tools needed to answer the query")
-
+    tool_chain: Optional[List[str]] = Field(default=None,description="Ordered list of tools needed to answer the query or None if no tools are needed")
+    need_call_tools: Optional[bool] = Field(default=True, description="Indicates whether tool calls are necessary")
 
 # Define the state structure for the agent
 class AgentState(TypedDict):
@@ -59,6 +62,8 @@ class AgentState(TypedDict):
     tool_results_history: List[ToolMessage] # History of tool results (results of tool executions)
     tool_node_messages: List # Messages exchanged between execution_node and tool_node
     last_tool_artifact: Optional[str] # To store the tool's artifact output from the last tool call
+    need_call_tools: Optional[bool] # Flag to indicate if more tools need to be called
+    conversation_history: Optional[List[str]] # Optional conversation history for context
 
 
 class SoccerAgent:
@@ -324,47 +329,161 @@ class SoccerAgent:
         
         return "\n".join(history_parts)
     
-    
-    def run(self, user_query: str, additional_material: Optional[List[str]] = None) -> str:
+    async def get_memory(self, session_id: str):
+        """
+        Get conversation memory for the given session.
+        
+        Args:
+            session_id: Session ID to retrieve memory for
+            
+        Returns:
+            Tuple of (memory_object, connection, pool) for cleanup
+        """
+        memory, connection, pool = get_postgres_memory(session_id)
+        memory_object = CustomSystemPromptMemory(
+            memory_key="history",
+            chat_memory=memory.chat_memory,
+            return_messages=True,
+            max_history=15,  # Limit to last 15 messages
+        )
+        return memory_object, connection, pool
+    async def cleanup(self, connection, pool, session_id: str):
+        """
+        Cleanup database connection and return to pool.
+        
+        Args:
+            connection: Database connection to cleanup
+            pool: Connection pool to return connection to
+            session_id: Session ID for logging
+        """
+        try:
+            if not connection:
+                return
+
+            # Try to commit any pending transactions
+            try:
+                closed = getattr(connection, "closed", False)
+                if not closed:
+                    connection.commit()
+            except Exception:
+                # Best-effort commit; ignore errors here
+                pass
+
+            # Return connection to pool if available, otherwise close it
+            if pool:
+                try:
+                    pool.putconn(connection)
+                    logging.debug(f"Connection returned to pool for session {session_id}")
+                except Exception:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            logging.error(f"Cleanup error: {e}")
+            try:
+                if connection:
+                    connection.close()
+            except Exception:
+                pass
+
+    async def run(self, request: ChatRequest) -> str:
         """
         Run the complete workflow: planning + execution.
         
         Args:
-            user_query: The user's question about soccer
-            additional_material: Optional additional context (e.g., list of image paths)
+            request: The ChatRequest object containing user_query and additional_material
             
         Returns:
             Dictionary containing complete results from planning and execution
         """
-        logger.info(f"Starting run for query: {user_query[:100]}...")
-        
-        # Initialize state
-        initial_state = {
-            "user_query": user_query,
-            "additional_material": additional_material or [],
-            "known_info": [],
-            "tool_chain": [],
-            "tool_calls_history": [],
-            "tool_results_history": [],
-            "tool_node_messages": [],
-            "last_tool_artifact": None
-        }
-        
-        # Run the full graph (planning → execution)
-        final_state = self.graph.invoke(initial_state)
-        
-        # Prepare the complete results
-        result = {
-            "user_query": user_query,
-            "known_info": final_state["known_info"],
-            "tool_chain": final_state["tool_chain"],
-            "planning_raw_response": final_state.get("planning_raw_response", ""),
-            "tool_calls_history": final_state["tool_calls_history"],
-            "tool_results_history": final_state["tool_results_history"],
-            "tool_node_messages": final_state["tool_node_messages"],
-            "last_tool_artifact": final_state.get("last_tool_artifact", None),
-        }
-        logger.info("Run completed successfully")
+        try:
+            logger.info(f"Starting run for query: {request.user_query[:100]}...")
+            # Initialize memory variables
+            connection = None
+            pool = None
+            memory_object = None
+            chat_history = None
+            session_id = request.user_id
+
+            # Load conversation history if session_id provided
+            if session_id:
+                try:
+                    memory_object, connection, pool = await self.get_memory(session_id=session_id)
+                    try:
+                        history = memory_object.load_memory_variables({})
+                        chat_history = history.get("history")
+                    except Exception as e:
+                        logging.warning(f"Memory load failed for session {session_id}: {e}")
+                        chat_history = None
+                except Exception as e:
+                    logging.warning(f"Failed to obtain memory for session {session_id}: {e}")
+                    memory_object = None
+
+            # Format conversation history into string
+            history_text = ""
+            if chat_history:
+                history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
+                for msg in chat_history[-10:]:  # Last 10 messages only
+                    if hasattr(msg, 'content'):
+                        role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
+                        history_text += f"{role}: {msg.content}\n"
+            
+            # Initialize state
+            initial_state = {
+                "user_query": request.user_query,
+                "additional_material": request.additional_material or [],
+                "known_info": [],
+                "tool_chain": [],
+                "tool_calls_history": [],
+                "tool_results_history": [],
+                "tool_node_messages": [],
+                "last_tool_artifact": None,
+                "conversation_history": history_text,
+                "need_call_tools": True
+            }
+            
+            # Run the full graph (planning → execution)
+            final_state = await self.graph.ainvoke(initial_state)
+            
+            # Prepare the complete results
+            result = {
+                "user_query": request.user_query,
+                "known_info": final_state["known_info"],
+                "tool_chain": final_state["tool_chain"],
+                "planning_raw_response": final_state.get("planning_raw_response", ""),
+                "tool_calls_history": final_state["tool_calls_history"],
+                "tool_results_history": final_state["tool_results_history"],
+                "tool_node_messages": final_state["tool_node_messages"],
+                "last_tool_artifact": final_state.get("last_tool_artifact", None),
+            }
+            logger.info("Run completed successfully")
+            if memory_object:
+                try:
+                    memory_object.save_context(
+                        inputs={"input": request.user_query},  # Save original query, not formatted prompt
+                        outputs={"output": final_state["tool_results_history"]}
+                    )
+                except Exception as e:
+                    logging.warning(f"Failed to save memory for session {session_id}: {e}")
+
+            logging.info("\n✓ Data description created successfully!\n")
+
+        except Exception as e:
+            logging.error(f"Error describing DataFrame: {e}", exc_info=True)
+            return "✗ Unable to create description for this data."
+        finally:
+            # Always cleanup connection
+            try:
+                self.cleanup(connection=connection, pool=pool, session_id=session_id)
+                logging.debug("✅ ChatAgent connection cleaned up")
+            except Exception as cleanup_error:
+                logging.error(f"❌ ChatAgent cleanup error: {cleanup_error}")        
 
         # Return the final response content from execution agent. That is the generated answer to user query based on all tool calls.
         return result["tool_node_messages"][-1].text # Using .text ínstead of .content for AIMessage because Gemini 3 series models will always return a list of content blocks to capture thought signatures.

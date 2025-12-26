@@ -14,7 +14,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langsmith import get_current_run_tree
 
 from app.schema.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
-from app.schema.toolbox.textual_entity_search import SoccerEntities, SearchingResult
+from app.schema.textual_entity_search import SoccerEntities, SearchingResult
 from app.prompts.toolbox.textual_entity_search import get_entity_extraction_prompt_template
 
 # Setup logger
