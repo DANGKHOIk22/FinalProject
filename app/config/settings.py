@@ -19,6 +19,7 @@ class Settings:
     QDRANT_URL: Optional[str] = os.getenv('QDRANT_URL')
     QDRANT_API_KEY: Optional[str] = os.getenv('QDRANT_API_KEY')
     QDRANT_COLLECTION_NAME: str = os.getenv('QDRANT_COLLECTION_NAME')
+    POSTGRES_DATABASE_URL: Optional[str] = os.getenv('POSTGRES_DATABASE_URL')
     @classmethod
     def validate(cls) -> bool:
         """Validate that required settings are present."""

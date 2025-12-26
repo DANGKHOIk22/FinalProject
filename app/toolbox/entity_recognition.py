@@ -16,7 +16,7 @@ from langchain_core.callbacks import CallbackManagerForToolRun
 
 
 from app.config import settings
-from app.schema.toolbox.textual_entity_search import SearchingResult
+from app.schema.textual_entity_search import SearchingResult
 from app.schema.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
 
 # Environment variables
