@@ -2,7 +2,7 @@ import json
 import os
 import logging
 from app.schema.match import Annotation
-from typing import Type,Optional, Literal,Annotated
+from typing import List, Type,Optional, Literal,Annotated, Union
 from pydantic import BaseModel, Field, PrivateAttr
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -27,7 +27,6 @@ class RetrievalInput(BaseModel):
 
 class ToolOutput(BaseModel):
     answer: str = Field(description="Câu trả lời dựa trên thông tin được truy xuất từ file JSON.")
-    artifact: str = Field(description="Dữ liệu gốc được sử dụng để tạo câu trả lời (nội dung file JSON).")
 
 # ==========================================
 # 2. Tool: Game Info Retrieval (Metadata)
@@ -110,7 +109,7 @@ class GameInfoRetrievalTool(BaseTool):
 class GameHistoryRetrievalTool(BaseTool):
     name: str = "game_history_retrieval"
     description: str = """
-    Retrieves the textual live stream/commentary history of the whole game from the JSON file. 
+    Retrieves the textual live stream/commentary history of the whole game from the JSON file. Then, generates answers for user queries based on retrieved information.
     Use this for questions about specific events, timestamps, plays, or game statistics that happened during the match.
     """
     args_schema: Type[BaseModel] = RetrievalInput # type: ignore
@@ -128,95 +127,105 @@ class GameHistoryRetrievalTool(BaseTool):
             google_api_key=Settings.GOOGLE_API_KEY
         )
 
-    def _process_data(self, json_file_path: str) -> str:
+    def _transform_match_history_artifact_to_str(self, match_history_artifact: Union[str, List[Annotation]]) -> str:
         """
-        Đọc file JSON và chuẩn hóa dữ liệu (annotations hoặc comments) 
-        thành danh sách các object Annotation.
+        Transform the match history from JSON file or list of Annotation objects into a string format suitable for prompt context.
         """
-        try:
-            # Xử lý đường dẫn file
-            full_path = os.path.join(self.project_path, "app", json_file_path)
-            if not os.path.exists(full_path):
-                # Fallback: thử tìm trực tiếp nếu path đã đầy đủ
-                if os.path.exists(json_file_path):
-                    full_path = json_file_path
-                else:
-                    return f"Error: File not found at {full_path}"
+        # Check the type of match_history_artifact
+        if isinstance(match_history_artifact, str):
+            # Assume it's a JSON file path
+            return self._read_match_history_from_file(match_history_artifact)
+        elif isinstance(match_history_artifact, list):
+            # Assume it's a list of Annotation objects
+            processed_annotations = [anno.model_dump() for anno in match_history_artifact]
+            return json.dumps(processed_annotations, indent=2, ensure_ascii=False)
+        else:
+            raise ValueError("Unsupported artifact type for match history. Expected file path (str) (which is the output of game_search tool) or list of Annotation objects (which is the output of commentary_generation tool).")
 
-            with open(full_path, 'r', encoding='utf-8') as file:
-                data = json.load(file)
-
-            processed_annotations = []
-
-            # --- CASE 1: Format 'annotations' (MatchTime) ---
-            if "annotations" in data:
-                event_list = data.get("annotations", [])
-                for event in event_list:
-                    # Logic lấy timestamp ưu tiên
-                    timestamp = event.get("contrastive_aligned_gameTime", "")
-                    if not timestamp:
-                        timestamp = event.get("gameTime", "")
-                    
-                    anno = Annotation(
-                        description=event.get("description", ""),
-                        label=event.get("label", "unknown"),
-                        gameTime=timestamp
-                    )
-                    processed_annotations.append(anno)
-
-            # --- CASE 2: Format 'comments' (SoccerWiki / 1988) ---
-            elif "comments" in data:
-                comments_list = data.get("comments", [])
-                for comment in comments_list:
-                    # Mapping theo yêu cầu mới:
-                    # description <= comments_text
-                    # label <= comments_type
-                    # gameTime <= half - time_stamp
-                    
-                    desc = comment.get("comments_text", "")
-                    lbl = comment.get("comments_type", "unknown")
-                    
-                    half = str(comment.get("half", ""))
-                    t_stamp = str(comment.get("time_stamp", ""))
-                    
-                    # Format gameTime ví dụ: "1 - 15:30"
-                    g_time = f"{half} - {t_stamp}"
-
-                    anno = Annotation(
-                        description=desc,
-                        label=lbl,
-                        gameTime=g_time
-                    )
-                    processed_annotations.append(anno)
-            
+        
+    def _read_match_history_from_file(self, json_file_path: str) -> str:
+        """
+        Read the match history JSON file and convert it into a string
+        
+        :param json_file_path: Path to the JSON file containing match history
+        :type json_file_path: str
+        :return: Processed match history as a string
+        :rtype: str
+        """
+        # Check whether the file exists
+        full_path = os.path.join(self.project_path, "app", json_file_path)
+        if not os.path.exists(full_path):
+            # Fallback: thử tìm trực tiếp nếu path đã đầy đủ
+            if os.path.exists(json_file_path):
+                full_path = json_file_path
             else:
-                return "Error: Unsupported JSON format. File must contain 'annotations' or 'comments' key."
+                raise FileNotFoundError(f"Error: File not found at {full_path}")
 
-            if not processed_annotations:
-                return "No events found in the file."
+        with open(full_path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
 
-            # Chuyển list object thành chuỗi JSON đẹp để đưa vào prompt
-            return json.dumps([a.model_dump() for a in processed_annotations], indent=2, ensure_ascii=False)
+        processed_annotations = []
+        
+        # --- CASE 1: Format 'annotations' (MatchTime) ---
+        if "annotations" in data:
+            event_list = data.get("annotations", [])
+            for event in event_list:
+                # Logic lấy timestamp ưu tiên
+                timestamp = event.get("contrastive_aligned_gameTime", "")
+                if not timestamp:
+                    timestamp = event.get("gameTime", "")
+                
+                anno = Annotation(
+                    description=event.get("description", ""),
+                    label=event.get("label", "unknown"),
+                    gameTime=timestamp
+                )
+                processed_annotations.append(anno)
 
-        except Exception as e:
-            error_msg = f"Error in reading match info JSON file: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            raise Exception(error_msg)
+        # --- CASE 2: Format 'comments' (SoccerWiki / 1988) ---
+        elif "comments" in data:
+            comments_list = data.get("comments", [])
+            for comment in comments_list:
+                # Mapping theo yêu cầu mới:
+                # description <= comments_text
+                # label <= comments_type
+                # gameTime <= half - time_stamp
+                
+                desc = comment.get("comments_text", "")
+                lbl = comment.get("comments_type", "unknown")
+                
+                half = str(comment.get("half", ""))
+                t_stamp = str(comment.get("time_stamp", ""))
+                
+                # Format gameTime ví dụ: "1 - 15:30"
+                g_time = f"{half} - {t_stamp}"
+
+                anno = Annotation(
+                    description=desc,
+                    label=lbl,
+                    gameTime=g_time
+                )
+                processed_annotations.append(anno)
+        
+        else:
+            raise ValueError("Error: Unsupported JSON format. Match history file must contain 'annotations' or 'comments' key.")
+
+        if not processed_annotations:
+            raise ValueError("Match history file doesn't contain any events. Therefore, cannot proceed with retrieval.")
+        
+        # Chuyển list object thành chuỗi JSON đẹp để đưa vào prompt
+        return json.dumps([a.model_dump() for a in processed_annotations], indent=2, ensure_ascii=False)
+
 
     def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun] = None):
         run_tree = get_current_run_tree()
         try:
             if not execution_agent_state.get("last_tool_artifact"):
-                # Send error to LangSmith run tree
-                if run_tree:
-                    run_tree.end(
-                        error="Missing game file information. Please ensure 'game_search' tool has been executed successfully before running this tool."
-                    )
-                return "Error: Missing game file information. Please ensure 'game_search' tool has been executed successfully before running this tool.", None
+                raise ValueError("Missing game file information. Please ensure 'game_search' or 'commentary_generation' tool has been executed successfully before running this tool.")
 
-            file_path = execution_agent_state["last_tool_artifact"]
-            logger.info(f"📖 Processing Match History from: {file_path}")
-            match_history_context = self._process_data(file_path)
+            match_history_artifact = execution_agent_state["last_tool_artifact"] # It should be a JSON file path (if the previous tool is game_search) or list of Annotation objects (if the previous tool is commentary_generation)
+            logger.info(f"📖 Processing Match History from: {match_history_artifact[:500]}...")
+            match_history_context = self._transform_match_history_artifact_to_str(match_history_artifact)
 
             # Nếu quá dài, có thể cắt bớt ở đây, nhưng Gemini Flash context window rất lớn (1M tokens).
             prompt = get_game_history_retrieval_prompt_template()
@@ -227,7 +236,7 @@ class GameHistoryRetrievalTool(BaseTool):
                 "context": match_history_context
             }) # type: ignore
             logger.info(f"Game History Retrieval Response: {response}")
-            return response.answer, response.artifact
+            return response.answer, None
         
         except Exception as e:
             error_msg = f"Error in game_history_retrieval: {str(e)}"

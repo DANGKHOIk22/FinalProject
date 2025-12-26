@@ -5,7 +5,7 @@ Loads settings from environment variables with default fallbacks.
 import os
 from typing import Optional
 from dotenv import load_dotenv
-
+from app.config.config import PROJECT_PATH
 load_dotenv()
 
 class Settings:
@@ -20,6 +20,8 @@ class Settings:
     QDRANT_API_KEY: Optional[str] = os.getenv('QDRANT_API_KEY')
     QDRANT_COLLECTION_NAME: str = os.getenv('QDRANT_COLLECTION_NAME')
     POSTGRES_DATABASE_URL: Optional[str] = os.getenv('POSTGRES_DATABASE_URL')
+    DEEPFACE_HOME: Optional[str] = os.path.join(PROJECT_PATH, os.getenv('DEEPFACE_HOME', './temporary/cache'))
+
     @classmethod
     def validate(cls) -> bool:
         """Validate that required settings are present."""
@@ -40,3 +42,11 @@ class Settings:
 
 # Create a singleton instance
 settings = Settings()
+
+
+if settings.DEEPFACE_HOME:
+    try:
+        os.makedirs(os.path.join(settings.DEEPFACE_HOME, ".deepface", "weights"), exist_ok=True)
+    except Exception:
+        pass
+
