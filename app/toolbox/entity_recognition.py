@@ -2,6 +2,8 @@ import os
 import logging
 from langsmith import get_current_run_tree
 import pymongo
+import numpy as np
+from collections import defaultdict
 
 
 from dns import resolver
@@ -83,8 +85,11 @@ class EntityRecognitionTool(BaseTool):
                 model_detector_name="retinaface"
             )
             logger.info("✅ DeepFace models loaded successfully")
+    @staticmethod    
+    def cosine_similarity(a, b):
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
     
-    def _extract_entities_from_image(self, image_path: str) -> List[Dict]:
+    def _extract_entities_from_image(self, image_path: str, THRESHOLD: int = 0.5) -> List[Dict]:
         """
         Extract soccer entities from image using face recognition.
         
@@ -94,7 +99,6 @@ class EntityRecognitionTool(BaseTool):
         Returns:
             List of entity dictionaries with ENTITY_TYPE and NAME
         """
-    
         collection_name = settings.QDRANT_COLLECTION_NAME
         
         # Extract face embeddings
@@ -102,7 +106,7 @@ class EntityRecognitionTool(BaseTool):
             img_path=image_path,
             model_name="Facenet512",
             detector_backend="retinaface",
-            normalization="Facenet",
+            normalization="Facenet2018",
             enforce_detection=False,
             max_faces=15
         )
@@ -117,22 +121,53 @@ class EntityRecognitionTool(BaseTool):
         
         # Search for all valid faces in Qdrant
         soccer_entities = []
-        for idx, embedding in enumerate(valid_faces):
+        for idx, query_vector in enumerate(valid_faces):
             search_result = self._qdrant_client.query_points(
                 collection_name=collection_name,
-                query=embedding,
-                search_params=models.SearchParams(
-                    quantization=models.QuantizationSearchParams(rescore=True),
-                    exact=True
-                ),
-                limit=1,
-                score_threshold=0.6
+                query=query_vector,
+                limit=7,
+                score_threshold=0.5,
+                with_vectors=True
             )
             
-            if search_result.points:
-                entity_payload = search_result.points[0].payload
-                soccer_entities.append(entity_payload)
-                logger.info(f"Face {idx+1}: Matched to {entity_payload.get('NAME', 'Unknown')}")
+            # Dictionary storing information for each entity
+            candidates = defaultdict(lambda: {"ENTITY_TYPE": None, "max_score": 0, "count": 0, "score_list": []})
+            
+            # Voting
+            for point in search_result.points:
+                entity_name = point.payload['NAME']
+                point_vectors = point.vector
+                if not point_vectors:
+                    continue
+                match_count = 0
+                for sub_vector in point_vectors:
+                    score = self.cosine_similarity(query_vector, sub_vector)
+                    if score >= THRESHOLD:
+                        candidates[entity_name]["score_list"].append(score)
+                        match_count += 1
+                # Cập nhật thông tin
+                candidates[entity_name]["count"] = match_count
+                candidates[entity_name]["ENTITY_TYPE"] = point.payload.get("ENTITY_TYPE")
+                candidates[entity_name]["max_score"] = point.score
+            
+            # Final Score (Re-ranking)
+            ranked_candidates = []
+            for entity_name, data in candidates.items():
+                final_score = (0.55 * data["max_score"]) + (0.45 * data["count"] / 20) + (0.1 * np.mean(data["score_list"]))
+                ranked_candidates.append((entity_name, final_score, data["max_score"], data["count"]))
+            
+            # Sort in descending order by Final Score
+            ranked_candidates.sort(key=lambda x: x[1], reverse=True)
+            
+            if not ranked_candidates:
+                return None, "No match found"
+            
+            if ranked_candidates[0]:
+                soccer_entities.append({
+                    "ENTITY_TYPE": candidates[ranked_candidates[0][0]]["ENTITY_TYPE"],
+                    "NAME": ranked_candidates[0][0]
+                })
+                logger.info(f"Face {idx+1}: Matched to {ranked_candidates[0]}")
             else:
                 logger.info(f"Face {idx+1}: No match found")
         
