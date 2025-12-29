@@ -145,7 +145,7 @@ class EntityRecognitionTool(BaseTool):
                     if score >= THRESHOLD:
                         candidates[entity_name]["score_list"].append(score)
                         match_count += 1
-                # Cập nhật thông tin
+                # Update candidate info
                 candidates[entity_name]["count"] = match_count
                 candidates[entity_name]["ENTITY_TYPE"] = point.payload.get("ENTITY_TYPE")
                 candidates[entity_name]["max_score"] = point.score

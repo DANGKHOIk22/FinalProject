@@ -1,5 +1,5 @@
 import logging
-
+import uuid
 from dotenv import load_dotenv
 from typing import TypedDict, List, Optional, Callable
 from pydantic import BaseModel, Field
@@ -163,6 +163,9 @@ class SoccerAgent:
         # Format List[str] to string for prompt
         additional_material = ", ".join(additional_material_list) if additional_material_list else "None"
         
+        # Get conversation history from state
+        conversation_history = state.get("conversation_history", "No previous conversation.")
+        
         # Build tool descriptions
         tool_descriptions = ""
         for tool in self.tools:
@@ -176,7 +179,8 @@ class SoccerAgent:
             "toolbox_descriptions": tool_descriptions,
             "format_instructions": format_instructions,
             "user_query": state["user_query"],
-            "additional_material": additional_material
+            "additional_material": additional_material,
+            "conversation_history": conversation_history
         })
 
         # Get LLM response
@@ -216,6 +220,7 @@ class SoccerAgent:
         tool_calls_history = state.get("tool_calls_history", [])
         tool_results_history = state.get("tool_results_history", [])
         tool_node_messages = state.get("tool_node_messages", [])
+        conversation_history = state.get("conversation_history", "No previous conversation.")
         
 
         logger.info(f"🔧 Running TOOL EXECUTION STEP: Step {len(tool_calls_history)}")
@@ -240,14 +245,24 @@ class SoccerAgent:
         
         # Build execution history string and prompt
         history_str = self._build_history_string(tool_calls_history, tool_results_history)
+        
+        # Check if we're on the last tool (all tools have been executed)
+        is_last_tool = len(tool_calls_history) >= len(tool_chain) if tool_chain else True
+        conversation_history_for_prompt = conversation_history if is_last_tool else "Not applicable yet (still executing tool chain)."
+        
         execution_prompt_template = get_execution_prompt_template()
         execution_prompt = execution_prompt_template.invoke({
             "user_query": query,
             "additional_material": additional_material_str,
+            "conversation_history": conversation_history_for_prompt,
             "known_info": known_info,
-            "tool_chain": " -> ".join(tool_chain),
-            "history": history_str
+            "tool_chain": " -> ".join(tool_chain) if tool_chain else "No tools needed",
+            "history": history_str,
+            
         })
+        
+        logger.info(f"Tool chain to execute: {' -> '.join(tool_chain) if tool_chain else 'No tools needed'}")
+
 
         try:
             # Invoke the model with the tool 
@@ -409,7 +424,7 @@ class SoccerAgent:
             pool = None
             memory_object = None
             chat_history = None
-            session_id = request.user_id
+            session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, request.user_id))
 
             # Load conversation history if session_id provided
             if session_id:
@@ -433,7 +448,7 @@ class SoccerAgent:
                     if hasattr(msg, 'content'):
                         role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
                         history_text += f"{role}: {msg.content}\n"
-            
+            logger.info(f"-----------------------------------history: {history_text} .")
             # Initialize state
             initial_state = {
                 "user_query": request.user_query,
@@ -465,9 +480,11 @@ class SoccerAgent:
             logger.info("Run completed successfully")
             if memory_object:
                 try:
+                    # Extract the final response text from tool_node_messages
+                    final_response = final_state["tool_node_messages"][-1].text if final_state["tool_node_messages"] else "No response generated"
                     memory_object.save_context(
                         inputs={"input": request.user_query},  # Save original query, not formatted prompt
-                        outputs={"output": final_state["tool_results_history"]}
+                        outputs={"output": final_response}  # Save the final response as string, not the list of ToolMessage objects
                     )
                 except Exception as e:
                     logging.warning(f"Failed to save memory for session {session_id}: {e}")
