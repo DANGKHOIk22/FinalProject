@@ -21,7 +21,7 @@ from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from app.config.config import DEFAULT_MODEL, MODEL_SEGMENT,SEGMENT_IMAGE_FOLDER
+from app.config.config import DEFAULT_MODEL, MODEL_SEGMENT,SEGMENT_IMAGE_FOLDER,TEMPORARY_DIR
 from app.prompts.toolbox.segment import get_segment_prompt_template
 
 # Load environment variables
@@ -75,8 +75,8 @@ class SegmentTool(BaseTool):
             # Get Hugging Face token from environment if available
             hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
             token_kwargs = {"token": hf_token} if hf_token else {}
-            self._processor = AutoProcessor.from_pretrained(MODEL_SEGMENT, **token_kwargs)
-            self._model = AutoModelForZeroShotObjectDetection.from_pretrained(MODEL_SEGMENT, **token_kwargs).to(self._device)
+            self._processor = AutoProcessor.from_pretrained(MODEL_SEGMENT, cache_dir=TEMPORARY_DIR, **token_kwargs)
+            self._model = AutoModelForZeroShotObjectDetection.from_pretrained(MODEL_SEGMENT, cache_dir=TEMPORARY_DIR, **token_kwargs).to(self._device)
             logger.info("✅ Zero-Shot Detection Model loaded successfully.")
     
     @staticmethod
