@@ -24,7 +24,7 @@ async def chat_endpoint(request: ChatRequest, soccer_agent=Depends(get_agent_ser
 
     try:
         # Gọi phương thức run của Agent
-        final_answer_content = soccer_agent.run(
+        final_answer_content = await soccer_agent.run(
             request=request
         )
         

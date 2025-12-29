@@ -1,7 +1,7 @@
 from transformers import CLIPProcessor, CLIPModel
 import torch
 import os
-from app.config.config import DEVICE
+from app.config.config import DEVICE,TEMPORARY_DIR
 from PIL import Image
 from dotenv import load_dotenv
 load_dotenv()
@@ -11,9 +11,9 @@ class CLIPHelper:
         # Get Hugging Face token from environment if available
         hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
         token_kwargs = {"token": hf_token} if hf_token else {}
-        self.model = CLIPModel.from_pretrained(model_name, **token_kwargs).to(DEVICE)
+        self.model = CLIPModel.from_pretrained(model_name,cache_dir=TEMPORARY_DIR, **token_kwargs).to(DEVICE)
         self.model.eval()
-        self.processor = CLIPProcessor.from_pretrained(model_name, **token_kwargs)
+        self.processor = CLIPProcessor.from_pretrained(model_name, cache_dir=TEMPORARY_DIR, **token_kwargs)
 
     def get_unit_per_image(self, images: Image.Image , texts: list[str]):
         """
