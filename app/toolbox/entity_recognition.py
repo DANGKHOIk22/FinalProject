@@ -58,9 +58,27 @@ class EntityRecognitionTool(BaseTool):
         self.load_models()
     
     def _initialize_clients(self):
-        """Initialize Qdrant and MongoDB clients as singletons."""
+        """Initialize Qdrant and MongoDB clients - use preloaded from main.py if available."""
+        # Try to use preloaded clients from main.py
+        try:
+            import main
+            if main.qdrant_client is not None:
+                self._qdrant_client = main.qdrant_client
+                logger.info("✅ Using preloaded Qdrant client from lifespan")
+            if main.mongo_client is not None:
+                self._mongo_client = main.mongo_client
+                logger.info("✅ Using preloaded MongoDB client from lifespan")
+            
+            # If both clients are preloaded, return early
+            if self._qdrant_client is not None and self._mongo_client is not None:
+                return
+        except (ImportError, AttributeError):
+            pass
+        
+        # Fallback: Initialize clients if not preloaded
         # Initialize Qdrant client
         if self._qdrant_client is None:
+            logger.info("Loading Qdrant client on demand...")
             qdrant_url = settings.QDRANT_URL
             qdrant_api_key = settings.QDRANT_API_KEY
             
@@ -72,6 +90,7 @@ class EntityRecognitionTool(BaseTool):
         
         # Initialize MongoDB client
         if self._mongo_client is None:
+            logger.info("Loading MongoDB client on demand...")
             mongo_srv = settings.MONGO_SRV
             if mongo_srv:
                 resolver.default_resolver = resolver.Resolver(configure=False)
@@ -80,6 +99,25 @@ class EntityRecognitionTool(BaseTool):
                 logger.info("✅ MongoDB client initialized successfully")
     def load_models(self):
         if self._deepface_rep is None:
+            # Try to use preloaded models from main.py
+            try:
+                import main
+                if main.deepface_recognition_model is not None and main.deepface_detector_model is not None:
+                    # Create a DeepFaceRepresentation with preloaded models
+                    self._deepface_rep = DeepFaceRepresentation(
+                        model_recognition_name="Facenet512", 
+                        model_detector_name="retinaface"
+                    )
+                    # Override with preloaded models
+                    self._deepface_rep.model_recognition = main.deepface_recognition_model
+                    self._deepface_rep.model_detector = main.deepface_detector_model
+                    logger.info("✅ Using preloaded DeepFace models from lifespan")
+                    return
+            except (ImportError, AttributeError):
+                pass
+            
+            # Fallback: Load models if not preloaded
+            logger.info("Loading DeepFace models on demand...")
             self._deepface_rep = DeepFaceRepresentation(
                 model_recognition_name="Facenet512", 
                 model_detector_name="retinaface"
@@ -338,15 +376,4 @@ class EntityRecognitionTool(BaseTool):
             return f"Error occurred while processing image: {str(e)}", SearchingResult()
     
     
-    def __del__(self):
-        """Cleanup connections when object is destroyed."""
-        try:
-            if hasattr(self, '_mongo_client') and self._mongo_client is not None:
-                self._mongo_client.close()
-                logger.info("MongoDB client closed")
-            if hasattr(self, '_qdrant_client') and self._qdrant_client is not None:
-                self._qdrant_client.close()
-                logger.info("Qdrant client cleanup completed")
-        except Exception:
-            # Silently ignore cleanup errors during shutdown
-            pass
+    
