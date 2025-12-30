@@ -376,15 +376,4 @@ class EntityRecognitionTool(BaseTool):
             return f"Error occurred while processing image: {str(e)}", SearchingResult()
     
     
-    def __del__(self):
-        """Cleanup connections when object is destroyed."""
-        try:
-            if hasattr(self, '_mongo_client') and self._mongo_client is not None:
-                self._mongo_client.close()
-                logger.info("MongoDB client closed")
-            if hasattr(self, '_qdrant_client') and self._qdrant_client is not None:
-                self._qdrant_client.close()
-                logger.info("Qdrant client cleanup completed")
-        except Exception:
-            # Silently ignore cleanup errors during shutdown
-            pass
+    
