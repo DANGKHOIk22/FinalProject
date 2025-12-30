@@ -69,10 +69,23 @@ class SegmentTool(BaseTool):
         )
         self._load_models()
     def _load_models(self):
-        """Lazy load heavy models only when needed."""
+        """Load models - use preloaded models from main.py if available, otherwise load on demand."""
         if self._model is None or self._processor is None:
+            # Try to import and use preloaded models from main.py
+            try:
+                import main
+                if main.segment_model is not None and main.segment_processor is not None:
+                    self._processor = main.segment_processor
+                    self._model = main.segment_model
+                    self._device = main.segment_device
+                    logger.info("✅ Using preloaded Segment models from lifespan")
+                    return
+            except (ImportError, AttributeError):
+                pass
+            
+            # Fallback: Load models if not preloaded
+            logger.info("Loading Segment models on demand...")
             self._device = infer_device()
-            # Get Hugging Face token from environment if available
             hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
             token_kwargs = {"token": hf_token} if hf_token else {}
             self._processor = AutoProcessor.from_pretrained(MODEL_SEGMENT, cache_dir=TEMPORARY_DIR, **token_kwargs)

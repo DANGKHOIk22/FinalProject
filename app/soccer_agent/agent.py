@@ -505,8 +505,12 @@ class SoccerAgent:
         # Return the final response content from execution agent. That is the generated answer to user query based on all tool calls.
         return result["tool_node_messages"][-1].text # Using .text ínstead of .content for AIMessage because Gemini 3 series models will always return a list of content blocks to capture thought signatures.
 
-agent_service = SoccerAgent()
+# Do NOT create singleton here - it will be created in main.py lifespan
+# agent_service = SoccerAgent()
 
 def get_agent_service() -> SoccerAgent:
-    """Get the singleton SoccerAgent service."""
-    return agent_service
+    """Get the singleton SoccerAgent service from main.py."""
+    import main
+    if main.agent_service is None:
+        raise RuntimeError("SoccerAgent not initialized. This should not happen if lifespan is working correctly.")
+    return main.agent_service

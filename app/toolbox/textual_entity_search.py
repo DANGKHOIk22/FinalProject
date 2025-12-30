@@ -171,10 +171,23 @@ class TextualEntitySearchTool(BaseTool):
                 logging.error("MONGO_SRV configuration not found")
                 raise ValueError("MONGO_SRV configuration not found. Please set it in the application settings.")
 
-            # Connect to MongoDB
-            resolver.default_resolver = resolver.Resolver(configure=False)
-            resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']  
-            client = pymongo.MongoClient(mongo_srv, server_api=ServerApi('1'))
+            # Try to use preloaded MongoDB client from main.py
+            client = None
+            try:
+                import main
+                if main.mongo_client is not None:
+                    client = main.mongo_client
+                    logger.info("✅ Using preloaded MongoDB client from lifespan")
+            except (ImportError, AttributeError):
+                pass
+            
+            # Fallback: Create new connection if not preloaded
+            if client is None:
+                logger.info("Creating MongoDB connection on demand...")
+                resolver.default_resolver = resolver.Resolver(configure=False)
+                resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']  
+                client = pymongo.MongoClient(mongo_srv, server_api=ServerApi('1'))
+            
             db = client.get_database(name=database_name)
             collection = db.get_collection(name=collection_name) # TODO: Check the connection status
             
@@ -242,8 +255,15 @@ class TextualEntitySearchTool(BaseTool):
                     if missing_entities:
                         result.missing_entities.extend(missing_entities)
 
-            # Close connection
-            client.close()
+            # Only close connection if we created it (not using preloaded one)
+            try:
+                import main
+                if client is not main.mongo_client:
+                    client.close()
+                    logger.info("Local MongoDB connection closed")
+            except (ImportError, AttributeError):
+                client.close()
+            
             return result
         
         except Exception as e:
