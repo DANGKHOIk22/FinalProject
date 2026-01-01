@@ -4,7 +4,7 @@ from deepface import DeepFace
 import base64
 import io
 import json
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict
 logger = logging.getLogger(__name__)
 
 
@@ -33,15 +33,14 @@ def init():
 
 
 
-
 def run(raw_data):
     """
     This function is called for every invocation of the endpoint to perform the actual scoring/prediction.
-
+    
+    :param raw_data: The raw JSON data passed to the endpoint. It is expected to be a JSON object with a base64-encoded image string under the "image" key and optional parameters. These options can include: max_faces (int), confidence_threshold (float).
+    :return: A JSON-serializable dictionary with the scoring results or error information.
     """
     def _parse_payload(data: Any) -> Dict[str, Any]:
-        if data is None:
-            return {}
         if isinstance(data, dict):
             return data
         if isinstance(data, (bytes, bytearray)):
@@ -82,6 +81,29 @@ def run(raw_data):
             padded = image_b64 + "=" * (-len(image_b64) % 4)
             image_bytes = base64.b64decode(padded)
         return io.BytesIO(image_bytes)
+    
+    def _extract_options(payload: Dict[str, Any]) -> Dict[str, Any]:
+        options = {}
+        # Extract "max_faces"
+        options["max_faces"] = 10
+        if "max_faces" in payload:
+            max_faces = int(payload["max_faces"])
+
+            # Validate max_faces
+            if 0 < max_faces and max_faces <= 10:
+                options["max_faces"] = max_faces
+
+        # Extract "confidence_threshold"
+        options["confidence_threshold"] = 0.85
+        if "confidence_threshold" in payload:
+            confidence_threshold = float(payload["confidence_threshold"])
+
+            # Validate confidence_threshold
+            if 0.0 < confidence_threshold and confidence_threshold < 1.0:
+                options["confidence_threshold"] = confidence_threshold
+
+        return options
+
 
     def _json_safe(obj: Any) -> Any:
         # DeepFace outputs are usually JSON-friendly, but guard against numpy types.
@@ -99,11 +121,7 @@ def run(raw_data):
         payload = _parse_payload(raw_data)
         image_b64 = _extract_base64_image(payload)
         image_file = _base64_to_filelike(image_b64)
-
-        # # If init() wasn't called for some reason, recover gracefully.
-        # global model_recognition_name, model_detector_name
-        # if "model_recognition_name" not in globals() or "model_detector_name" not in globals():
-        #     init()
+        options = _extract_options(payload)
 
         embedding_objs = DeepFace.represent(
             img_path=image_file,
@@ -111,12 +129,24 @@ def run(raw_data):
             detector_backend=model_detector_name,
             normalization="Facenet",
             enforce_detection=False,
-            max_faces=15,
+            max_faces=options["max_faces"]
         )
+
+        # Filter embeddings by confidence threshold
+        embedding_objs = [
+            obj for obj in embedding_objs
+            if obj.get("face_confidence", 0.0) >= options["confidence_threshold"]
+        ]
 
         return {
             "success": True,
             "result": _json_safe(embedding_objs),
+            "metadata": {
+                "model_recognition": model_recognition_name,
+                "model_detector": model_detector_name,
+                "max_faces": options["max_faces"],
+                "confidence_threshold": options["confidence_threshold"]
+            }
         }
     except Exception as e:
         logger.exception("Scoring failed")

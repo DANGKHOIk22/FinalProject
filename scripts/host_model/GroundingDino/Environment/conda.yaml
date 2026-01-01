@@ -1,0 +1,14 @@
+name: image_online_endpoint_deepface
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - conda-forge::pytorch
+  - conda-forge::transformers
+  - conda-forge::accelerate
+  - conda-forge::pillow
+  - pip
+  - pip:
+    - transformers
+    - azureml-inference-server-http
