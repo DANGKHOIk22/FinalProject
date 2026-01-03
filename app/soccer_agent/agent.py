@@ -93,7 +93,7 @@ class SoccerAgent:
             temperature=MODEL_TEMPERATURE,
             top_p=MODEL_TOP_P,
             max_output_tokens=MAX_COMPLETION_TOKENS,
-            thinking_budget=200,
+            thinking_budget=4000,
             include_thoughts=True #type: ignore
         )
         self.planning_parser = PydanticOutputParser(pydantic_object=PlanningOutput)
@@ -235,7 +235,7 @@ class SoccerAgent:
                 if hasattr(tool_result, 'artifact') and tool_result.artifact:
                     if additional_material_list is None:
                         additional_material_list = []
-                    additional_material_list.append(tool_result.artifact)
+                    additional_material_list.extend(tool_result.artifact)
             else:
                 state["last_tool_artifact"] = tool_result.artifact if hasattr(tool_result, 'artifact') else None
             logger.info(f"Received tool result: {tool_result.content}")
@@ -267,7 +267,7 @@ class SoccerAgent:
         try:
             # Invoke the model with the tool 
             response: AIMessage = self.execution_llm_with_tools.invoke(execution_prompt) # type: ignore
-            logger.info(f"🤖 Response from execution agent: \n \t Response content: {response.content} \n \t Tool Calls: {response.tool_calls}")
+            logger.info(f"🤖 Response from execution agent: \n \t Response content: {response.text} \n \t Tool Calls: {response.tool_calls}")
             tool_node_messages = [response] # Add the message to tool_node_messages for tool_node if there is no tool call the should_or_continue node will end execution
             
             if response.tool_calls:

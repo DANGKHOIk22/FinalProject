@@ -12,7 +12,6 @@ __pycache__/
 *.py[codz]
 *$py.class
 /example_images/
-/unit_test/
 segmented_images/
 crop_images/
 
@@ -63,7 +62,6 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
-unit_test/
 
 # Translations
 *.mo

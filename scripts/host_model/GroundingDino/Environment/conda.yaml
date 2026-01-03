@@ -1,4 +1,4 @@
-name: image_online_endpoint_deepface
+name: groundingdino_online_endpoint
 channels:
   - defaults
   - conda-forge
@@ -10,5 +10,4 @@ dependencies:
   - conda-forge::pillow
   - pip
   - pip:
-    - transformers
     - azureml-inference-server-http

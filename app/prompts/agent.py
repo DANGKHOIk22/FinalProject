@@ -158,7 +158,7 @@ You will execute the provided tool chain to answer the user's query by producing
 **CRITICAL: If tool_chain is "No tools needed", do NOT call any tools. Instead, directly provide the final answer using available information.**
 
 For every time of generation, you should follow the following rules:
-- At each step, select the next tool in the chain and generate only the precise parameters required for that tool call.
+- At each step, select the next tool in the chain and generate only the precise parameters required for that tool call. Please think carefully about the parameters based on the tool description, it is very important to get the parameters correct.
 - If a tool call fails, retry it one time. If the retry also fails, report the error message and stop execution.
 - Use the tool descriptions to determine required parameters. When permitted, refine the tool's query using the execution history and the tool's stated role to improve clarity.
 - Rely only on information available in the execution history and the provided materials; do not use internal or pre-trained knowledge.

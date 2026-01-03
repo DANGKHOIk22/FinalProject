@@ -67,7 +67,7 @@ class TextualRetrievalAugmentTool(BaseTool):
                 )
             return "Could not retrieve any information from previous tool calls. Please ensure that the previous tools have been executed successfully or try calling the previous tools again.", None
         else: 
-            logger.info(f"Artifact from execution agent state retrieved for textual retrieval augment tool: {searching_result}.")
+            logger.info(f"Artifact from execution agent state retrieved for textual retrieval augment tool.")
         
         searching_result_text = self._aggregate_searching_results(searching_result)
         
