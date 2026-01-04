@@ -13,7 +13,7 @@ from transformers import (
     AutoModelForZeroShotObjectDetection,
     AutoProcessor,
     CLIPModel,
-    CLIPProcessor,
+    CLIPProcessor
 )
 
 # Mitigate CUDA fragmentation on long-running containers

@@ -307,7 +307,8 @@ class FrameSelectionTool(BaseTool):
                         f"{saved_paths_str}."
                     )
                     return msg, saved_paths
-                
+            del original_frames
+            del processed_b64
         except Exception as e:
             error_msg = f"Error in frame selection tool: {str(e)}"
             logger.error(error_msg)                       
