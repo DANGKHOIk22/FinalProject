@@ -1,0 +1,12 @@
+name: image_online_endpoint_deepface
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - libglu
+  - pip
+  - pip:
+    - deepface==0.0.96
+    - tf-keras
+    - azureml-inference-server-http

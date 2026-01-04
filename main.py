@@ -5,11 +5,6 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-import torch
-from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection, infer_device
-from transformers import CLIPProcessor, CLIPModel
-from deepface.modules import modeling
-
 import pymongo
 from pymongo.server_api import ServerApi
 from dns import resolver
@@ -17,7 +12,7 @@ from qdrant_client import QdrantClient
 
 # Import cấu hình và database
 from app.config.settings import settings
-from app.config.config import MODEL_SEGMENT, TEMPORARY_DIR
+from app.config.config import LOG_FORMAT, LOG_LEVEL
 
 # Import SoccerAgent (but don't initialize yet)
 from app.soccer_agent.agent import SoccerAgent
@@ -27,19 +22,10 @@ from app.api.chat import router as chat_router
 
 # Cấu hình logging đơn giản thay vì structlog
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=LOG_LEVEL,
+    format=LOG_FORMAT
 )
 logger = logging.getLogger(__name__)
-
-# Global variables to store preloaded models
-segment_processor = None
-segment_model = None
-segment_device = None
-deepface_recognition_model = None
-deepface_detector_model = None
-clip_model = None
-clip_processor = None
 
 # Global variables for database connections
 mongo_client = None
@@ -55,62 +41,13 @@ async def lifespan(app: FastAPI):
     Lifespan context manager to load heavy models on startup and cleanup on shutdown.
     This ensures models are loaded once when the app starts, not on each request.
     """
-    global segment_processor, segment_model, segment_device
-    global deepface_recognition_model, deepface_detector_model
-    global clip_model, clip_processor
     global mongo_client, qdrant_client
     global agent_service
     
     logger.info("🚀 Starting FastAPI application...")
-    logger.info("📦 Loading heavy models and initializing database connections...")
+    logger.info("📦 Initializing database connections...")
     
     try:
-        # Preload Segment models (GroundingDINO)
-        logger.info("Loading Segment models (GroundingDINO)...")
-        segment_device = infer_device()
-        hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
-        token_kwargs = {"token": hf_token} if hf_token else {}
-        
-        segment_processor = AutoProcessor.from_pretrained(
-            MODEL_SEGMENT, 
-            cache_dir=TEMPORARY_DIR, 
-            **token_kwargs
-        )
-        segment_model = AutoModelForZeroShotObjectDetection.from_pretrained(
-            MODEL_SEGMENT, 
-            cache_dir=TEMPORARY_DIR, 
-            **token_kwargs
-        ).to(segment_device)
-        logger.info("✅ Segment models (GroundingDINO) loaded successfully")
-        
-        # Preload Entity Recognition models (DeepFace)
-        logger.info("Loading Entity Recognition models (DeepFace)...")
-        deepface_recognition_model = modeling.build_model(
-            task="facial_recognition", 
-            model_name="Facenet512"
-        )
-        deepface_detector_model = modeling.build_model(
-            task="face_detector", 
-            model_name="retinaface"
-        )
-        logger.info("✅ Entity Recognition models (DeepFace) loaded successfully")
-        
-        # Preload CLIP models for frame selection
-        logger.info("Loading CLIP models...")
-        clip_model_name = "openai/clip-vit-large-patch14"
-        clip_processor = CLIPProcessor.from_pretrained(
-            clip_model_name, 
-            cache_dir=TEMPORARY_DIR, 
-            **token_kwargs
-        )
-        clip_model = CLIPModel.from_pretrained(
-            clip_model_name, 
-            cache_dir=TEMPORARY_DIR, 
-            **token_kwargs
-        ).to(segment_device)
-        clip_model.eval()
-        logger.info("✅ CLIP models loaded successfully")
-        
         # Initialize database connections
         logger.info("Initializing database connections...")
         
@@ -166,19 +103,8 @@ async def lifespan(app: FastAPI):
     agent_service = None
     
     # Clear model instances to free memory
-    segment_processor = None
-    segment_model = None
-    segment_device = None
-    deepface_recognition_model = None
-    deepface_detector_model = None
-    clip_model = None
-    clip_processor = None
     mongo_client = None
     qdrant_client = None
-    
-    # Clear CUDA cache if using GPU
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
     
     logger.info("✅ Cleanup completed")
 
@@ -205,28 +131,6 @@ app.add_middleware(
 app.include_router(chat_router, tags=["Soccer Chat Agent"])
 
 # --- 5. Helper Functions để truy cập preloaded models ---
-def get_segment_models():
-    """Get the preloaded segment models (processor, model, device)."""
-    return {
-        "processor": segment_processor,
-        "model": segment_model,
-        "device": segment_device
-    }
-
-def get_deepface_models():
-    """Get the preloaded DeepFace models (recognition and detector)."""
-    return {
-        "recognition": deepface_recognition_model,
-        "detector": deepface_detector_model
-    }
-
-def get_clip_models():
-    """Get the preloaded CLIP models (processor and model)."""
-    return {
-        "processor": clip_processor,
-        "model": clip_model
-    }
-
 def get_mongo_client():
     """Get the preloaded MongoDB client."""
     return mongo_client
@@ -241,14 +145,6 @@ def root():
     return {
         "message": "Soccer Agent API is running!", 
         "docs": "/docs",
-        "models_loaded": {
-            "segment_processor": segment_processor is not None,
-            "segment_model": segment_model is not None,
-            "deepface_recognition": deepface_recognition_model is not None,
-            "deepface_detector": deepface_detector_model is not None,
-            "clip_processor": clip_processor is not None,
-            "clip_model": clip_model is not None,
-        },
         "databases_connected": {
             "mongodb": mongo_client is not None,
             "qdrant": qdrant_client is not None,

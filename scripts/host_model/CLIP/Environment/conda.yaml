@@ -1,0 +1,13 @@
+name: clip_online_endpoint
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - conda-forge::pytorch
+  - conda-forge::transformers
+  - conda-forge::accelerate
+  - conda-forge::pillow
+  - pip
+  - pip:
+    - azureml-inference-server-http

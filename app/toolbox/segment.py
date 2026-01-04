@@ -1,226 +1,218 @@
 import logging
 import os
+import base64
+import requests
 from datetime import datetime
-from typing import Any, Type, Optional, List, Dict,Literal, Annotated
 
+from typing import Any, Type, Optional, List, Dict, Literal, Tuple
 from dotenv import load_dotenv
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from pydantic import BaseModel, Field, PrivateAttr
-
-import torch
-from transformers import (
-    AutoProcessor,
-    AutoModelForZeroShotObjectDetection,
-    infer_device,
-)
-
 from langsmith import get_current_run_tree
-from langchain.tools import BaseTool, InjectedState
+from langchain.tools import BaseTool
 from langchain.chat_models import BaseChatModel
 from langchain_core.callbacks import CallbackManagerForToolRun
-from langchain_core.output_parsers import PydanticOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI
-
-from app.config.config import DEFAULT_MODEL, MODEL_SEGMENT,SEGMENT_IMAGE_FOLDER,TEMPORARY_DIR
-from app.prompts.toolbox.segment import get_segment_prompt_template
-
-# Load environment variables
-load_dotenv()
+from app.config.config import SEGMENT_IMAGE_FOLDER
+from app.config import settings
 
 # Setup logger
 logger = logging.getLogger(__name__)
 # --- Input Schema ---
 class SegmentInput(BaseModel):
-    query_entity_recognition_task: Optional[str] = Field(
-        default=None,
+    query_entity_recognition_task: List[str] = Field(
+        ...,
         description=(
             "Instruction: Analyze the user input and extract ONLY the text describing the visually identifiable object(s) that need to be located. Adhere to these strict rules:"
-            "1. MANDATORY OBJECT CLASS: You MUST include the noun identifying the object type (e.g., 'player', 'referee', 'goalkeeper'). Never output an adjective without its noun (e.g., return 'player in pink', NOT just 'pink')."
-            "2. VISUAL ATTRIBUTES ONLY: Include color, clothing, and position (e.g., 'wearing a white jersey', 'on the left')."
+            "1. MANDATORY OBJECT CLASS: You MUST include the noun identifying the object type (e.g., 'person', 'ball', 'man', 'woman'). Never output an adjective without its noun (e.g., return 'a person in pink', NOT just 'pink'). Use 'person', 'man', 'woman' for humans, NOT 'player', 'athlete', or specific roles."
+            "2. VISUAL ATTRIBUTES ONLY: Include color, clothing, and position (e.g., 'wearing a white shirt', 'on the left')."
             "3. REMOVE NAMED ENTITIES: Remove all proper names (e.g., 'Messi', 'Chelsea'). The segmentation tool does not recognize names, only descriptions."
-            "4. REMOVE ABSTRACT CONTEXT: Remove all text related to actions, statistics, or comparisons (e.g., 'goals scored', 'compare', 'history')."),
-        examples=["the player in the red jersey", 
-                  "the player wearing number 10",
+            "4. REMOVE ABSTRACT CONTEXT: Remove all text related to actions, statistics, or comparisons (e.g., 'goals scored', 'compare', 'history')."
+            "5. MULTIPLE OBJECTS: If multiple objects are described, separate them into distinct descriptions even if they are in a single sentence. Return each description as a separate item in the list."
+            "6. LANGUAGE: Respond ONLY in English, regardless of the input language."),
+        examples=[["the person wearing a white shirt on the left"], 
+                  ["the person wearing number 10"],
+                  ["the person in black uniform", "the person wearing green shirt"]
                  ]
     )
     material: List[str] = Field(..., description="Paths to the image files")
-class SplitEntityOutput(BaseModel):
-    segments: List = Field(..., description="List of entity descriptions to be processed.") 
 
 # --- Segment Tool ---
 class SegmentTool(BaseTool):
     name: str = "segment"
     description: str = "A tool that returns the segmented region, which improves entity_recognition accuracy."
-    args_schema: Type[BaseModel] = SegmentInput  
+    args_schema: Type[BaseModel] = SegmentInput # type: ignore
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     
     
     _llm: BaseChatModel = PrivateAttr()
-    _processor: Any = PrivateAttr(default=None)
-    _model: Any = PrivateAttr(default=None)
-    _device: Any = PrivateAttr(default=None)
+    _cg_endpoint_uri: Optional[str] = PrivateAttr(default=None)
+    _cg_endpoint_key: Optional[str] = PrivateAttr(default=None)
+    _cg_payload_header: Dict = PrivateAttr(default_factory=dict)
 
     def __init__(self, llm: Optional[BaseChatModel] = None):
         super().__init__()
-        self._llm = llm or ChatGoogleGenerativeAI(
-            model=DEFAULT_MODEL, 
-            temperature=0.5,  
-            top_p=0.95
+        self._initialize_endpoint()
+        os.makedirs(SEGMENT_IMAGE_FOLDER, exist_ok=True)
+    
+    def _initialize_endpoint(self):
+        """Initialize GroundingDino endpoint connection."""
+        # Prefer combined CLIP+GroundingDINO endpoint; fallback to legacy GD endpoint
+        self._cg_endpoint_uri = (
+            settings.CLIP_GROUNDINGDINO_ENDPOINT_URI
+            or settings.GROUNDINGDINO_ENDPOINT_URI
         )
-        self._load_models()
-    def _load_models(self):
-        """Load models - use preloaded models from main.py if available, otherwise load on demand."""
-        if self._model is None or self._processor is None:
-            # Try to import and use preloaded models from main.py
-            try:
-                import main
-                if main.segment_model is not None and main.segment_processor is not None:
-                    self._processor = main.segment_processor
-                    self._model = main.segment_model
-                    self._device = main.segment_device
-                    logger.info("✅ Using preloaded Segment models from lifespan")
-                    return
-            except (ImportError, AttributeError):
-                pass
-            
-            # Fallback: Load models if not preloaded
-            logger.info("Loading Segment models on demand...")
-            self._device = infer_device()
-            hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
-            token_kwargs = {"token": hf_token} if hf_token else {}
-            self._processor = AutoProcessor.from_pretrained(MODEL_SEGMENT, cache_dir=TEMPORARY_DIR, **token_kwargs)
-            self._model = AutoModelForZeroShotObjectDetection.from_pretrained(MODEL_SEGMENT, cache_dir=TEMPORARY_DIR, **token_kwargs).to(self._device)
-            logger.info("✅ Zero-Shot Detection Model loaded successfully.")
-    
-    @staticmethod
-    def _prepare_batch_inputs(query_dict_tasks: dict) -> List:
-        parser = PydanticOutputParser(pydantic_object=SplitEntityOutput)
-        batch_inputs = []
-        for query in query_dict_tasks.values():
-            batch_inputs.append({
-                "output_format": parser.get_format_instructions(),
-                "query": query
-            })
-        return batch_inputs
-    
-    def _split_entities(self, query_dict_tasks: dict) -> List:
-        """
-        Split entities based on specific rules for soccer domain.
-
-        Args:
-            query_dict_tasks: Dictionary containing query tasks.
-        Returns:
-            A list of processed entity descriptions.
-        """
-         # Create output parser
-        parser = PydanticOutputParser(pydantic_object=SplitEntityOutput)
-        split_entity_prompt_template = get_segment_prompt_template()
-        split_entity_chain = split_entity_prompt_template | self._llm | parser
-        batch_inputs = self._prepare_batch_inputs(query_dict_tasks)
+        self._cg_endpoint_key = (
+            settings.CLIP_GROUNDINGDINO_ENDPOINT_KEY
+            or settings.GROUNDINGDINO_ENDPOINT_KEY
+        )
+        
+        if not self._cg_endpoint_uri or not self._cg_endpoint_key:
+            raise ValueError("GroundingDINO/CLIP endpoint URI and key must be configured")
+        
+        self._cg_payload_header = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self._cg_endpoint_key}'
+        }
+        
+        # Test endpoint connectivity
         try:
-            response = split_entity_chain.batch(batch_inputs)
-            logger.info(f"Segmented entities: {response}")
-            return [res.segments for res in response]
+            response = requests.post(
+                url=self._cg_endpoint_uri,
+                headers=self._cg_payload_header,
+                json={"task": "groundingdino", "image": "", "queries": []},
+                timeout=60
+            )
+            # We expect an error for empty payload, but 200/400 means endpoint is reachable
+            if response.status_code in [200, 400]:
+                logger.info("✅ GroundingDino endpoint is reachable")
+            else:
+                logger.warning(f"⚠️  GroundingDino endpoint returned unexpected status: {response.status_code}")
         except Exception as e:
-            logging.error(f"Failed to split entities: {str(e)}")
+            raise ConnectionError(f"Failed to connect to GroundingDino endpoint: {str(e)}")
           
-    def _detect_and_segment(self,images: List[Image.Image], entities_description: List[str]) -> List:
+    def _detect_and_segment(self, image_path: str, entities_description: List[str]) -> List[Dict]:
         """
-        Get segmented entities from the query using the splitting logic.
+        Get segmented entities from the query using Azure GroundingDino endpoint.
 
         Args:
-            image: Image object.
-            entities_description: List of entity descriptions to be processed.
+            image_path: Path to the image file.
+            entities_description: Entity description to be processed.
         Returns:
             A list of dictionaries containing segmented entity information.
         """
         
-        images = [images[0]] * len(entities_description) # TODO: in the future, there are more than one image inputs
         try:
-            inputs = self._processor(images=images, text=entities_description, return_tensors="pt").to(self._model.device)
-            with torch.no_grad():
-                outputs = self._model(**inputs)
-
-            results = self._processor.post_process_grounded_object_detection(
-                outputs,
-                inputs.input_ids,
-                threshold=0.4,
-                text_threshold=0.4,
-                target_sizes=[image.size[::-1] for image in images]  
+            with open(image_path, "rb") as f:
+                image_base64 = base64.b64encode(f.read()).decode("utf-8")
+            
+            # Prepare payload
+            payload = {
+                "task": "groundingdino",
+                "image": image_base64,
+                "text_threshold": 0.4,
+                "threshold": 0.4,
+                "queries": [(".").join(entities_description)]  # Group all queries together
+            }
+            
+            # Call GroundingDino endpoint
+            if not self._cg_endpoint_uri:
+                raise ValueError("GroundingDino endpoint URI not configured")
+            
+            response = requests.post(
+                url=self._cg_endpoint_uri,
+                headers=self._cg_payload_header,
+                json=payload,
+                timeout=60
             )
-            for result in results:
-                boxes = result["boxes"].cpu().numpy()
-                scores = result["scores"].cpu().numpy()
-                labels = result["labels"] 
-                result["boxes"] = boxes
-                result["scores"] = scores
-                result["labels"] = labels
-            return results
+
+            # Handle response
+            if response.status_code != 200:
+                raise Exception(f"GroundingDino endpoint request failed: {response.status_code} - {response.text}")
+            
+            try:
+                response_dict = response.json()
+            except Exception:
+                raise Exception(f"Failed to parse endpoint response as JSON: {response.text}")
+            
+            if not response_dict.get("success", False):
+                raise Exception(f"GroundingDino endpoint error: {response_dict.get('error', 'Unknown error')}")
+            logger.info(response_dict)
+            results_data = response_dict.get("detections", [])
+            logger.info(f"✅ GroundingDino endpoint response received successfully. Found {len(results_data)} query groups")
+            
+            # results_data is a list of dictionaries, each corresponding to a detected object
+            # Each dictionary contains keys: "box", "score", "label"
+            # "box" is a dictionary for single detection with keys: x_min, y_min, x_max, y_max
+            # "score" is a float for single detection
+            # "label" is a predicted label string which is from the text query
+            
+            return results_data
+            
         except Exception as e:
             error_msg = f"Failed to get segmented entities: {str(e)}"
-            logging.error(error_msg)
+            logger.error(error_msg)
             raise RuntimeError(error_msg) from e
+
+    def _post_proccessing_segmented_entities(self, image_path: str, segmented_entities: List[Dict]) -> List[str]:
+        """
+        Post-process and save segmented entities as image files.
+        Args:
+            image_path: Path to the original image file.
+            segmented_entities: List of segmented entity dictionaries from detection.
+        Returns:
+            A list of file paths to the saved segmented images.
+        """
+        image = Image.open(image_path).convert("RGB")
+        timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+
+        segmented_paths = []
+        for entity_idx, segmented_entity in enumerate(segmented_entities):
+            box: Dict[str, float] = segmented_entity.get("box", {})
+            x_min, y_min, x_max, y_max = box.values()
+            score = segmented_entity.get("score")
+            label: str = segmented_entity.get("label", "")
+            
+            # Crop the object from the original image
+            segmented_object = image.crop((x_min, y_min, x_max, y_max))            
+        
+            #Save segmented objects to temporary/segmented_images folder
+            safe_label = label.replace(" ", "_").replace("/", "-")
+            segmented_filename = f"entity_recognition_{safe_label}_{timestamp}_{entity_idx+1}.png"
+            segmented_path = os.path.join(SEGMENT_IMAGE_FOLDER, segmented_filename)
+            segmented_paths.append(segmented_path)
+            segmented_object.save(segmented_path)
+            logger.info(f"✅ Cropped object saved to: {segmented_path}")
+        return segmented_paths
 
     def _run(
         self,
-        query_entity_recognition_task: Optional[str] = None,
+        query_entity_recognition_task: List[str],
         material: List[str] = [],
         run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> List[str]:
+    ) -> Tuple[str, List[str]]:
         """
         Execute the segmentation tool.
+        Returns tuple of (status_message, segmented_paths_string)
         """
         run_tree = get_current_run_tree()
         
         try:
-            images = []
             # 1. Load Image
-            material = material[0]  #TODO: fix to support multiple images
-            if not os.path.isfile(material):
-                    raise FileNotFoundError(f"Material file not found: {material}")
-            image = Image.open(material).convert("RGB")
-            images.append(image)
+            image_path = material[0]  # TODO: fix to support multiple images
+            if not os.path.isfile(image_path):
+                raise FileNotFoundError(f"Material file not found: {image_path}")
+            logger.info(f"✅ Image loaded successfully from: {image_path}")
+            # 2. Detect Objects (Model)
+            segmented_entities = self._detect_and_segment(image_path=image_path, entities_description=query_entity_recognition_task)
             
-            query_dict_tasks = {k: v for k, v in [("entity_recognition", query_entity_recognition_task)] if v is not None}
-            tasks = list(query_dict_tasks.keys())
-            # 2. Get Entities (LLM)
-            entities_description = self._split_entities(query_dict_tasks) 
-            logger.info(f"Entities to segment: {entities_description}")
-
-            # 3. Detect Objects (Model)
-            segmented_entities = self._detect_and_segment(images, entities_description)
+            # 3. Post-process and Save Segmented Objects
+            segmented_paths = self._post_proccessing_segmented_entities(image_path=image_path, segmented_entities=segmented_entities)
             
-        
-            count = 0
-            segmented_images = []
-            for entity_idx,segmented_entity in enumerate(segmented_entities):
-                for box, score, label in zip(segmented_entity["boxes"], segmented_entity["scores"], segmented_entity["labels"]):
-                    x_min, y_min, x_max, y_max = box.tolist()
-
-                    # Crop the object from the original image
-                    segmented_object = image.crop((x_min, y_min, x_max, y_max))
-                    segmented_images.append((segmented_object, label, score.item()))
-                    
-                    count += 1
-            
-                # 5. Save segmented objects to temporary/segmented_images folder
-                original_filename = os.path.basename(material)
-                name_without_ext = os.path.splitext(original_filename)[0]
-                
-                
-                os.makedirs(SEGMENT_IMAGE_FOLDER, exist_ok=True)
-                
-                segmented_paths = []
-                for idx, (segmented_img, label, score) in enumerate(segmented_images):
-                    # Sanitize label for filename
-                    safe_label = label.replace(" ", "_").replace("/", "-")
-                    segmented_filename = f"{tasks[entity_idx]}_{name_without_ext}_{safe_label}_{idx+1}.png"
-                    segmented_path = os.path.join(SEGMENT_IMAGE_FOLDER, segmented_filename)
-                    segmented_img.save(segmented_path)
-                    segmented_paths.append(segmented_path)
-                    logger.info(f"✅ Cropped object saved to: {segmented_path}")
-            segmented_paths = ", ".join(segmented_paths)
-            return  "Successfully segmented objects.", segmented_paths
+            return (
+                f"Successfully segmented objects. The tool found {len(segmented_paths)} entities. "
+                f"Segmented image paths: {', '.join(segmented_paths)}",
+                segmented_paths,
+            )
 
         except Exception as e:
             error_msg = f"Error in segment_tool: {str(e)}"
@@ -230,4 +222,4 @@ class SegmentTool(BaseTool):
                 run_tree.end(error=error_msg)
 
             # Return detailed error message to the Agent
-            return "An error occurred while segmenting the image. Try calling this tool again or stop the execution."
+            return "An error occurred while segmenting the image. Try calling this tool again or stop the execution.", []

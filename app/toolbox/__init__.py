@@ -1,4 +1,3 @@
-from flask import app
 from app.toolbox.textual_entity_search import TextualEntitySearchTool as textual_entity_search
 from app.toolbox.textual_retrieval_augment import TextualRetrievalAugmentTool as textual_retrieval_augment
 from app.toolbox.game_search import GameSearchTool as game_search
