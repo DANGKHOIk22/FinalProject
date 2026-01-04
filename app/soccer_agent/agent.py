@@ -36,11 +36,6 @@ from app.schema.chat import ChatRequest
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
-    format=LOG_FORMAT,
-    datefmt=LOG_DATE_FORMAT
-)
 logger = logging.getLogger(__name__)
 
 
@@ -229,15 +224,7 @@ class SoccerAgent:
         if tool_node_messages:
             tool_result: ToolMessage = tool_node_messages[-1] # Each time only one tool is called, so the last message is the result of the current tool
             tool_results_history.append(tool_result)
-            last_tool_call = tool_calls_history[-1] 
-            if last_tool_call.get('name', '') == "segment":
-                # Append artifact to the list if it exists
-                if hasattr(tool_result, 'artifact') and tool_result.artifact:
-                    if additional_material_list is None:
-                        additional_material_list = []
-                    additional_material_list.extend(tool_result.artifact)
-            else:
-                state["last_tool_artifact"] = tool_result.artifact if hasattr(tool_result, 'artifact') else None
+            state["last_tool_artifact"] = tool_result.artifact if hasattr(tool_result, 'artifact') else None
             logger.info(f"Received tool result: {tool_result.content}")
         
         # Format List[str] to string for prompt

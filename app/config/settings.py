@@ -27,10 +27,14 @@ class Settings:
     DEEPFACE_HOME: Optional[str] = os.path.join(PROJECT_PATH, os.getenv('DEEPFACE_HOME', './temporary/cache'))
     
     # Endpoint Configuration
-    DEEPFACE_ENDPOINT_URI: Optional[str] = os.getenv('DEEPFACE_ENDPOINT_URI')
-    GROUNDINGDINO_ENDPOINT_URI: Optional[str] = os.getenv('GROUNDINGDINO_ENDPOINT_URI')
+    DEEPFACE_ENDPOINT_URI: Optional[str] = os.getenv('DEEPFACE_ENDPOINT_URI') 
     DEEPFACE_ENDPOINT_KEY: Optional[str] = os.getenv('DEEPFACE_ENDPOINT_KEY')
+    GROUNDINGDINO_ENDPOINT_URI: Optional[str] = os.getenv('GROUNDINGDINO_ENDPOINT_URI')
     GROUNDINGDINO_ENDPOINT_KEY: Optional[str] = os.getenv('GROUNDINGDINO_ENDPOINT_KEY')
+    CLIP_ENDPOINT_URI: Optional[str] = os.getenv('CLIP_ENDPOINT_URI')
+    CLIP_ENDPOINT_KEY: Optional[str] = os.getenv('CLIP_ENDPOINT_KEY')
+    CLIP_GROUNDINGDINO_ENDPOINT_URI: Optional[str] = os.getenv('CLIP_GROUNDINGDINO_ENDPOINT_URI')
+    CLIP_GROUNDINGDINO_ENDPOINT_KEY: Optional[str] = os.getenv('CLIP_GROUNDINGDINO_ENDPOINT_KEY')
     
 
     @classmethod
@@ -54,12 +58,16 @@ class Settings:
         # Validate endpoint settings
         if not cls.DEEPFACE_ENDPOINT_URI:
             raise ValueError("DEEPFACE_ENDPOINT_URI is required but not set")
-        if not cls.GROUNDINGDINO_ENDPOINT_URI:
-            raise ValueError("GROUNDINGDINO_ENDPOINT_URI is required but not set")
         if not cls.DEEPFACE_ENDPOINT_KEY:
             raise ValueError("DEEPFACE_ENDPOINT_KEY is required but not set")
+        if not cls.GROUNDINGDINO_ENDPOINT_URI:
+            raise ValueError("GROUNDINGDINO_ENDPOINT_URI is required but not set")
         if not cls.GROUNDINGDINO_ENDPOINT_KEY:
             raise ValueError("GROUNDINGDINO_ENDPOINT_KEY is required but not set")
+        if not cls.CLIP_ENDPOINT_URI:
+            raise ValueError("CLIP_ENDPOINT_URI is required but not set")
+        if not cls.CLIP_ENDPOINT_KEY:
+            raise ValueError("CLIP_ENDPOINT_KEY is required but not set")
         return True
 
 

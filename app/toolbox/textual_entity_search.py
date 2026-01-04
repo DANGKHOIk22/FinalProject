@@ -2,26 +2,34 @@ import pymongo
 from dns import resolver
 import logging
 from app.config import settings
-from app.config.config import DEFAULT_MODEL
-from pydantic import BaseModel, Field, PrivateAttr
-from typing import List, Optional, Dict, Tuple, Annotated, Type, Literal
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Tuple, Type, Literal
 from pymongo.server_api import ServerApi
 
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
-from langchain_core.output_parsers import PydanticOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langsmith import get_current_run_tree
 
 from app.schema.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
 from app.schema.textual_entity_search import SoccerEntities, SearchingResult
-from app.prompts.toolbox.textual_entity_search import get_entity_extraction_prompt_template
 
 # Setup logger
 logger = logging.getLogger(__name__)
 
 class TextualEntitySearchInput(BaseModel):
-    query: str = Field(description="Prompt query could be the original question.")
+    entity_names: List[str] = Field(
+        ...,
+        description=(
+            "List of soccer-related entity names already extracted from the user's question or inferred by previous tools results. "
+            "Each item should be a direct name (player, team, venue, referee, coach, club) without extra narration. "
+            "Use this tool only after the agent has resolved the names; do not pass raw user questions here."
+        ),
+        examples=[
+            ["Lionel Messi", "Barcelona"],
+            ["Kylian Mbappe", "Parc des Princes"],
+            ["Old Trafford"],
+        ],
+    )
 
 
 class TextualEntitySearchTool(BaseTool):
@@ -32,27 +40,23 @@ class TextualEntitySearchTool(BaseTool):
     args_schema: Type[BaseModel] = TextualEntitySearchInput # type: ignore
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     
-    _llm: ChatGoogleGenerativeAI = PrivateAttr()
+
 
     def __init__(self):
         super().__init__()
-        self._llm = ChatGoogleGenerativeAI(
-            model=DEFAULT_MODEL, 
-            temperature=0.5,  
-            top_p=0.95
-        )
 
-    def _run(self, query: str, run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, SearchingResult]:
+    def _run(self, entity_names: List[str], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, SearchingResult]:
         run_tree = get_current_run_tree()
         try:
-            # Extract entities from query
-            entities = self._extract_entity(query)
-            logger.info(f"Extracted entities: {entities}")
-            if not entities:
-                logger.info("No entities extracted from query.")
-                return "This tool can't find any soccer-related entities in the user query.", SearchingResult()
+            if not entity_names:
+                logger.info("No entity names provided to textual_entity_search.")
+                return "This tool can't find any soccer-related entities in the provided input.", SearchingResult()
+
+            # Execution Agent supplies resolved names; wrap them as unknown type for DB lookup
+            entities = SoccerEntities(unknown=entity_names)
+            logger.info(f"Received entities for lookup: {entities}")
             
-            # Query database for extracted entities
+            # Query database for provided entities
             db_searching_result = TextualEntitySearchTool._query_database(entities)
             logger.debug(f"Database searching result: {db_searching_result}")
 
@@ -84,33 +88,6 @@ class TextualEntitySearchTool(BaseTool):
             # Return detailed error message to the Agent
             return f"An error occurred while executing the tool. Details: {str(e)}. Please retry the tool or stop the process.", SearchingResult()
 
-    def _extract_entity(self, query: str) -> Optional[SoccerEntities]:
-        """
-        Extract soccer-related entities from the user's query using LLM.
-        """
-        # Create output parser
-        parser = PydanticOutputParser(pydantic_object=SoccerEntities)
-        
-        # Combine prompt, model, and parser
-        extract_entity_prompt_template = get_entity_extraction_prompt_template()
-        extract_entity_chain = extract_entity_prompt_template | self._llm | parser
-
-        try:
-            soccer_entities = extract_entity_chain.invoke({
-                "output_format": parser.get_format_instructions(),
-                "question": query
-            })
-
-            # Log extracted entities
-            logging.info(f"Extracted entities: {soccer_entities}")
-            
-            return soccer_entities
-            
-        except Exception as e:
-            error_msg = f"Failed to extract entities from query '{query}': {str(e)}"
-            logging.error(error_msg)
-            # Raise with context
-            raise RuntimeError(error_msg) from e
         
     @staticmethod
     def _parse_entity_result(entity_data: Dict) -> Optional[BaseModel]:
@@ -269,6 +246,11 @@ class TextualEntitySearchTool(BaseTool):
         except Exception as e:
             error_msg = f"Error querying database: {str(e)}"
             logging.error(error_msg)
+            run_tree = get_current_run_tree()
+            if run_tree:
+                run_tree.end(
+                    error=error_msg
+                )
             # Raise with context
             raise RuntimeError(error_msg) from e
         
