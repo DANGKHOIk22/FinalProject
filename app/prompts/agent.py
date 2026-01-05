@@ -172,6 +172,7 @@ Review the complete execution history below to inform your next action:
 2. Do not use internal knowledge or pre-trained information.
 3. Follow the tool chain exactly and use only information from the execution history.
 4. Do not skip any tool in the chain.
+5. Give the final answer by using the same language as the user query.
 
 # Next Step
 Based on the context and execution history, decide whether another tool call is required. If so, output the exact tool invocation with all necessary parameters. If not (all tools completed OR tool_chain is "No tools needed"), end execution with a clear, polite response to the user summarizing the gathered information (you may reference conversation history at this point), without calling further tools.
