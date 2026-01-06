@@ -15,9 +15,10 @@ from app.memory.chat_history import get_postgres_memory
 from app.memory.conversation_memory import CustomSystemPromptMemory
 from app.prompts.agent import get_planning_prompt_template, get_execution_prompt_template
 from app.config.config import (
-    DEFAULT_MODEL, GEMINI_2_5_FLASH, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
-    LOG_FORMAT, LOG_DATE_FORMAT, LOG_LEVEL
+    DEFAULT_MODEL, GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
 )
+from app.config.settings import settings
+
 from app.toolbox import (
     textual_entity_search, 
     textual_retrieval_augment, 
@@ -31,9 +32,6 @@ from app.toolbox import (
     commentary_generation,
 )
 from app.schema.chat import ChatRequest
-
-# Load environment variables
-load_dotenv()
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -74,7 +72,8 @@ class SoccerAgent:
             model_name: The LLM model to use (default from config)
         """
         self.planning_llm = ChatGoogleGenerativeAI(
-            model=model_name if model_name else GEMINI_2_5_FLASH, 
+            model=model_name if model_name else DEFAULT_MODEL, 
+            api_key=settings.GOOGLE_API_KEY,
             temperature=MODEL_TEMPERATURE, 
             top_p=MODEL_TOP_P,
             max_output_tokens=MAX_COMPLETION_TOKENS,
@@ -82,7 +81,8 @@ class SoccerAgent:
             include_thoughts=True #type: ignore
         )
         self.execution_llm = ChatGoogleGenerativeAI(
-            model=model_name if model_name else GEMINI_2_5_FLASH,
+            model=model_name if model_name else DEFAULT_MODEL,
+            api_key=settings.GOOGLE_API_KEY,
             temperature=MODEL_TEMPERATURE,
             top_p=MODEL_TOP_P,
             max_output_tokens=MAX_COMPLETION_TOKENS,

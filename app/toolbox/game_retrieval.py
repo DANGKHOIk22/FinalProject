@@ -13,7 +13,7 @@ from langchain.tools import InjectedState, BaseTool
 from langsmith import get_current_run_tree
 
 from app.config.settings import Settings
-from app.config.config import PROJECT_PATH, DEFAULT_MODEL
+from app.config.config import PROJECT_PATH, DEFAULT_MODEL, GEMINI_2_5_FLASH_LITE
 from app.prompts.toolbox.game_retrieval import get_game_info_retrieval_prompt_template, get_game_history_retrieval_prompt_template
 
 logger = logging.getLogger(__name__)
