@@ -117,6 +117,7 @@ def run(raw_data):
         return json.loads(json.dumps(obj, default=_default))
 
     logger.info("Run started")
+    print("Run started")
     try:
         payload = _parse_payload(raw_data)
         image_b64 = _extract_base64_image(payload)
@@ -127,7 +128,7 @@ def run(raw_data):
             img_path=image_file,
             model_name=model_recognition_name,
             detector_backend=model_detector_name,
-            normalization="Facenet",
+            normalization="Facenet2018",
             enforce_detection=False,
             max_faces=options["max_faces"]
         )
@@ -137,7 +138,11 @@ def run(raw_data):
             obj for obj in embedding_objs
             if obj.get("face_confidence", 0.0) >= options["confidence_threshold"]
         ]
-
+        print("Run completed successfully")
+        logger.info("Run completed successfully")
+        print(embedding_objs)
+        logger.info(f"Embeddings: {embedding_objs}")
+        
         return {
             "success": True,
             "result": _json_safe(embedding_objs),
@@ -150,6 +155,7 @@ def run(raw_data):
         }
     except Exception as e:
         logger.exception("Scoring failed")
+        print(f"Scoring failed: {e}")
         return {
             "success": False,
             "error": str(e),
