@@ -5,7 +5,7 @@ from app.schema.match import Annotation
 from typing import List, Type,Optional, Literal,Annotated, Union
 from pydantic import BaseModel, Field, PrivateAttr
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_qwq import ChatQwQ
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.callbacks import CallbackManagerForToolRun
@@ -13,7 +13,7 @@ from langchain.tools import InjectedState, BaseTool
 from langsmith import get_current_run_tree
 
 from app.config.settings import Settings
-from app.config.config import PROJECT_PATH, DEFAULT_MODEL, GEMINI_2_5_FLASH_LITE
+from app.config.config import PROJECT_PATH, DEFAULT_MODEL
 from app.prompts.toolbox.game_retrieval import get_game_info_retrieval_prompt_template, get_game_history_retrieval_prompt_template
 
 logger = logging.getLogger(__name__)
@@ -40,15 +40,15 @@ class GameInfoRetrievalTool(BaseTool):
     args_schema: Type[BaseModel] = RetrievalInput # type: ignore
     
     project_path: str = PROJECT_PATH
-    _llm: ChatGoogleGenerativeAI = PrivateAttr()
+    _llm: ChatQwQ = PrivateAttr()
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     def __init__(self):
         super().__init__()
 
-        self._llm = ChatGoogleGenerativeAI(
+        self._llm = ChatQwQ(
             model=DEFAULT_MODEL,
             temperature=0,
-            google_api_key=Settings.GOOGLE_API_KEY
+            api_key=Settings.DASHSCOPE_API_KEY
         )
 
     def _get_match_info_json(self, json_file_path: str) -> str:
@@ -115,16 +115,16 @@ class GameHistoryRetrievalTool(BaseTool):
     args_schema: Type[BaseModel] = RetrievalInput # type: ignore
 
     project_path: str = PROJECT_PATH
-    _llm: ChatGoogleGenerativeAI = PrivateAttr()
+    _llm: ChatQwQ = PrivateAttr()
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
 
     def __init__(self):
         super().__init__()
 
-        self._llm = ChatGoogleGenerativeAI(
-            model=DEFAULT_MODEL, # Dùng flash cho context dài (lịch sử trận đấu thường dài)
+        self._llm = ChatQwQ(
+            model=DEFAULT_MODEL, # Dùng Qwen model với context dài (lịch sử trận đấu thường dài)
             temperature=0,
-            google_api_key=Settings.GOOGLE_API_KEY
+            api_key=Settings.DASHSCOPE_API_KEY
         )
 
     def _transform_match_history_artifact_to_str(self, match_history_artifact: Union[str, List[Annotation]]) -> str:

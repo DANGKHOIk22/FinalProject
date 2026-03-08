@@ -2,12 +2,13 @@ import logging
 from typing import Any, Type, Literal, Optional, Annotated, Tuple
 from pydantic import BaseModel, PrivateAttr, Field
 from app.prompts.toolbox.choice_selection import get_choice_selection_prompt_template
-from app.config.config import DEFAULT_MODEL, GEMINI_2_5_FLASH_LITE
+from app.config.config import DEFAULT_MODEL
+from app.config.settings import Settings
 
 from langchain.tools import BaseTool, InjectedState
 from langchain.chat_models import BaseChatModel
 from langchain_core.callbacks import CallbackManagerForToolRun
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_qwq import ChatQwQ
 from langsmith import get_current_run_tree
 
 logger = logging.getLogger(__name__)
@@ -27,10 +28,11 @@ class ChoiceSelection(BaseTool):
 
     def __init__(self, llm: Optional[BaseChatModel] = None):
         super().__init__()
-        self._llm = llm or ChatGoogleGenerativeAI(
+        self._llm = llm or ChatQwQ(
             model=DEFAULT_MODEL, 
             temperature=0.5,  
-            top_p=0.95
+            top_p=0.95,
+            api_key=Settings.DASHSCOPE_API_KEY
         )
 
     def _run(self, query: str, open_ended_answer: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun]) -> Tuple[str, None]:

@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from typing import TypedDict, List, Optional, Callable
 from pydantic import BaseModel, Field
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_qwq import ChatQwQ
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.messages import ToolMessage, ToolCall, AIMessage
 from langgraph.graph import StateGraph, END
@@ -15,7 +15,7 @@ from app.memory.chat_history import get_postgres_memory
 from app.memory.conversation_memory import CustomSystemPromptMemory
 from app.prompts.agent import get_planning_prompt_template, get_execution_prompt_template
 from app.config.config import (
-    DEFAULT_MODEL, GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
+    DEFAULT_MODEL, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
 )
 from app.config.settings import settings
 
@@ -71,23 +71,19 @@ class SoccerAgent:
         Args:
             model_name: The LLM model to use (default from config)
         """
-        self.planning_llm = ChatGoogleGenerativeAI(
+        self.planning_llm = ChatQwQ(
             model=model_name if model_name else DEFAULT_MODEL, 
-            api_key=settings.GOOGLE_API_KEY,
+            api_key=settings.DASHSCOPE_API_KEY,
             temperature=MODEL_TEMPERATURE, 
             top_p=MODEL_TOP_P,
-            max_output_tokens=MAX_COMPLETION_TOKENS,
-            thinking_budget=3000,
-            include_thoughts=True #type: ignore
+            max_tokens=MAX_COMPLETION_TOKENS
         )
-        self.execution_llm = ChatGoogleGenerativeAI(
+        self.execution_llm = ChatQwQ(
             model=model_name if model_name else DEFAULT_MODEL,
-            api_key=settings.GOOGLE_API_KEY,
+            api_key=settings.DASHSCOPE_API_KEY,
             temperature=MODEL_TEMPERATURE,
             top_p=MODEL_TOP_P,
-            max_output_tokens=MAX_COMPLETION_TOKENS,
-            thinking_budget=4000,
-            include_thoughts=True #type: ignore
+            max_tokens=MAX_COMPLETION_TOKENS
         )
         self.planning_parser = PydanticOutputParser(pydantic_object=PlanningOutput)
 

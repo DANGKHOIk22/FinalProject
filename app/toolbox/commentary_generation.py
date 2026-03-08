@@ -1,5 +1,6 @@
 import base64
 import mimetypes
+import os
 from pathlib import Path
 from typing import Any, List, Optional, Tuple, Type, Literal, Union, Dict
 from pydantic import BaseModel, Field, PrivateAttr
@@ -7,10 +8,11 @@ from pydantic import BaseModel, Field, PrivateAttr
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_qwq import ChatQwQ
 from langsmith import get_current_run_tree
 
-from app.config.config import GEMINI_2_5_FLASH
+from app.config.config import DEFAULT_MODEL
+from app.config.settings import Settings
 from app.prompts.toolbox.commentary_generation import get_commentary_generation_prompt_template
 from app.schema.match import Annotation
 
@@ -50,16 +52,15 @@ class CommentaryGenerationTool(BaseTool):
     args_schema: Type[BaseModel] = CommentaryGenerationInput  # type: ignore
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
 
-    _vlm: ChatGoogleGenerativeAI = PrivateAttr()
+    _vlm: ChatQwQ = PrivateAttr()
 
     def __init__(self):
         super().__init__()
-        self._vlm = ChatGoogleGenerativeAI(
-            model=GEMINI_2_5_FLASH,
+        self._vlm = ChatQwQ(
+            model=DEFAULT_MODEL,
             temperature=1.0,
             top_p=0.95,
-            thinking_budget=500,
-            include_thoughts=True
+            api_key=Settings.DASHSCOPE_API_KEY
         )
 
     def _run(

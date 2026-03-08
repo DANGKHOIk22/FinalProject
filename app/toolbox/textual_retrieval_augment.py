@@ -4,10 +4,11 @@ from pydantic import BaseModel, Field, PrivateAttr
 
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain.tools import BaseTool, InjectedState
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_qwq import ChatQwQ
 from langsmith import get_current_run_tree
 
 from app.config.config import DEFAULT_MODEL
+from app.config.settings import Settings
 from app.toolbox.textual_entity_search import SearchingResult
 from app.prompts.toolbox.textual_retrieval_augment import get_textual_retrieval_augment_prompt_template
 
@@ -26,14 +27,15 @@ class TextualRetrievalAugmentTool(BaseTool):
     args_schema:Type[BaseModel] = TextualRetrievalAugmentInput # type: ignore
     response_format: Literal['content', 'content_and_artifact'] = 'content_and_artifact'
     
-    _llm: ChatGoogleGenerativeAI = PrivateAttr()
+    _llm: ChatQwQ = PrivateAttr()
 
     def __init__(self):
         super().__init__()
-        self._llm = ChatGoogleGenerativeAI(
+        self._llm = ChatQwQ(
             model=DEFAULT_MODEL, 
             temperature=0.5,  
-            top_p=0.95
+            top_p=0.95,
+            api_key=Settings.DASHSCOPE_API_KEY
         )
 
     def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, None]:
