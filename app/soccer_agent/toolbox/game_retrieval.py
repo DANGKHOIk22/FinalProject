@@ -14,7 +14,7 @@ from langsmith import get_current_run_tree
 
 from app.config.settings import Settings
 from app.config.config import PROJECT_PATH, DEFAULT_MODEL
-from app.prompts.toolbox.game_retrieval import get_game_info_retrieval_prompt_template, get_game_history_retrieval_prompt_template
+from app.soccer_agent.prompts.toolbox.game_retrieval import get_game_info_retrieval_prompt_template, get_game_history_retrieval_prompt_template
 
 logger = logging.getLogger(__name__)
 

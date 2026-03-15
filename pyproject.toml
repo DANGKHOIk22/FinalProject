@@ -38,6 +38,9 @@ dependencies = [
     "hf-xet>=1.2.0",
     "huggingface-hub>=1.2.3",
     "langchain-qwq==0.3.0",
+    "sqlalchemy>=2.0.0",
+    "passlib[bcrypt]>=1.7.4",
+    "pydantic>=2.0.0",
 ]
 
 [build-system]

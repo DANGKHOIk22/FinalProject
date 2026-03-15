@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Type, Literal, Optional, Annotated, Tuple
 from pydantic import BaseModel, PrivateAttr, Field
-from app.prompts.toolbox.choice_selection import get_choice_selection_prompt_template
+from app.soccer_agent.prompts.toolbox.choice_selection import get_choice_selection_prompt_template
 from app.config.config import DEFAULT_MODEL
 from app.config.settings import Settings
 

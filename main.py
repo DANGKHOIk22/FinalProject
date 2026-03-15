@@ -13,12 +13,15 @@ from qdrant_client import QdrantClient
 # Import cấu hình và database
 from app.config.settings import settings
 from app.config.config import LOG_FORMAT, LOG_LEVEL
+from sqlalchemy import text
+from app.database.db import engine
 
 # Import SoccerAgent (but don't initialize yet)
 from app.soccer_agent.agent import SoccerAgent
 
-# Chỉ import router chat
+# Chỉ import router chat và user
 from app.api.chat import router as chat_router
+from app.api.user import router as user_router
 
 # Cấu hình logging đơn giản thay vì structlog
 logging.basicConfig(
@@ -26,10 +29,10 @@ logging.basicConfig(
     format=LOG_FORMAT
 )
 logger = logging.getLogger(__name__)
-
 # Global variables for database connections
 mongo_client = None
 qdrant_client = None
+postgres_connected = False
 
 # Global variable for agent service
 agent_service = None
@@ -47,22 +50,21 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Starting FastAPI application...")
     logger.info("📦 Initializing database connections...")
     
+    global postgres_connected
     try:
         # Initialize database connections
         logger.info("Initializing database connections...")
-        
-        # MongoDB connection
-        mongo_srv = settings.MONGO_SRV
-        if mongo_srv:
-            resolver.default_resolver = resolver.Resolver(configure=False)
-            resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']
-            mongo_client = pymongo.MongoClient(mongo_srv, server_api=ServerApi('1'))
-            # Test connection
-            mongo_client.admin.command('ping')
-            logger.info("✅ MongoDB client initialized and connected successfully")
-        else:
-            logger.warning("⚠️ MongoDB SRV not configured, skipping MongoDB initialization")
-        
+        # # MongoDB connection
+        # mongo_srv = settings.MONGO_SRV
+        # if mongo_srv:
+        #     resolver.default_resolver = resolver.Resolver(configure=False)
+        #     resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']
+        #     mongo_client = pymongo.MongoClient(mongo_srv, server_api=ServerApi('1'))
+        #     # Test connection
+        #     mongo_client.admin.command('ping')
+        #     logger.info("✅ MongoDB client initialized and connected successfully")
+        # else:
+        #     logger.warning("⚠️ MongoDB SRV not configured, skipping MongoDB initialization")
         # Qdrant connection
         qdrant_url = settings.QDRANT_URL
         qdrant_api_key = settings.QDRANT_API_KEY
@@ -71,14 +73,28 @@ async def lifespan(app: FastAPI):
             logger.info("✅ Qdrant client initialized successfully")
         else:
             logger.warning("⚠️ Qdrant credentials not configured, skipping Qdrant initialization")
-        
+
+        # Postgres connection check
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            postgres_connected = True
+            logger.info("✅ Postgres connected successfully")
+        except Exception as e:
+            postgres_connected = False
+            logger.error(f"❌ Postgres connection failed: {e}")
+
         # Initialize SoccerAgent AFTER all models and databases are loaded
-        logger.info("Initializing SoccerAgent...")
-        agent_service = SoccerAgent()
-        logger.info("✅ SoccerAgent initialized successfully")
-        
+        if settings.DASHSCOPE_API_KEY:
+            logger.info("Initializing SoccerAgent...")
+            # agent_service = SoccerAgent()
+            logger.info("✅ SoccerAgent initialized successfully")
+        else:
+            logger.warning("⚠️ DASHSCOPE_API_KEY not set, skipping SoccerAgent initialization")
+            agent_service = None
+
         logger.info("✅ All models, databases, and services initialized - Application ready!")
-        
+
     except Exception as e:
         logger.error(f"❌ Error loading models: {e}", exc_info=True)
         raise
@@ -127,8 +143,9 @@ app.add_middleware(
 )
 
 # --- 4. Đăng ký Router ---
-# Chỉ đăng ký duy nhất chat router
-app.include_router(chat_router, tags=["Soccer Chat Agent"])
+# Đăng ký chat và user router
+# app.include_router(chat_router, tags=["Soccer Chat Agent"])
+app.include_router(user_router, prefix="/user", tags=["User"])
 
 # --- 5. Helper Functions để truy cập preloaded models ---
 def get_mongo_client():
@@ -148,6 +165,7 @@ def root():
         "databases_connected": {
             "mongodb": mongo_client is not None,
             "qdrant": qdrant_client is not None,
+            "postgres": postgres_connected,
         }
     }
 

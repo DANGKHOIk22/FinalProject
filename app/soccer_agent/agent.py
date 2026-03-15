@@ -11,15 +11,15 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
-from app.memory.chat_history import get_postgres_memory
-from app.memory.conversation_memory import CustomSystemPromptMemory
-from app.prompts.agent import get_planning_prompt_template, get_execution_prompt_template
+from app.soccer_agent.memory.chat_history import get_postgres_memory
+from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
+from app.soccer_agent.prompts.agent import get_planning_prompt_template, get_execution_prompt_template
 from app.config.config import (
     DEFAULT_MODEL, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
 )
 from app.config.settings import settings
 
-from app.toolbox import (
+from app.soccer_agent.toolbox import (
     textual_entity_search, 
     textual_retrieval_augment, 
     game_history_retrieval, 

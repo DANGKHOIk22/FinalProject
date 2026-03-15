@@ -13,7 +13,7 @@ from langsmith import get_current_run_tree
 
 from app.config.config import DEFAULT_MODEL
 from app.config.settings import Settings
-from app.prompts.toolbox.commentary_generation import get_commentary_generation_prompt_template
+from app.soccer_agent.prompts.toolbox.commentary_generation import get_commentary_generation_prompt_template
 from app.schema.match import Annotation
 
 

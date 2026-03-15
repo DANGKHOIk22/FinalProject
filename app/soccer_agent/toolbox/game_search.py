@@ -11,7 +11,7 @@ from langchain_core.callbacks import CallbackManagerForToolRun
 from app.config.config import PROJECT_PATH, DEFAULT_MODEL
 from app.config.settings import Settings
 from app.schema.match import MatchInfo
-from app.prompts.toolbox.game_search import get_extraction_prompt_template, get_match_selection_prompt_template
+from app.soccer_agent.prompts.toolbox.game_search import get_extraction_prompt_template, get_match_selection_prompt_template
 
 logger = logging.getLogger(__name__)
 
