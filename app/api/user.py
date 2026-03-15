@@ -3,18 +3,19 @@ from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.database import models
 from app.schema.user_schema import UserCreate, UserLogin, UserOut
-from passlib.context import CryptContext
+import bcrypt
 
 router = APIRouter()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    # Truncate to 72 bytes to comply with bcrypt limit
+    password_bytes = password.encode('utf-8')
+    hashed = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
+    return hashed.decode('utf-8')
 
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
 @router.post("/register", response_model=UserOut)
 def register(user: UserCreate, db: Session = Depends(get_db)):

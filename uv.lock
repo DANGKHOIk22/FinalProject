@@ -614,6 +614,7 @@ source = { editable = "." }
 dependencies = [
     { name = "azure-ai-ml" },
     { name = "azure-identity" },
+    { name = "bcrypt" },
     { name = "dnspython" },
     { name = "docker" },
     { name = "fastapi" },
@@ -653,6 +654,7 @@ dependencies = [
 requires-dist = [
     { name = "azure-ai-ml", specifier = ">=1.30.0" },
     { name = "azure-identity", specifier = ">=1.25.1" },
+    { name = "bcrypt", specifier = ">=4.0.0" },
     { name = "dnspython", specifier = "==2.4.2" },
     { name = "docker", specifier = ">=7.1.0" },
     { name = "fastapi", specifier = ">=0.118.2" },
