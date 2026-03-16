@@ -20,7 +20,7 @@ from app.config.config import (
 from app.config.settings import settings
 
 from app.soccer_agent.toolbox import (
-    textual_entity_search, 
+    textual_entity_search,
     textual_retrieval_augment, 
     game_history_retrieval, 
     game_info_retrieval, 
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 class PlanningOutput(BaseModel):
     """Structured output for tool chain planning."""
     tool_chain: Optional[List[str]] = Field(default=None,description="Ordered list of tools needed to answer the query or None if no tools are needed")
-    need_call_tools: Optional[bool] = Field(default=True, description="Indicates whether tool calls are necessary")
+    need_call_tools: bool = Field(default=True, description="Indicates whether tool calls are necessary")
 
 # Define the state structure for the agent
 class AgentState(TypedDict):
@@ -95,10 +95,10 @@ class SoccerAgent:
             "game_search": game_search(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
-            "entity_recognition": entity_recognition(),
+            # "entity_recognition": entity_recognition(),
             "choice_selection": choice_selection(),
-            "segment": segment(),
-            "frame_selection": frame_selection(),
+            # "segment": segment(),
+            # "frame_selection": frame_selection(),
             "commentary_generation": commentary_generation(),
         }
 
@@ -164,21 +164,21 @@ class SoccerAgent:
         format_instructions = self.planning_parser.get_format_instructions()
         
         planning_agent_prompt_template = get_planning_prompt_template()
-        planning_agent_prompt = planning_agent_prompt_template.invoke({
+        
+        # Get LLM response
+        chain = planning_agent_prompt_template | self.planning_llm | self.planning_parser
+        planning_output: PlanningOutput = chain.invoke({
             "toolbox_descriptions": tool_descriptions,
             "format_instructions": format_instructions,
             "user_query": state["user_query"],
             "additional_material": additional_material,
             "conversation_history": conversation_history
         })
-
-        # Get LLM response
-        response = self.planning_llm.invoke(planning_agent_prompt)
-        logger.debug(f"🤖 Response from Planning Agent: {response}")
-        response_text = response.content[1] if isinstance(response.content, list) and len(response.content) > 1 else response.content # The content may contain thought signatures, so we extract the main response.
+        logger.debug(f"🤖 Response from Planning Agent: {planning_output}")
+        # response_text = response.content[1] if isinstance(response.content, list) and len(response.content) > 1 else response.content # The content may contain thought signatures, so we extract the main response.
         
-        # Parse with PydanticOutputParser
-        planning_output: PlanningOutput = self.planning_parser.parse(response_text)
+        # # Parse with PydanticOutputParser
+        # planning_output: PlanningOutput = self.planning_parser.parse(response_text)
         
         logger.info("Tool Chain Planning Results:")
         logger.info(f"\t Tool Chain: {planning_output.tool_chain}")
@@ -472,7 +472,7 @@ class SoccerAgent:
         finally:
             # Always cleanup connection
             try:
-                self.cleanup(connection=connection, pool=pool, session_id=session_id)
+                await self.cleanup(connection=connection, pool=pool, session_id=session_id)
                 logging.debug("✅ ChatAgent connection cleaned up")
             except Exception as cleanup_error:
                 logging.error(f"❌ ChatAgent cleanup error: {cleanup_error}")        

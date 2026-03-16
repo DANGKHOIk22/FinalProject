@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
         # Initialize SoccerAgent AFTER all models and databases are loaded
         if settings.DASHSCOPE_API_KEY:
             logger.info("Initializing SoccerAgent...")
-            # agent_service = SoccerAgent()
+            agent_service = SoccerAgent()
             logger.info("✅ SoccerAgent initialized successfully")
         else:
             logger.warning("⚠️ DASHSCOPE_API_KEY not set, skipping SoccerAgent initialization")
@@ -144,7 +144,7 @@ app.add_middleware(
 
 # --- 4. Đăng ký Router ---
 # Đăng ký chat và user router
-# app.include_router(chat_router, tags=["Soccer Chat Agent"])
+app.include_router(chat_router, tags=["Soccer Chat Agent"])
 app.include_router(user_router, prefix="/user", tags=["User"])
 
 # --- 5. Helper Functions để truy cập preloaded models ---

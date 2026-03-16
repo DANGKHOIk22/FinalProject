@@ -25,6 +25,9 @@ def get_extraction_prompt_template() -> ChatPromptTemplate:
 
         To be noted, if you can determine only one team, please assign the team to team1 and leave team2 as 'unknown'. If any information is missing or uncertain, write 'unknown'. You have to use the exactly same name of teams as provided in the input text. Do not output any other words.
         For other attributes, if any information is missing or uncertain, write 'unknown'. As for date, you should record in the form of xxxx-xx-xx if you can get the clear date; Meanwhile, as for year, month, day, you need capture as more information point to this game as possible, including year, month, and day, and record them in numbers.
+        
+        {format_instructions}
+        
         The sentence is: "{question}"
         """
         )

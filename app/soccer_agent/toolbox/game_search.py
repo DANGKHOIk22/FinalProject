@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 from langchain.tools import BaseTool
 from langchain_qwq import ChatQwQ
 from langchain_core.callbacks import CallbackManagerForToolRun
+from langchain_core.output_parsers import PydanticOutputParser
 
 # Import config và prompts từ project của bạn
 from app.config.config import PROJECT_PATH, DEFAULT_MODEL
@@ -58,6 +59,9 @@ class GameSearchTool(BaseTool):
             api_key=Settings.DASHSCOPE_API_KEY
         )
         
+        # Khởi tạo parser
+        self.parser = PydanticOutputParser(pydantic_object=MatchInfo)
+        
         # Load dữ liệu CSV
         try:
             if os.path.exists(self.csv_path):
@@ -70,14 +74,12 @@ class GameSearchTool(BaseTool):
             self.df = pd.DataFrame()
 
     def _extract_match_info(self, query: str) -> MatchInfo:
-        """Bước 1: Trích xuất thông tin (Bỏ PydanticOutputParser thừa)."""
+        """Bước 1: Trích xuất thông tin."""
         prompt = get_extraction_prompt_template()
+        format_instructions = self.parser.get_format_instructions()
         
-        # Gemini tự động parse ra object MatchInfo
-        structured_llm = self._llm.with_structured_output(MatchInfo)
-        
-        chain = prompt | structured_llm
-        return chain.invoke({"question": query})
+        chain = prompt | self._llm | self.parser
+        return chain.invoke({"question": query, "format_instructions": format_instructions})
 
     def _retrieve_candidates(self, info: MatchInfo):
         """Bước 2: Lọc dữ liệu Pandas."""
