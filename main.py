@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
             resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']
             mongo_client = pymongo.MongoClient(mongo_srv, server_api=ServerApi('1'))
             # Test connection
-            mongo_client.admin.command('ping')
+            mongo_client[settings.SOCCER_DB_NAME].command('ping')
             logger.info("✅ MongoDB client initialized and connected successfully")
         else:
             logger.warning("⚠️ MongoDB SRV not configured, skipping MongoDB initialization")
