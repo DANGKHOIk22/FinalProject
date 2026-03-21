@@ -54,17 +54,19 @@ async def lifespan(app: FastAPI):
     try:
         # Initialize database connections
         logger.info("Initializing database connections...")
-        # # MongoDB connection
-        # mongo_srv = settings.MONGO_SRV
-        # if mongo_srv:
-        #     resolver.default_resolver = resolver.Resolver(configure=False)
-        #     resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']
-        #     mongo_client = pymongo.MongoClient(mongo_srv, server_api=ServerApi('1'))
-        #     # Test connection
-        #     mongo_client.admin.command('ping')
-        #     logger.info("✅ MongoDB client initialized and connected successfully")
-        # else:
-        #     logger.warning("⚠️ MongoDB SRV not configured, skipping MongoDB initialization")
+        
+        # MongoDB connection
+        mongo_srv = settings.MONGO_SRV
+        if mongo_srv:
+            resolver.default_resolver = resolver.Resolver(configure=False)
+            resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']
+            mongo_client = pymongo.MongoClient(mongo_srv, server_api=ServerApi('1'))
+            # Test connection
+            mongo_client[settings.SOCCER_DB_NAME].command('ping')
+            logger.info("✅ MongoDB client initialized and connected successfully")
+        else:
+            logger.warning("⚠️ MongoDB SRV not configured, skipping MongoDB initialization")
+        
         # Qdrant connection
         qdrant_url = settings.QDRANT_URL
         qdrant_api_key = settings.QDRANT_API_KEY
