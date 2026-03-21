@@ -4,12 +4,14 @@ from pydantic import BaseModel, Field, PrivateAttr
 
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain.tools import BaseTool, InjectedState
-from langchain_google_genai import ChatGoogleGenerativeAI
+from app.soccer_agent.factory.llm_provider import get_llm
+from typing import Any
 from langsmith import get_current_run_tree
 
 from app.config.config import DEFAULT_MODEL
-from app.toolbox.textual_entity_search import SearchingResult
-from app.prompts.toolbox.textual_retrieval_augment import get_textual_retrieval_augment_prompt_template
+from app.config.settings import Settings
+from app.schema.textual_entity_search import SearchingResult
+from app.soccer_agent.prompts.toolbox.textual_retrieval_augment import get_textual_retrieval_augment_prompt_template
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +28,11 @@ class TextualRetrievalAugmentTool(BaseTool):
     args_schema:Type[BaseModel] = TextualRetrievalAugmentInput # type: ignore
     response_format: Literal['content', 'content_and_artifact'] = 'content_and_artifact'
     
-    _llm: ChatGoogleGenerativeAI = PrivateAttr()
+    _llm: Any = PrivateAttr()
 
     def __init__(self):
         super().__init__()
-        self._llm = ChatGoogleGenerativeAI(
-            model=DEFAULT_MODEL, 
+        self._llm = get_llm(
             temperature=0.5,  
             top_p=0.95
         )

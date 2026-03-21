@@ -2,6 +2,7 @@ import logging
 import os
 import base64
 import requests
+import json
 from datetime import datetime
 
 from typing import Any, Type, Optional, List, Dict, Literal, Tuple
@@ -45,9 +46,7 @@ class SegmentTool(BaseTool):
     
     
     _llm: BaseChatModel = PrivateAttr()
-    _cg_endpoint_uri: Optional[str] = PrivateAttr(default=None)
-    _cg_endpoint_key: Optional[str] = PrivateAttr(default=None)
-    _cg_payload_header: Dict = PrivateAttr(default_factory=dict)
+    _client: Any = PrivateAttr(default=None)
 
     def __init__(self, llm: Optional[BaseChatModel] = None):
         super().__init__()
@@ -55,44 +54,25 @@ class SegmentTool(BaseTool):
         os.makedirs(SEGMENT_IMAGE_FOLDER, exist_ok=True)
     
     def _initialize_endpoint(self):
-        """Initialize GroundingDino endpoint connection."""
-        # Prefer combined CLIP+GroundingDINO endpoint; fallback to legacy GD endpoint
-        self._cg_endpoint_uri = (
-            settings.CLIP_GROUNDINGDINO_ENDPOINT_URI
-            or settings.GROUNDINGDINO_ENDPOINT_URI
+        """Initialize Qwen-VL endpoint via DashScope using OpenAI client."""
+        from openai import OpenAI
+        
+        api_key = settings.DASHSCOPE_API_KEY
+        if not api_key:
+            raise ValueError("DASHSCOPE_API_KEY must be configured in settings")
+        
+        # Initialize OpenAI client with DashScope base URL
+        # dashscope-intl.aliyuncs.com is the international endpoint recommended by Alibaba
+        self._client = OpenAI(
+            api_key=api_key,
+            base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         )
-        self._cg_endpoint_key = (
-            settings.CLIP_GROUNDINGDINO_ENDPOINT_KEY
-            or settings.GROUNDINGDINO_ENDPOINT_KEY
-        )
         
-        if not self._cg_endpoint_uri or not self._cg_endpoint_key:
-            raise ValueError("GroundingDINO/CLIP endpoint URI and key must be configured")
-        
-        self._cg_payload_header = {
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {self._cg_endpoint_key}'
-        }
-        
-        # Test endpoint connectivity
-        try:
-            response = requests.post(
-                url=self._cg_endpoint_uri,
-                headers=self._cg_payload_header,
-                json={"task": "groundingdino", "image": "", "queries": []},
-                timeout=60
-            )
-            # We expect an error for empty payload, but 200/400 means endpoint is reachable
-            if response.status_code in [200, 400]:
-                logger.info("✅ GroundingDino endpoint is reachable")
-            else:
-                logger.warning(f"⚠️  GroundingDino endpoint returned unexpected status: {response.status_code}")
-        except Exception as e:
-            raise ConnectionError(f"Failed to connect to GroundingDino endpoint: {str(e)}")
+        logger.info("✅ Qwen-VL (DashScope International) client initialized via OpenAI SDK")
           
     def _detect_and_segment(self, image_path: str, entities_description: List[str]) -> List[Dict]:
         """
-        Get segmented entities from the query using Azure GroundingDino endpoint.
+        Get segmented entities from the query using Qwen-VL.
 
         Args:
             image_path: Path to the image file.
@@ -102,50 +82,105 @@ class SegmentTool(BaseTool):
         """
         
         try:
+            # 1. Get image dimensions and encode as base64
+            from PIL import Image as PILImage
+            with PILImage.open(image_path) as img:
+                width, height = img.size
+                
             with open(image_path, "rb") as f:
                 image_base64 = base64.b64encode(f.read()).decode("utf-8")
             
-            # Prepare payload
-            payload = {
-                "task": "groundingdino",
-                "image": image_base64,
-                "text_threshold": 0.4,
-                "threshold": 0.4,
-                "queries": [(".").join(entities_description)]  # Group all queries together
-            }
+            system_prompt = (
+                """You are a helpful assistant to detect objects in images. 
+                When asked to detect elements based on a description, 
+                you return a valid JSON object containing bounding boxes for all elements in the form:
+                `[{"bbox_2d": [xmin, ymin, xmax, ymax], "label": "placeholder"}, ...]`. 
+                For example, a valid response could be: 
+                `[{"bbox_2d": [10, 30, 20, 60], "label": "placeholder"}, {"bbox_2d": [40, 15, 52, 27], "label": "placeholder"}]`.
+                """
+            )
             
-            # Call GroundingDino endpoint
-            if not self._cg_endpoint_uri:
-                raise ValueError("GroundingDino endpoint URI not configured")
+            queries = ".".join(entities_description)
+            user_prompt = f"Detect these specific elements based on this description and return bounding boxes: {queries}"
             
-            response = requests.post(
-                url=self._cg_endpoint_uri,
-                headers=self._cg_payload_header,
-                json=payload,
-                timeout=60
+            # Call Qwen-VL via OpenAI client
+            response = self._client.chat.completions.create(
+                model="qwen3-vl-flash-2026-01-22",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": [{"type": "text", "text": system_prompt}]
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
+                            {"type": "text", "text": user_prompt}
+                        ]
+                    }
+                ],
+                temperature=0.1,
+                top_p=0.1,
+                extra_headers={
+                    "X-DashScope-WorkSpace": "" # Optional: specify workspace if needed
+                }
             )
 
-            # Handle response
-            if response.status_code != 200:
-                raise Exception(f"GroundingDino endpoint request failed: {response.status_code} - {response.text}")
-            
+            # Extract response content
             try:
-                response_dict = response.json()
-            except Exception:
-                raise Exception(f"Failed to parse endpoint response as JSON: {response.text}")
+                content_str = response.choices[0].message.content
+                # Clean markdown JSON blocks if present
+                content_str = content_str.strip()
+                if content_str.startswith("```json"):
+                    content_str = content_str[7:]
+                if content_str.startswith("```"):
+                    content_str = content_str[3:]
+                if content_str.endswith("```"):
+                    content_str = content_str[:-3]
+                
+                detected_objects = json.loads(content_str.strip())
+                logger.debug(f"Raw detected objects from Qwen-VL: {detected_objects}")
+            except Exception as e:
+                raw_content = response.choices[0].message.content if hasattr(response, 'choices') else "N/A"
+                logger.error(f"Failed to extract or parse JSON from Qwen-VL response: {str(e)}\nRaw Response Content: {raw_content}")
+                raise Exception(f"Failed to parse model output: {str(e)}")
+
+            if not isinstance(detected_objects, list):
+                logger.warning(f"Expected a list of detected objects, got {type(detected_objects)}. Attempting to wrap in list.")
+                detected_objects = [detected_objects]
+                
+            results_data = []
             
-            if not response_dict.get("success", False):
-                raise Exception(f"GroundingDino endpoint error: {response_dict.get('error', 'Unknown error')}")
-            logger.info(response_dict)
-            results_data = response_dict.get("detections", [])
-            logger.info(f"✅ GroundingDino endpoint response received successfully. Found {len(results_data)} query groups")
-            
-            # results_data is a list of dictionaries, each corresponding to a detected object
-            # Each dictionary contains keys: "box", "score", "label"
-            # "box" is a dictionary for single detection with keys: x_min, y_min, x_max, y_max
-            # "score" is a float for single detection
-            # "label" is a predicted label string which is from the text query
-            
+            # Map Qwen-VL `bbox_2d` output to the expected schema
+            for item in detected_objects:
+                bbox = item.get("bbox_2d")
+                if not bbox or len(bbox) != 4:
+                    logger.warning(f"Skipping undefined bounding box: {item}")
+                    continue
+                    
+                # 3. Scale normalized [0, 1000] coordinates to absolute pixel coordinates
+                # Qwen-VL returns coordinates normalized to 1000
+                x_min_norm, y_min_norm, x_max_norm, y_max_norm = bbox
+                
+                x_min = (x_min_norm / 1000.0) * width
+                y_min = (y_min_norm / 1000.0) * height
+                x_max = (x_max_norm / 1000.0) * width
+                y_max = (y_max_norm / 1000.0) * height
+                
+                label = item.get("label", "extracted_object")
+                
+                results_data.append({
+                    "box": {
+                        "x_min": x_min,
+                        "y_min": y_min,
+                        "x_max": x_max,
+                        "y_max": y_max
+                    },
+                    "score": 1.0, # Dummy high score for Qwen-VL deterministic detections
+                    "label": label
+                })
+
+            logger.info(f"✅ Qwen-VL response received and scaled successfully. Found {len(results_data)} objects")
             return results_data
             
         except Exception as e:
