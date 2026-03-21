@@ -184,7 +184,7 @@ class TextualEntitySearchTool(BaseTool):
                         # Search in database
                         if entity_type == "unknown":
                             filter = { 
-                                "NAME": entity_name,
+                                "NAME": {"$regex": entity_name, "$options": "i"},
                             }
                         else:
                             filter = { 
@@ -193,7 +193,7 @@ class TextualEntitySearchTool(BaseTool):
                                         "ENTITY_TYPE": entity_type,
                                     },
                                     {
-                                        "NAME": entity_name,
+                                        "NAME": {"$regex": entity_name, "$options": "i"},
                                     }
                                 ]# type: ignore
                             }

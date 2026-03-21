@@ -5,7 +5,8 @@ from app.schema.match import Annotation
 from typing import List, Type,Optional, Literal,Annotated, Union
 from pydantic import BaseModel, Field, PrivateAttr
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from app.soccer_agent.factory.llm_provider import get_llm
+from typing import Any
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.callbacks import CallbackManagerForToolRun
@@ -13,8 +14,8 @@ from langchain.tools import InjectedState, BaseTool
 from langsmith import get_current_run_tree
 
 from app.config.settings import Settings
-from app.config.config import PROJECT_PATH, DEFAULT_MODEL, GEMINI_2_5_FLASH_LITE
-from app.prompts.toolbox.game_retrieval import get_game_info_retrieval_prompt_template, get_game_history_retrieval_prompt_template
+from app.config.config import PROJECT_PATH, DEFAULT_MODEL
+from app.soccer_agent.prompts.toolbox.game_retrieval import get_game_info_retrieval_prompt_template, get_game_history_retrieval_prompt_template
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +41,13 @@ class GameInfoRetrievalTool(BaseTool):
     args_schema: Type[BaseModel] = RetrievalInput # type: ignore
     
     project_path: str = PROJECT_PATH
-    _llm: ChatGoogleGenerativeAI = PrivateAttr()
+    _llm: Any = PrivateAttr()
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     def __init__(self):
         super().__init__()
 
-        self._llm = ChatGoogleGenerativeAI(
-            model=DEFAULT_MODEL,
-            temperature=0,
-            google_api_key=Settings.GOOGLE_API_KEY
+        self._llm = get_llm(
+            temperature=0
         )
 
     def _get_match_info_json(self, json_file_path: str) -> str:
@@ -88,7 +87,7 @@ class GameInfoRetrievalTool(BaseTool):
                 "context": match_info_context
             }) # type: ignore
             
-            return response.answer, response.artifact
+            return response.answer, None
         except Exception as e:
             error_msg = f"Error in game_info_retrieval: {str(e)}"
             logger.error(error_msg, exc_info=True)
@@ -115,16 +114,14 @@ class GameHistoryRetrievalTool(BaseTool):
     args_schema: Type[BaseModel] = RetrievalInput # type: ignore
 
     project_path: str = PROJECT_PATH
-    _llm: ChatGoogleGenerativeAI = PrivateAttr()
+    _llm: Any = PrivateAttr()
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
 
     def __init__(self):
         super().__init__()
 
-        self._llm = ChatGoogleGenerativeAI(
-            model=DEFAULT_MODEL, # Dùng flash cho context dài (lịch sử trận đấu thường dài)
-            temperature=0,
-            google_api_key=Settings.GOOGLE_API_KEY
+        self._llm = get_llm(
+            temperature=0
         )
 
     def _transform_match_history_artifact_to_str(self, match_history_artifact: Union[str, List[Annotation]]) -> str:

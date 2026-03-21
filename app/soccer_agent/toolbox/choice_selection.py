@@ -1,13 +1,14 @@
 import logging
 from typing import Any, Type, Literal, Optional, Annotated, Tuple
 from pydantic import BaseModel, PrivateAttr, Field
-from app.prompts.toolbox.choice_selection import get_choice_selection_prompt_template
-from app.config.config import DEFAULT_MODEL, GEMINI_2_5_FLASH_LITE
+from app.soccer_agent.prompts.toolbox.choice_selection import get_choice_selection_prompt_template
+from app.config.config import DEFAULT_MODEL
+from app.config.settings import Settings
 
 from langchain.tools import BaseTool, InjectedState
 from langchain.chat_models import BaseChatModel
 from langchain_core.callbacks import CallbackManagerForToolRun
-from langchain_google_genai import ChatGoogleGenerativeAI
+from app.soccer_agent.factory.llm_provider import get_llm
 from langsmith import get_current_run_tree
 
 logger = logging.getLogger(__name__)
@@ -27,8 +28,7 @@ class ChoiceSelection(BaseTool):
 
     def __init__(self, llm: Optional[BaseChatModel] = None):
         super().__init__()
-        self._llm = llm or ChatGoogleGenerativeAI(
-            model=DEFAULT_MODEL, 
+        self._llm = llm or get_llm(
             temperature=0.5,  
             top_p=0.95
         )

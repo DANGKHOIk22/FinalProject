@@ -11,15 +11,15 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
-from app.memory.chat_history import get_postgres_memory
-from app.memory.conversation_memory import CustomSystemPromptMemory
-from app.prompts.agent import get_planning_prompt_template, get_execution_prompt_template
+from app.soccer_agent.memory.chat_history import get_postgres_memory
+from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
+from app.soccer_agent.prompts.agent import get_planning_prompt_template, get_execution_prompt_template
 from app.config.config import (
     DEFAULT_MODEL, GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
 )
 from app.config.settings import settings
 
-from app.toolbox import (
+from app.soccer_agent.toolbox import (
     textual_entity_search, 
     textual_retrieval_augment, 
     game_history_retrieval, 
@@ -42,6 +42,7 @@ class PlanningOutput(BaseModel):
     """Structured output for tool chain planning."""
     tool_chain: Optional[List[str]] = Field(default=None,description="Ordered list of tools needed to answer the query or None if no tools are needed")
     need_call_tools: Optional[bool] = Field(default=True, description="Indicates whether tool calls are necessary")
+    claried_query: str = Field(default="", description="Clarified query after resolving pronouns and checking conversation history. If don't need, return the same query.")    
 
 # Define the state structure for the agent
 class AgentState(TypedDict):
@@ -102,7 +103,7 @@ class SoccerAgent:
             "entity_recognition": entity_recognition(),
             "choice_selection": choice_selection(),
             "segment": segment(),
-            "frame_selection": frame_selection(),
+            # "frame_selection": frame_selection(),
             "commentary_generation": commentary_generation(),
         }
 
@@ -476,10 +477,10 @@ class SoccerAgent:
         finally:
             # Always cleanup connection
             try:
-                self.cleanup(connection=connection, pool=pool, session_id=session_id)
+                await self.cleanup(connection=connection, pool=pool, session_id=session_id)
                 logging.debug("✅ ChatAgent connection cleaned up")
             except Exception as cleanup_error:
-                logging.error(f"❌ ChatAgent cleanup error: {cleanup_error}")        
+                logging.error(f"❌ ChatAgent cleanup error: {cleanup_error}")
 
         # Return the final response content from execution agent. That is the generated answer to user query based on all tool calls.
         return result["tool_node_messages"][-1].text # Using .text ínstead of .content for AIMessage because Gemini 3 series models will always return a list of content blocks to capture thought signatures.
