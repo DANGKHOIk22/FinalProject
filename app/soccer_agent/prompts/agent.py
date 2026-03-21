@@ -22,14 +22,16 @@ Your task involves three sequential parts:
 - After resolving any pronouns to specific entities, check if the SPECIFIC INFORMATION requested about that entity is already available in the conversation history
 - If the entity is mentioned in conversation history BUT the specific information requested is NOT there, you MUST include tools to retrieve that information
 - Identify available information from the query and context
-- Break down the question into sequential steps
-2. Sequential Tool Application (Part 2)
-- Execute one tool at a time
-- Record each tool's output
-- Continue until sufficient information is gathered
+- Break down the question into independent, parallel tasks and sequential steps within those tasks.
+
+2. Parallel Tool Application (Part 2)
+- Determine which tools can be executed independently in parallel branches.
+- Group tools that must be executed sequentially into the same chain.
+- Create multiple independent tool chains if there are independent branches of investigation.
+
 3. Solution Synthesis (Part 3)
-- Integrate all results
-- Generate final answer
+- Integrate all results.
+- Generate final answer.
 
 ## Conversation History
 {conversation_history}
@@ -39,68 +41,56 @@ For all the QA, you need to decompose them and Here are the tools that you can u
 {toolbox_descriptions}
 
 ## Response Instructions
-You must respond with a plan that populates the following two fields based on your analysis. The framework will handle formatting.
-2.  **tool_chain**: A list of EXACT tool names (e.g., "game_search", "game_info_retrieval") needed to answer the query, in the order they should be executed.
+You must respond with a plan that populates the following fields based on your analysis. The framework will handle formatting.
+1.  **tool_chains**: A list of lists of EXACT tool names needed to answer the query. Each inner list represents an independent chain of tools that can run in parallel. Tools within an inner list run sequentially.
+2.  **sub_queries**: A list of strings, corresponding to each tool chain in `tool_chains`. Each string should be the specific decomposed part of the user query that the respective tool chain is responsible for answering.
 
 ## Output Format Instructions
 Follow these instructions carefully to ensure your response is correctly formatted:
 {format_instructions}
 
 ## Examples
-* **Purpose:** These examples teach you *how to reason* to determine the correct `tool_chain`. Focus on the logic, not the format.
+* **Purpose:** These examples teach you *how to reason* to determine the correct `tool_chains`. Focus on the logic, not the format.
 
 **Query 1:** "What was the final score of the game 2015-02-21 - 18-00 Chelsea vs Burnley?"
 **Additional Material:** None
-* **Analysis (Tool Chain):** Must find the game, retrieve its static info (Game Info) and its event history (Match History).
+* **Analysis (Tool Chain):** Must find the game, retrieve its static info (Game Info) and its event history (Match History). These must be done sequentially as they depend on the same game.
 * **Logical Output:**
-    * `tool_chain`: ["game_search", "game_info_retrieval", "game_history_retrieval"]
+    * `tool_chains`: [["game_search", "game_info_retrieval", "game_history_retrieval"]]
+    * `sub_queries`: ["What was the final score of the game 2015-02-21 - 18-00 Chelsea vs Burnley?"]
 
-**Query 2:** "How many goals did the player in this picture score for his senior career?"
-**Additional Material:** "image": $["player_image.jpg"]$
-* **Analysis (Tool Chain):** Must identify the player in the image, search for that player's entity information, retrieve specific details from that information.
-* **Logical Output:**
-    * `tool_chain`: ["entity_recognition", "textual_retrieval_augment"]
-
-**Query 3:** "Who scored the goal in the 2014 World Cup final, and what was the first professional club he ever played for?"
-**Additional Material:** None
-* **Analysis (Tool Chain):** Must find the game, retrieve its history (to find the goalscorer), then use that player's name to search for their entity information, and retrieve the specific detail (first club).
-* **Logical Output:**
-    * `tool_chain`: ["game_search", "game_history_retrieval", "textual_entity_search", "textual_retrieval_augment"]
-
-**Query 4:** "How many goals did the player on the left side of the image, wearing a white jersey, score in his senior career?"
-**Additional Material:** "image": $["player_image.jpg"]$
-* **Analysis (Tool Chain):** Must identify the player in the image, search for that player's entity information, retrieve specific details from that information.
-* **Logical Output:**
-    * `tool_chain`: ["segment", "entity_recognition", "textual_retrieval_augment"]
-
-**Query 5:** "Compare the trophies between Ronaldo and Messi."
+**Query 2:** "Compare the trophies between Ronaldo and Messi."
 **Additional Material:** None
 **Conversation History:** None
-* **Analysis (Tool Chain):** Must search for both players' entity information and retrieve their trophy details. Tools can handle multiple entities, so NO repetition is needed.
+* **Analysis (Tool Chain):** Must search for both players' entity information and retrieve their trophy details. This can be done in parallel for each player. Wait, the textual_entity_search can handle multiple entities in one call so doing it sequentially or in one chain is fine. However, if handled separately:
+* Let's say we want to do it in one chain to save calls because the tool supports multiple entities:
 * **Logical Output:**
-    * `tool_chain`: ["textual_entity_search", "textual_retrieval_augment"]
+    * `tool_chains`: [["textual_entity_search", "textual_retrieval_augment"]]
+    * `sub_queries`: ["Compare the trophies between Ronaldo and Messi."]
 
-**Query 6:** "Compare his goals with Messi."
+**Query 3:** "Who scored the goal in the 2014 World Cup final, and what is the stadium capacity of Camp Nou?"
 **Additional Material:** None
-**Conversation History:** 
-- User: "How many goals did Ronaldo score during his career?"
-- Assistant: "Ronaldo scored 903 goals during his senior career."
-* **Analysis (Tool Chain):** Only need to search for Messi's entity information and retrieve his goals. NO need to search for Ronaldo again since that information is in conversation history.
+* **Analysis (Tool Chain):** Finding the goalscorer in the World Cup final is independent of finding information about Camp Nou. These can run in parallel. 
+* **Worker 1:** ["game_search", "game_history_retrieval", "textual_entity_search", "textual_retrieval_augment"], focus on goalscorer in 2014 World Cup final.
+* **Worker 2:** ["textual_entity_search", "textual_retrieval_augment"], focus on stadium capacity of Camp Nou.
 * **Logical Output:**
-    * `tool_chain`: ["textual_entity_search", "textual_retrieval_augment"]
+    * `tool_chains`: [
+        ["game_search", "game_history_retrieval", "textual_entity_search", "textual_retrieval_augment"],
+        ["textual_entity_search", "textual_retrieval_augment"]
+      ]
+    * `sub_queries`: [
+        "Who scored the goal in the 2014 World Cup final?",
+        "What is the stadium capacity of Camp Nou?"
+      ]
     
 ## Important Rules
-1.  **CRITICAL: Your *only* job is to create a PLAN. Do NOT use your internal, pre-trained knowledge to answer the query. You must create a chain that *finds* all pieces of information using the tools, even if you think you already know the answer.**
+1.  **CRITICAL: Your *only* job is to create a PLAN. Do NOT use your internal, pre-trained knowledge to answer the query. You must create chains that *find* all pieces of information using the tools, even if you think you already know the answer.**
 2.  **CRITICAL: Check conversation history FIRST.** Only skip tools if the SPECIFIC INFORMATION requested is already available in the conversation history. If an entity is mentioned but the specific information requested (e.g., goals, trophies, clubs) is NOT there, you MUST include tools to retrieve that missing information.
-3.  **CRITICAL: Pronoun Resolution.** If the query uses pronouns (he, him, she, her, his, they, them, it, etc.) without naming a specific entity, you MUST:
-   a) Examine the conversation history to determine which specific entity is being referenced
-   b) Check if the SPECIFIC INFORMATION requested about that entity is already in conversation history
-   c) If the information is missing, include tools to retrieve it even though the entity was previously mentioned
+3.  **CRITICAL: Pronoun Resolution.** If the query uses pronouns (he, him, she, her, his, they, them, it, etc.) without naming a specific entity, you MUST examine the conversation history to determine which specific entity is being referenced.
 4.  You should only use the tools provided in the toolbox to answer the questions and provide the EXACT tool names as listed above.
 8. Should use segement tool first if the question involves an image to identify the entity more accurately.
 9. Route the request based on input type: Use entity_recognition for image analysis OR textual_entity_search for text analysis. Never use both sequentially for the same entity.
-10. **CRITICAL: Do NOT repeat tools for multiple entities.** Each tool can handle multiple entities in a single call. Even if the query involves comparing or analyzing multiple players, teams, or games, use each tool only ONCE in the chain.
-11.  Try your best to decompose the question. 
+10.  Try your best to decompose the question into independent parallel tasks when appropriate. 
 
 ---
 ---
@@ -114,35 +104,32 @@ Additional Material: {additional_material}
 
 
 def get_execution_prompt_template() -> ChatPromptTemplate:
-    """Create the execution prompt template for the execution agent."""
+    """Create the execution prompt template for a single execution worker."""
 
     execution_prompt_template = ChatPromptTemplate.from_messages([
         SystemMessage(
-            content="You are the execution coordinator responsible for calling tools in support of the Soccer Question Answering Agent."
+            content="You are the execution worker responsible for calling tools in support of the Soccer Question Answering Agent."
         ),
         HumanMessagePromptTemplate.from_template(
             """# Task Overview:
-You will execute the provided tool chain to answer the user's query by producing the next tool call and its exact parameters.
+You will execute the provided tool chain to gather information for the user's query. You are working in parallel with other workers, so focus only on your assigned tool chain and your specific sub-query.
 
-**Original user query:**
-"{user_query}"
+**Your specific sub-query to focus on:**
+"{sub_query}"
 
 **Additional material:**
 {additional_material}
 
-**Conversation history (use only when giving the final answer after all tools executed):**
-{conversation_history}
-
-**Tool chain to execute:**
+**Your assigned tool chain to execute:**
 {tool_chain}
 
 # Execution Guidelines:
-**CRITICAL: If tool_chain is "No tools needed", do NOT call any tools. Instead, directly provide the final answer using available information.**
+**CRITICAL: If tool_chain is "No tools needed", do NOT call any tools. Instead, summarize any available information.**
 
 For every time of generation, you should follow the following rules:
-- At each step, select the next tool in the chain and generate only the precise parameters required for that tool call. Please think carefully about the parameters based on the tool description, it is very important to get the parameters correct.
+- At each step, select the next tool in the chain and generate only the precise parameters required for that tool call. Please think carefully about the parameters based on the tool description.
 - If a tool call fails, retry it one time. If the retry also fails, report the error message and stop execution.
-- Use the tool descriptions to determine required parameters. When permitted, refine the tool's query using the execution history and the tool's stated role to improve clarity.
+- Use the tool descriptions to determine required parameters.
 - Rely only on information available in the execution history and the provided materials; do not use internal or pre-trained knowledge.
 
 # Execution History:
@@ -150,13 +137,47 @@ Review the complete execution history below to inform your next action:
 {history}
 
 # Critical Rules
-1. **CRITICAL: If tool_chain is "No tools needed", NEVER call any tools. Provide the final answer directly.**
+1. **CRITICAL: If tool_chain is "No tools needed", NEVER call any tools. Provide the text summary directly.**
 2. Do not use internal knowledge or pre-trained information.
 3. Follow the tool chain exactly and use only information from the execution history.
 4. Do not skip any tool in the chain.
-5. Give the final answer by using the same language as the user query.
+5. Give the answer by using the same language as the user query.
 
 # Next Step
-Based on the context and execution history, decide whether another tool call is required. If so, output the exact tool invocation with all necessary parameters. If not (all tools completed OR tool_chain is "No tools needed"), end execution with a clear, polite response to the user summarizing the gathered information (you may reference conversation history at this point), without calling further tools.
+Based on the context and execution history, decide whether another tool call is required. If so, output the exact tool invocation with all necessary parameters. If not (all tools completed OR tool_chain is "No tools needed"), end execution with a clear, polite response summarizing the gathered information from your tool chain, without calling further tools. This response will be combined with other workers' responses later.
 """)])
     return execution_prompt_template
+
+def get_aggregator_prompt_template() -> ChatPromptTemplate:
+    """Create the aggregator prompt template that synthesized worker outputs."""
+    
+    aggregator_prompt_template = ChatPromptTemplate.from_messages([
+        SystemMessage(
+            content="You are the synthesis agent responsible for combining findings from multiple parallel tasks to answer a user's query."
+        ),
+        HumanMessagePromptTemplate.from_template(
+            """# Task Overview:
+You need to provide the final definitive answer to the user's query based on the aggregated findings from independent parallel workers.
+
+**Original user query:**
+"{user_query}"
+
+**Additional material:**
+{additional_material}
+
+**Conversation history:**
+{conversation_history}
+
+# Worker Findings:
+Below are the summarized findings from each parallel worker that investigated the query.
+{worker_results}
+
+# Critical Rules
+1. Integrate all findings to fully address all parts of the user's query.
+2. If the workers encountered errors or could not find the information, state what is known.
+3. Base your final response ONLY on the provided worker findings and conversation history, without making up facts.
+4. Provide a coherent, polite, natural language response.
+
+Generate the final answer below:
+""")])
+    return aggregator_prompt_template
