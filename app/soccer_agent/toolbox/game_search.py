@@ -4,7 +4,8 @@ import pandas as pd
 from typing import Type, Optional, Literal, Tuple
 from pydantic import BaseModel, Field, PrivateAttr
 from langchain.tools import BaseTool
-from langchain_qwq import ChatQwQ
+from app.soccer_agent.factory.llm_provider import get_llm
+from typing import Any
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.output_parsers import PydanticOutputParser
 
@@ -45,7 +46,8 @@ class GameSearchTool(BaseTool):
     # Các thuộc tính nội bộ
     project_path: str = PROJECT_PATH
     csv_path: str = ""
-    _llm: ChatQwQ = PrivateAttr()
+    _llm: Any = PrivateAttr()
+    _parser: PydanticOutputParser = PrivateAttr()
     df: pd.DataFrame = None
 
     def __init__(self):
@@ -53,14 +55,12 @@ class GameSearchTool(BaseTool):
         self.csv_path = os.path.join(self.project_path, "app", "database", "game_database.csv")
         
         # Khởi tạo LLM
-        self._llm = ChatQwQ(
-            model=DEFAULT_MODEL, 
-            temperature=0,
-            api_key=Settings.DASHSCOPE_API_KEY
+        self._llm = get_llm(
+            temperature=0
         )
         
         # Khởi tạo parser
-        self.parser = PydanticOutputParser(pydantic_object=MatchInfo)
+        self._parser = PydanticOutputParser(pydantic_object=MatchInfo)
         
         # Load dữ liệu CSV
         try:
@@ -76,9 +76,9 @@ class GameSearchTool(BaseTool):
     def _extract_match_info(self, query: str) -> MatchInfo:
         """Bước 1: Trích xuất thông tin."""
         prompt = get_extraction_prompt_template()
-        format_instructions = self.parser.get_format_instructions()
+        format_instructions = self._parser.get_format_instructions()
         
-        chain = prompt | self._llm | self.parser
+        chain = prompt | self._llm | self._parser
         return chain.invoke({"question": query, "format_instructions": format_instructions})
 
     def _retrieve_candidates(self, info: MatchInfo):

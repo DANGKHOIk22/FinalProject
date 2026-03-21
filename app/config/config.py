@@ -12,7 +12,7 @@ GEMINI_2_5_FLASH = "gemini-2.5-flash"
 GEMINI_2_5_FLASH_LITE = "gemini-2.5-flash-lite"
 
 # Backwards-compatible default model
-DEFAULT_MODEL = "qwen3.5-flash"
+DEFAULT_MODEL = GEMINI_2_5_FLASH
 MODEL_TEMPERATURE = 0.2
 MODEL_TOP_P = 0.95
 MAX_COMPLETION_TOKENS = 8000

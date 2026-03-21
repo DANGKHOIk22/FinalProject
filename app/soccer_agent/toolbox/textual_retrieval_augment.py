@@ -4,7 +4,8 @@ from pydantic import BaseModel, Field, PrivateAttr
 
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain.tools import BaseTool, InjectedState
-from langchain_qwq import ChatQwQ
+from app.soccer_agent.factory.llm_provider import get_llm
+from typing import Any
 from langsmith import get_current_run_tree
 
 from app.config.config import DEFAULT_MODEL
@@ -27,15 +28,13 @@ class TextualRetrievalAugmentTool(BaseTool):
     args_schema:Type[BaseModel] = TextualRetrievalAugmentInput # type: ignore
     response_format: Literal['content', 'content_and_artifact'] = 'content_and_artifact'
     
-    _llm: ChatQwQ = PrivateAttr()
+    _llm: Any = PrivateAttr()
 
     def __init__(self):
         super().__init__()
-        self._llm = ChatQwQ(
-            model=DEFAULT_MODEL, 
+        self._llm = get_llm(
             temperature=0.5,  
-            top_p=0.95,
-            api_key=Settings.DASHSCOPE_API_KEY
+            top_p=0.95
         )
 
     def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, None]:

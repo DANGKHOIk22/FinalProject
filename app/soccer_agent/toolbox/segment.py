@@ -46,9 +46,7 @@ class SegmentTool(BaseTool):
     
     
     _llm: BaseChatModel = PrivateAttr()
-    _cg_endpoint_uri: Optional[str] = PrivateAttr(default=None)
-    _cg_endpoint_key: Optional[str] = PrivateAttr(default=None)
-    _cg_payload_header: Dict = PrivateAttr(default_factory=dict)
+    _client: Any = PrivateAttr(default=None)
 
     def __init__(self, llm: Optional[BaseChatModel] = None):
         super().__init__()
@@ -56,21 +54,21 @@ class SegmentTool(BaseTool):
         os.makedirs(SEGMENT_IMAGE_FOLDER, exist_ok=True)
     
     def _initialize_endpoint(self):
-        """Initialize Qwen-VL endpoint via DashScope."""
-        self._cg_endpoint_uri = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-        self._cg_endpoint_key = settings.DASHSCOPE_API_KEY
+        """Initialize Qwen-VL endpoint via DashScope using OpenAI client."""
+        from openai import OpenAI
         
-        if not self._cg_endpoint_key:
+        api_key = settings.DASHSCOPE_API_KEY
+        if not api_key:
             raise ValueError("DASHSCOPE_API_KEY must be configured in settings")
         
-        self._cg_payload_header = {
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {self._cg_endpoint_key}'
-        }
+        # Initialize OpenAI client with DashScope base URL
+        # dashscope-intl.aliyuncs.com is the international endpoint recommended by Alibaba
+        self._client = OpenAI(
+            api_key=api_key,
+            base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        )
         
-        # Test endpoint connectivity is somewhat trickier for open-ended prompt models,
-        # but the actual request will validate the API Key. For fast boot, we only log init.
-        logger.info("✅ Qwen-VL (DashScope) endpoint initialized")
+        logger.info("✅ Qwen-VL (DashScope International) client initialized via OpenAI SDK")
           
     def _detect_and_segment(self, image_path: str, entities_description: List[str]) -> List[Dict]:
         """
@@ -84,6 +82,11 @@ class SegmentTool(BaseTool):
         """
         
         try:
+            # 1. Get image dimensions and encode as base64
+            from PIL import Image as PILImage
+            with PILImage.open(image_path) as img:
+                width, height = img.size
+                
             with open(image_path, "rb") as f:
                 image_base64 = base64.b64encode(f.read()).decode("utf-8")
             
@@ -100,10 +103,10 @@ class SegmentTool(BaseTool):
             queries = ".".join(entities_description)
             user_prompt = f"Detect these specific elements based on this description and return bounding boxes: {queries}"
             
-            # Prepare payload for DashScope Qwen-VL compatible request
-            payload = {
-                "model": "qwen3-vl-flash-2026-01-22",
-                "messages": [
+            # Call Qwen-VL via OpenAI client
+            response = self._client.chat.completions.create(
+                model="qwen3-vl-flash-2026-01-22",
+                messages=[
                     {
                         "role": "system",
                         "content": [{"type": "text", "text": system_prompt}]
@@ -116,27 +119,16 @@ class SegmentTool(BaseTool):
                         ]
                     }
                 ],
-                "temperature": 0.1,  # Lower temperature for more deterministic output
-                "top_p": 0.1,
-            }
-            
-            response = requests.post(
-                url=self._cg_endpoint_uri,
-                headers=self._cg_payload_header,
-                json=payload,
-                timeout=60
+                temperature=0.1,
+                top_p=0.1,
+                extra_headers={
+                    "X-DashScope-WorkSpace": "" # Optional: specify workspace if needed
+                }
             )
 
-            if response.status_code != 200:
-                raise Exception(f"Qwen-VL request failed: {response.status_code} - {response.text}")
-            
+            # Extract response content
             try:
-                response_dict = response.json()
-            except Exception:
-                raise Exception(f"Failed to parse Qwen-VL response as JSON: {response.text}")
-            
-            try:
-                content_str = response_dict["choices"][0]["message"]["content"]
+                content_str = response.choices[0].message.content
                 # Clean markdown JSON blocks if present
                 content_str = content_str.strip()
                 if content_str.startswith("```json"):
@@ -147,8 +139,10 @@ class SegmentTool(BaseTool):
                     content_str = content_str[:-3]
                 
                 detected_objects = json.loads(content_str.strip())
+                logger.debug(f"Raw detected objects from Qwen-VL: {detected_objects}")
             except Exception as e:
-                logger.error(f"Failed to extract or parse JSON from Qwen-VL response: {str(e)}\nRaw Response: {response_dict.get('choices', [{}])[0].get('message', {}).get('content', '')}")
+                raw_content = response.choices[0].message.content if hasattr(response, 'choices') else "N/A"
+                logger.error(f"Failed to extract or parse JSON from Qwen-VL response: {str(e)}\nRaw Response Content: {raw_content}")
                 raise Exception(f"Failed to parse model output: {str(e)}")
 
             if not isinstance(detected_objects, list):
@@ -164,7 +158,15 @@ class SegmentTool(BaseTool):
                     logger.warning(f"Skipping undefined bounding box: {item}")
                     continue
                     
-                x_min, y_min, x_max, y_max = bbox
+                # 3. Scale normalized [0, 1000] coordinates to absolute pixel coordinates
+                # Qwen-VL returns coordinates normalized to 1000
+                x_min_norm, y_min_norm, x_max_norm, y_max_norm = bbox
+                
+                x_min = (x_min_norm / 1000.0) * width
+                y_min = (y_min_norm / 1000.0) * height
+                x_max = (x_max_norm / 1000.0) * width
+                y_max = (y_max_norm / 1000.0) * height
+                
                 label = item.get("label", "extracted_object")
                 
                 results_data.append({
@@ -178,7 +180,7 @@ class SegmentTool(BaseTool):
                     "label": label
                 })
 
-            logger.info(f"✅ Qwen-VL response received successfully. Found {len(results_data)} objects")
+            logger.info(f"✅ Qwen-VL response received and scaled successfully. Found {len(results_data)} objects")
             return results_data
             
         except Exception as e:

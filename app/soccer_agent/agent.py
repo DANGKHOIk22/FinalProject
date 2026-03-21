@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from typing import TypedDict, List, Optional, Callable
 from pydantic import BaseModel, Field
 
-from langchain_qwq import ChatQwQ
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.messages import ToolMessage, ToolCall, AIMessage
 from langgraph.graph import StateGraph, END
@@ -15,12 +15,12 @@ from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
 from app.soccer_agent.prompts.agent import get_planning_prompt_template, get_execution_prompt_template
 from app.config.config import (
-    DEFAULT_MODEL, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
+    DEFAULT_MODEL, GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
 )
 from app.config.settings import settings
 
 from app.soccer_agent.toolbox import (
-    textual_entity_search,
+    textual_entity_search, 
     textual_retrieval_augment, 
     game_history_retrieval, 
     game_info_retrieval, 
@@ -41,7 +41,8 @@ logger = logging.getLogger(__name__)
 class PlanningOutput(BaseModel):
     """Structured output for tool chain planning."""
     tool_chain: Optional[List[str]] = Field(default=None,description="Ordered list of tools needed to answer the query or None if no tools are needed")
-    need_call_tools: bool = Field(default=True, description="Indicates whether tool calls are necessary")
+    need_call_tools: Optional[bool] = Field(default=True, description="Indicates whether tool calls are necessary")
+    claried_query: str = Field(default="", description="Clarified query after resolving pronouns and checking conversation history. If don't need, return the same query.")    
 
 # Define the state structure for the agent
 class AgentState(TypedDict):
@@ -71,19 +72,23 @@ class SoccerAgent:
         Args:
             model_name: The LLM model to use (default from config)
         """
-        self.planning_llm = ChatQwQ(
+        self.planning_llm = ChatGoogleGenerativeAI(
             model=model_name if model_name else DEFAULT_MODEL, 
-            api_key=settings.DASHSCOPE_API_KEY,
+            api_key=settings.GOOGLE_API_KEY,
             temperature=MODEL_TEMPERATURE, 
             top_p=MODEL_TOP_P,
-            max_tokens=MAX_COMPLETION_TOKENS
+            max_output_tokens=MAX_COMPLETION_TOKENS,
+            thinking_budget=3000,
+            include_thoughts=True #type: ignore
         )
-        self.execution_llm = ChatQwQ(
+        self.execution_llm = ChatGoogleGenerativeAI(
             model=model_name if model_name else DEFAULT_MODEL,
-            api_key=settings.DASHSCOPE_API_KEY,
+            api_key=settings.GOOGLE_API_KEY,
             temperature=MODEL_TEMPERATURE,
             top_p=MODEL_TOP_P,
-            max_tokens=MAX_COMPLETION_TOKENS
+            max_output_tokens=MAX_COMPLETION_TOKENS,
+            thinking_budget=4000,
+            include_thoughts=True #type: ignore
         )
         self.planning_parser = PydanticOutputParser(pydantic_object=PlanningOutput)
 
@@ -95,9 +100,9 @@ class SoccerAgent:
             "game_search": game_search(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
-            # "entity_recognition": entity_recognition(),
+            "entity_recognition": entity_recognition(),
             "choice_selection": choice_selection(),
-            # "segment": segment(),
+            "segment": segment(),
             # "frame_selection": frame_selection(),
             "commentary_generation": commentary_generation(),
         }
@@ -164,21 +169,21 @@ class SoccerAgent:
         format_instructions = self.planning_parser.get_format_instructions()
         
         planning_agent_prompt_template = get_planning_prompt_template()
-        
-        # Get LLM response
-        chain = planning_agent_prompt_template | self.planning_llm | self.planning_parser
-        planning_output: PlanningOutput = chain.invoke({
+        planning_agent_prompt = planning_agent_prompt_template.invoke({
             "toolbox_descriptions": tool_descriptions,
             "format_instructions": format_instructions,
             "user_query": state["user_query"],
             "additional_material": additional_material,
             "conversation_history": conversation_history
         })
-        logger.debug(f"🤖 Response from Planning Agent: {planning_output}")
-        # response_text = response.content[1] if isinstance(response.content, list) and len(response.content) > 1 else response.content # The content may contain thought signatures, so we extract the main response.
+
+        # Get LLM response
+        response = self.planning_llm.invoke(planning_agent_prompt)
+        logger.debug(f"🤖 Response from Planning Agent: {response}")
+        response_text = response.content[1] if isinstance(response.content, list) and len(response.content) > 1 else response.content # The content may contain thought signatures, so we extract the main response.
         
-        # # Parse with PydanticOutputParser
-        # planning_output: PlanningOutput = self.planning_parser.parse(response_text)
+        # Parse with PydanticOutputParser
+        planning_output: PlanningOutput = self.planning_parser.parse(response_text)
         
         logger.info("Tool Chain Planning Results:")
         logger.info(f"\t Tool Chain: {planning_output.tool_chain}")
@@ -475,7 +480,7 @@ class SoccerAgent:
                 await self.cleanup(connection=connection, pool=pool, session_id=session_id)
                 logging.debug("✅ ChatAgent connection cleaned up")
             except Exception as cleanup_error:
-                logging.error(f"❌ ChatAgent cleanup error: {cleanup_error}")        
+                logging.error(f"❌ ChatAgent cleanup error: {cleanup_error}")
 
         # Return the final response content from execution agent. That is the generated answer to user query based on all tool calls.
         return result["tool_node_messages"][-1].text # Using .text ínstead of .content for AIMessage because Gemini 3 series models will always return a list of content blocks to capture thought signatures.

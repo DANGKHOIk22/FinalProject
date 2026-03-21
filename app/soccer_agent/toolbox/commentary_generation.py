@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain_qwq import ChatQwQ
+from app.soccer_agent.factory.llm_provider import get_llm
 from langsmith import get_current_run_tree
 
 from app.config.config import DEFAULT_MODEL
@@ -52,15 +52,13 @@ class CommentaryGenerationTool(BaseTool):
     args_schema: Type[BaseModel] = CommentaryGenerationInput  # type: ignore
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
 
-    _vlm: ChatQwQ = PrivateAttr()
+    _vlm: Any = PrivateAttr()
 
     def __init__(self):
         super().__init__()
-        self._vlm = ChatQwQ(
-            model=DEFAULT_MODEL,
+        self._vlm = get_llm(
             temperature=1.0,
-            top_p=0.95,
-            api_key=Settings.DASHSCOPE_API_KEY
+            top_p=0.95
         )
 
     def _run(

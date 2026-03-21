@@ -8,7 +8,7 @@ from app.config.settings import Settings
 from langchain.tools import BaseTool, InjectedState
 from langchain.chat_models import BaseChatModel
 from langchain_core.callbacks import CallbackManagerForToolRun
-from langchain_qwq import ChatQwQ
+from app.soccer_agent.factory.llm_provider import get_llm
 from langsmith import get_current_run_tree
 
 logger = logging.getLogger(__name__)
@@ -28,11 +28,9 @@ class ChoiceSelection(BaseTool):
 
     def __init__(self, llm: Optional[BaseChatModel] = None):
         super().__init__()
-        self._llm = llm or ChatQwQ(
-            model=DEFAULT_MODEL, 
+        self._llm = llm or get_llm(
             temperature=0.5,  
-            top_p=0.95,
-            api_key=Settings.DASHSCOPE_API_KEY
+            top_p=0.95
         )
 
     def _run(self, query: str, open_ended_answer: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun]) -> Tuple[str, None]:
