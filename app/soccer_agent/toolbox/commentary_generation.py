@@ -11,7 +11,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from app.soccer_agent.factory.llm_provider import get_llm
 from langsmith import get_current_run_tree
 
-from app.config.config import DEFAULT_MODEL
+from app.config.config import GEMINI_2_0_FLASH_LITE
 from app.config.settings import Settings
 from app.soccer_agent.prompts.toolbox.commentary_generation import get_commentary_generation_prompt_template
 from app.schema.match import Annotation
@@ -57,8 +57,9 @@ class CommentaryGenerationTool(BaseTool):
     def __init__(self):
         super().__init__()
         self._vlm = get_llm(
-            temperature=1.0,
-            top_p=0.95
+            temperature=0.5,
+            top_p=0.95,
+            model=GEMINI_2_0_FLASH_LITE,
         )
 
     def _run(

@@ -185,7 +185,7 @@ class AzureMLDeepFaceDeployment:
         return cache_dir.parent  # Return .deepface parent directory    
     def _authenticate(self) -> None:
         """Authenticate with Azure ML workspace."""
-        load_dotenv()
+        load_dotenv(override=True)
         
         # Get credentials
         tenant_id = os.getenv("AZURE_TENANT_ID")

@@ -18,7 +18,7 @@ from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
 from app.soccer_agent.prompts.agent import get_planning_prompt_template, get_execution_prompt_template,get_aggregator_prompt_template
 from app.config.config import (
-    DEFAULT_MODEL, GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
+    DEFAULT_MODEL,GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
 )
 from app.config.settings import settings
 
@@ -90,7 +90,7 @@ class SoccerAgent:
             model_name: The LLM model to use (default from config)
         """
         self.planning_llm = ChatGoogleGenerativeAI(
-            model=model_name if model_name else DEFAULT_MODEL, 
+            model=GEMINI_2_5_FLASH, 
             api_key=settings.GOOGLE_API_KEY,
             temperature=MODEL_TEMPERATURE, 
             top_p=MODEL_TOP_P,
@@ -99,7 +99,7 @@ class SoccerAgent:
             include_thoughts=True #type: ignore
         )
         self.execution_llm = ChatGoogleGenerativeAI(
-            model=model_name if model_name else DEFAULT_MODEL,
+            model=GEMINI_2_5_FLASH_LITE,
             api_key=settings.GOOGLE_API_KEY,
             temperature=MODEL_TEMPERATURE,
             top_p=MODEL_TOP_P,
@@ -254,13 +254,21 @@ class SoccerAgent:
         logger.info("="*70)
 
         # Use structured output directly
-        return {"tool_chains": planning_output.tool_chains or [], "sub_queries": planning_output.sub_queries or []}
+        return {
+            "tool_chains": planning_output.tool_chains or [],
+            "sub_queries": planning_output.sub_queries or [],
+            "need_call_tools": planning_output.need_call_tools if planning_output.need_call_tools is not None else True,
+        }
         
     def _trigger_workers(self, state: AgentState):
         """Map worker executions for each parallel tool chain."""
         tool_chains = state.get("tool_chains", [])
         sub_queries = state.get("sub_queries") or []
-        if not tool_chains:
+        need_call_tools = state.get("need_call_tools", True)
+        
+        # Short-circuit to aggregator if planner says no tools needed, or no chains provided
+        if not need_call_tools or not tool_chains:
+            logger.info(f"⏭️ Skipping workers (need_call_tools={need_call_tools}, tool_chains={tool_chains}). Going straight to aggregator.")
             return "aggregator_node"
             
         sends = []
@@ -325,9 +333,11 @@ class SoccerAgent:
         logger.info(f"Tool chain to execute: {' -> '.join(tool_chain) if tool_chain else 'No tools needed'}")
 
 
+        # 🔴 Fix: initialize to None so it's always bound, even if invoke() throws
+        response: AIMessage = None  # type: ignore
         try:
-            # Invoke the model with the tool 
-            response: AIMessage = self.execution_llm_with_tools.invoke(execution_prompt) # type: ignore
+            # Invoke the model with the tool
+            response = self.execution_llm_with_tools.invoke(execution_prompt) # type: ignore
             logger.info(f"🤖 Response from execution agent: \n \t Response content: {response.text} \n \t Tool Calls: {response.tool_calls}")
             tool_node_messages = [response] # Add the message to tool_node_messages for tool_node if there is no tool call the should_or_continue node will end execution
             
@@ -355,10 +365,15 @@ class SoccerAgent:
             "last_tool_artifact": last_artifact
         }
         
-        if not response.tool_calls:
+        # 🔴 Fix: use getattr to safely check response.tool_calls (response may be None after an exception)
+        if not getattr(response, 'tool_calls', None):
             logger.info("✅ TOOL EXECUTION STEP COMPLETED FOR CHAIN")
             logger.info("="*70)
-            base_state["parallel_results"] = [response.text] if hasattr(response, 'text') else [response.content]
+            if response is not None:
+                result_text = getattr(response, 'text', None) or response.content
+            else:
+                result_text = "Worker stopped due to execution error."
+            base_state["parallel_results"] = [result_text]
 
         return base_state
     
@@ -579,20 +594,47 @@ class SoccerAgent:
             logger.info("Run completed successfully")
             if memory_object:
                 try:
-                    # Extract the final response text
-                    final_response = result["final_response"]
+                    # Extract the final response text from aggregator (NOT tool_node_messages[-1])
+                    # 🟡 Fix: final_response is the aggregated synthesis from _aggregator_node, not the last worker message
+                    final_response = final_state.get("final_response", "No response generated")
+                    
+                    # Build a lookup: tool_call_id -> tool_name from tool_calls_history
+                    # ToolMessage only has `tool_call_id`, NOT the tool name
+                    # The tool name lives in ToolCall (from tool_calls_history)
+                    call_id_to_name = {
+                        call.get("id"): call.get("name", "unknown_tool")
+                        for call in final_state.get("tool_calls_history", [])
+                    }
+                    
+                    history_parts = []
+                    if final_state.get('tool_results_history'):
+                        history_parts.append("### Tool Executions:")
+                        for tool_msg in final_state['tool_results_history']:
+                            # Resolve tool name via tool_call_id
+                            tool_name = call_id_to_name.get(tool_msg.tool_call_id, "unknown_tool")
+                            artifact = tool_msg.artifact  # None if not a content_and_artifact tool
+                            history_parts.append(f"<TOOL_NAME>{tool_name}</TOOL_NAME>")
+                            history_parts.append(f"<TOOL_RESULT>{tool_msg.content}</TOOL_RESULT>")
+                            if artifact is not None:
+                                history_parts.append(f"<TOOL_ARTIFACT>{artifact}</TOOL_ARTIFACT>")
+                        
+                    history_parts.append("\n### Final Response:")
+                    history_parts.append(final_response)
+                    
+                    history_state_str = "\n".join(history_parts)
+
                     memory_object.save_context(
                         inputs={"input": request.user_query},  # Save original query, not formatted prompt
-                        outputs={"output": final_response}  # Save the final response as string
+                        outputs={"output": history_state_str}  # Save as a string format
                     )
                 except Exception as e:
                     logging.warning(f"Failed to save memory for session {session_id}: {e}")
 
-            logging.info("\n✓ Request processed successfully!\n")
+            logging.info("\n✓ Save memory successfully!\n")
 
         except Exception as e:
-            logging.error(f"Error describing DataFrame: {e}", exc_info=True)
-            return "✗ Unable to create description for this data."
+            logging.error(f"Error save memory: {e}", exc_info=True)
+            return "✗ Unable to save memory for this data."
         finally:
             # Always cleanup connection
             try:

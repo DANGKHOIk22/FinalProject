@@ -10,7 +10,7 @@ TEMPORARY_DIR = os.path.join(PROJECT_PATH, "temporary")
 # Canonical model name constants
 GEMINI_2_5_FLASH = "gemini-2.5-flash"
 GEMINI_2_5_FLASH_LITE = "gemini-2.5-flash-lite"
-
+GEMINI_2_0_FLASH_LITE = "gemini-2.0-flash-lite"
 # Backwards-compatible default model
 DEFAULT_MODEL = GEMINI_2_5_FLASH
 MODEL_TEMPERATURE = 0.2
