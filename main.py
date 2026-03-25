@@ -4,6 +4,7 @@ import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from langfuse import get_client
 
 import pymongo
 from pymongo.server_api import ServerApi
@@ -124,6 +125,10 @@ async def lifespan(app: FastAPI):
     mongo_client = None
     qdrant_client = None
     
+    langfuse_client = get_client()
+    langfuse_client.flush()
+    logger.info("✅ Langfuse traces flushed successfully")
+
     logger.info("✅ Cleanup completed")
 
 # --- 2. Khởi tạo FastAPI App ---
