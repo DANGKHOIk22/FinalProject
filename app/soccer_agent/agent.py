@@ -5,10 +5,13 @@ from dotenv import load_dotenv
 from typing import TypedDict, List, Optional, Callable, Annotated, Any
 import operator
 from pydantic import BaseModel, Field
+from langfuse import get_client, observe
+from langfuse.langchain import CallbackHandler
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.messages import ToolMessage, ToolCall, AIMessage
+from langchain_core.tools import BaseTool
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
@@ -38,7 +41,7 @@ from app.schema.chat import ChatRequest
 
 # Configure logging
 logger = logging.getLogger(__name__)
-
+langfuse_client = get_client()
 
 # Structured output models for LLM responses
 class PlanningOutput(BaseModel):
@@ -111,7 +114,7 @@ class SoccerAgent:
 
         
         # Tool mapping dictionary using LangChain @tool decorated functions
-        self.tool_registry: dict[str, Callable] = {
+        self.tool_registry: dict[str, BaseTool] = {
             "textual_entity_search": textual_entity_search(),
             "textual_retrieval_augment": textual_retrieval_augment(),
             "game_search": game_search(),
@@ -125,7 +128,7 @@ class SoccerAgent:
         }
 
         # List of all tools
-        self.tools = list(self.tool_registry.values())
+        self.tools: List[BaseTool] = list(self.tool_registry.values())
         self.execution_llm_with_tools = self.execution_llm.bind_tools(self.tools) 
         
         self.worker_graph = self._build_worker_graph()
@@ -174,11 +177,36 @@ class SoccerAgent:
         
         return workflow.compile()
     
+    @observe(name="worker_node", as_type="span", capture_input=True)
     async def _worker_node(self, state: WorkerState) -> dict:
-        """Wrapper for worker_graph to prevent InvalidUpdateError on non-reducible keys and enforce timeout."""
+        """
+        Wrapper for worker_graph with proper timeout and Langfuse tracing.
+        
+        Key: Callback cleanup happens in the task's context (where it started),
+        timeout wrapper only manages task lifecycle - avoiding OpenTelemetry context errors.
+        """
         try:
-            # Enforce a 120-second timeout for the worker execution
-            result = await asyncio.wait_for(self.worker_graph.ainvoke(state), timeout=120.0)
+            async def worker_execution():
+                # Initialize handler inside the task's context
+                langfuse_handler = CallbackHandler()
+                
+                return await asyncio.wait_for(
+                    self.worker_graph.ainvoke(
+                        state,
+                        config={
+                            "callbacks": [langfuse_handler],
+                            "metadata": {
+                                "sub_query": state.get("sub_query", "")[:100],
+                                "tool_chain": ", ".join(state.get("tool_chain", [])),
+                                "worker_id": id(state)
+                            }
+                        }
+                    ),
+                    timeout=120.0
+                )
+        
+            result = await worker_execution()
+            
             return {
                 "parallel_results": result.get("parallel_results", []),
                 "tool_calls_history": result.get("tool_calls_history", []),
@@ -196,7 +224,7 @@ class SoccerAgent:
             }
         except Exception as e:
             error_msg = f"[Error] Worker for sub-query '{state.get('sub_query', 'unknown')}' failed with error: {str(e)}"
-            logger.error(error_msg)
+            logger.error(error_msg, exc_info=True)
             return {
                 "parallel_results": [error_msg],
                 "tool_calls_history": [],
@@ -214,50 +242,78 @@ class SoccerAgent:
         Returns:
             Updated state with parsed tool_chain
         """
-        logger.info("="*70)
-        logger.info("🧠 Starting TOOL CHAIN PLANNING STEP")
-        additional_material_list = state.get("additional_material")
-        # Format List[str] to string for prompt
-        additional_material = ", ".join(additional_material_list) if additional_material_list else "None"
         
-        # Get conversation history from state
-        conversation_history = state.get("conversation_history", "No previous conversation.")
-        
-        # Build tool descriptions
-        tool_descriptions = ""
-        for tool in self.tools:
-            tool_descriptions += f"- {tool.name}: {tool.description}\n"
-        
-        # Get format instructions
-        format_instructions = self.planning_parser.get_format_instructions()
-        
-        planning_agent_prompt_template = get_planning_prompt_template()
-        planning_agent_prompt = planning_agent_prompt_template.invoke({
-            "toolbox_descriptions": tool_descriptions,
-            "format_instructions": format_instructions,
-            "user_query": state["user_query"],
-            "additional_material": additional_material,
-            "conversation_history": conversation_history
-        })
+        with langfuse_client.start_as_current_observation(as_type="span", name="tool_chain_planning") as root_span:
+            logger.info("="*70)
+            logger.info("🧠 Starting TOOL CHAIN PLANNING STEP")
+            additional_material_list = state.get("additional_material")
+            additional_material = ", ".join(additional_material_list) if additional_material_list else "None"
+            conversation_history = state.get("conversation_history", "No previous conversation.")
+            
+            # Create prompt for planning agent
+            with root_span.start_as_current_observation(as_type="span", name="create_prompt") as prompt_span:
+                tool_descriptions = ""
+                for tool in self.tools:
+                    tool_descriptions += f"- {tool.name}: {tool.description}\n"
+                
+                format_instructions = self.planning_parser.get_format_instructions()
+                planning_agent_prompt_template = get_planning_prompt_template()
+                planning_agent_prompt = planning_agent_prompt_template.invoke({
+                    "toolbox_descriptions": tool_descriptions,
+                    "format_instructions": format_instructions,
+                    "user_query": state["user_query"],
+                    "additional_material": additional_material,
+                    "conversation_history": conversation_history
+                })
+                
+                prompt_span.update(
+                    output={"planning_prompt": planning_agent_prompt},
+                    metadata={"user_query": state["user_query"][:100]}
+                )
+            
+            # Call the planning model to get the tool chain
+            langfuse_handler = CallbackHandler()
+            response = self.planning_llm.invoke(
+                planning_agent_prompt,
+                config={
+                    "callbacks": [langfuse_handler],
+                    "metadata": {
+                        "user_query": state["user_query"][:100],
+                        "model_step": "planning"
+                    }
+                }
+            )
+            response_text = response.text if hasattr(response, 'text') else str(response)
+                
+            planning_output: PlanningOutput = self.planning_parser.parse(response_text)
+            logger.debug(f"🤖 Response from Planning Agent: {planning_output}")
+            
+            # Update root span with final output
+            root_span.update(
+                output={
+                    "tool_chains": planning_output.tool_chains,
+                    "sub_queries": planning_output.sub_queries
+                }
+            )
+            
+            logger.info("Tool Chain Planning Results:")
+            logger.info(f"\t Tool Chains: {planning_output.tool_chains}")
+            logger.info("✅ TOOL CHAIN PLANNING STEP COMPLETED")
+            logger.info("="*70)
 
-        # Get LLM response
-        response = self.planning_llm.invoke(planning_agent_prompt)
-        logger.debug(f"🤖 Response from Planning Agent: {response}")
-        response_text = response.content[1] if isinstance(response.content, list) and len(response.content) > 1 else response.content # The content may contain thought signatures, so we extract the main response.
-        
-        # Parse with PydanticOutputParser
-        planning_output: PlanningOutput = self.planning_parser.parse(response_text)
-        
-        logger.info("Tool Chain Planning Results:")
-        logger.info(f"\t Tool Chains: {planning_output.tool_chains}")
-        logger.info("✅ TOOL CHAIN PLANNING STEP COMPLETED")
-        logger.info("="*70)
-
-        # Use structured output directly
         return {
+            "user_query": state["user_query"],
+            "additional_material": state.get("additional_material", []),
             "tool_chains": planning_output.tool_chains or [],
             "sub_queries": planning_output.sub_queries or [],
-            "need_call_tools": planning_output.need_call_tools if planning_output.need_call_tools is not None else True,
+            "parallel_results": state.get("parallel_results", []),
+            "tool_calls_history": state.get("tool_calls_history", []),
+            "tool_results_history": state.get("tool_results_history", []),
+            "tool_node_messages": state.get("tool_node_messages", []),
+            "last_tool_artifact": state.get("last_tool_artifact"),
+            "need_call_tools": planning_output.need_call_tools,
+            "conversation_history": state.get("conversation_history", ""),
+            "final_response": state.get("final_response", "")
         }
         
     def _trigger_workers(self, state: AgentState):
@@ -319,8 +375,6 @@ class SoccerAgent:
         
         # Build execution history string and prompt
         history_str = self._build_history_string(tool_calls_history, tool_results_history)
-        
-        
         execution_prompt_template = get_execution_prompt_template()
         execution_prompt = execution_prompt_template.invoke({
             "sub_query": sub_query,
@@ -329,7 +383,6 @@ class SoccerAgent:
             "history": history_str,
             
         })
-        
         logger.info(f"Tool chain to execute: {' -> '.join(tool_chain) if tool_chain else 'No tools needed'}")
 
 
@@ -353,7 +406,8 @@ class SoccerAgent:
             error_msg = f"Error in tool execution agent: {str(e)}"
             logger.error(error_msg)
             logger.info("Stopping execution due to error.")
-            tool_node_messages = [AIMessage(content="The execution has been stopped due to an error. Please try again later.")]
+            response = AIMessage(content="The execution has been stopped due to an error. Please try again later.")
+            tool_node_messages = [response] 
         
         # Update state
         base_state = {
@@ -379,34 +433,60 @@ class SoccerAgent:
     
     def _aggregator_node(self, state: AgentState) -> dict:
         """Aggregate results from parallel executions and provide the final response."""
-        logger.info("="*70)
-        logger.info("🧠 Starting AGGREGATOR STEP")
-        
-        additional_material_list = state.get("additional_material", [])
-        additional_material = ", ".join(additional_material_list) if additional_material_list else "None"
-        conversation_history = state.get("conversation_history", "No previous conversation.")
-        
-        results = state.get("parallel_results", [])
-        if results:
-            worker_results_str = "\n".join([f"Worker {i+1} finding:\n{r}\n" for i, r in enumerate(results)])
-        else:
-            worker_results_str = "No tools were executed."
+        with langfuse_client.start_as_current_observation(as_type="span", name="aggregator") as root_span:
+            logger.info("="*70)
+            logger.info("🧠 Starting AGGREGATOR STEP")
             
-        aggregator_prompt_template = get_aggregator_prompt_template()
-        aggregator_prompt = aggregator_prompt_template.invoke({
-            "user_query": state["user_query"],
-            "additional_material": additional_material,
-            "conversation_history": conversation_history,
-            "worker_results": worker_results_str
-        })
-        
-        response = self.execution_llm.invoke(aggregator_prompt)
-        final_text = response.content[1] if isinstance(response.content, list) and len(response.content) > 1 else response.content
-        
-        logger.info("✅ AGGREGATOR STEP COMPLETED")
-        logger.info("="*70)
-        
-        return {"final_response": final_text}
+            additional_material_list = state.get("additional_material", [])
+            additional_material = ", ".join(additional_material_list) if additional_material_list else "None"
+            conversation_history = state.get("conversation_history", "No previous conversation.")
+            root_span.update(input={
+                "additional_material": additional_material,
+                "conversation_history": conversation_history
+            })
+
+            results = state.get("parallel_results", [])
+            if results:
+                worker_results_str = "\n".join([f"Worker {i+1} finding:\n{r}\n" for i, r in enumerate(results)])
+            else:
+                worker_results_str = "No tools were executed."
+            
+            # Prepare the aggregation context for the prompt
+            with root_span.start_as_current_observation(as_type="span", name="prepare_aggregation_context") as prep_span:
+                prep_span.update(
+                    output={
+                        "worker_results_str": worker_results_str,  
+                        "num_results": len(results),
+                        "has_results": len(results) > 0
+                    }
+                )
+            
+                aggregator_prompt_template = get_aggregator_prompt_template()
+                aggregator_prompt = aggregator_prompt_template.invoke({
+                    "user_query": state["user_query"],
+                    "additional_material": additional_material,
+                    "conversation_history": conversation_history,
+                    "worker_results": worker_results_str
+                })
+                prep_span.update(output={"aggregator_prompt": aggregator_prompt})
+                
+            langfuse_handler = CallbackHandler()
+            response = self.execution_llm.invoke(
+                aggregator_prompt,
+                config={
+                    "callbacks": [langfuse_handler],
+                    "metadata": {
+                        "user_query": state["user_query"][:100],
+                        "num_worker_results": len(results),
+                        "model_step": "aggregation"
+                    }
+                }
+            )
+            final_text = response.text if hasattr(response, 'text') else str(response)
+            logger.info("✅ AGGREGATOR STEP COMPLETED")
+            logger.info("="*70)
+            
+            return {"final_response": final_text}
     
     def should_continue_call_tool(self, state: WorkerState):
         """
@@ -475,6 +555,7 @@ class SoccerAgent:
             max_history=15,  # Limit to last 15 messages
         )
         return memory_object, connection, pool
+    
     async def cleanup(self, connection, pool, session_id: str):
         """
         Cleanup database connection and return to pool.
@@ -528,123 +609,109 @@ class SoccerAgent:
             request: The ChatRequest object containing user_query and additional_material
             
         Returns:
-            Dictionary containing complete results from planning and execution
+            Final response from the agent
         """
-        try:
-            logger.info(f"Starting run for query: {request.user_query[:100]}...")
-            # Initialize memory variables
+        session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, request.user_id))
+        
+        with langfuse_client.start_as_current_observation(
+            as_type="chain", 
+            name="soccer_agent_request"
+        ) as root_trace:
+            root_trace.update(input={"user_query": request.user_query})
+            
             connection = None
             pool = None
             memory_object = None
-            chat_history = None
-            session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, request.user_id))
-
-            # Load conversation history if session_id provided
-            if session_id:
-                try:
-                    memory_object, connection, pool = await self.get_memory(session_id=session_id)
-                    try:
-                        history = memory_object.load_memory_variables({})
-                        chat_history = history.get("history")
-                    except Exception as e:
-                        logging.warning(f"Memory load failed for session {session_id}: {e}")
-                        chat_history = None
-                except Exception as e:
-                    logging.warning(f"Failed to obtain memory for session {session_id}: {e}")
-                    memory_object = None
-
-            # Format conversation history into string
-            history_text = ""
-            if chat_history:
-                history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
-                for msg in chat_history[-10:]:  # Last 10 messages only
-                    if hasattr(msg, 'content'):
-                        role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
-                        history_text += f"{role}: {msg.content}\n"
-            logger.info(f"-----------------------------------history: {history_text} .")
-            # Initialize state
-            initial_state = {
-                "user_query": request.user_query,
-                "additional_material": request.additional_material or [],
-                "tool_chains": [],
-                "sub_queries": [],
-                "tool_calls_history": [],
-                "tool_results_history": [],
-                "tool_node_messages": [],
-                "last_tool_artifact": None,
-                "conversation_history": history_text,
-                "parallel_results": [],
-                "need_call_tools": True
-            }
             
-            # Run the full graph (planning → execution)
-            final_state = await self.graph.ainvoke(initial_state)
-            
-            # Prepare the complete results
-            result = {
-                "user_query": request.user_query,
-                "tool_chains": final_state.get("tool_chains", []),
-                "planning_raw_response": final_state.get("planning_raw_response", ""),
-                "tool_calls_history": final_state.get("tool_calls_history", []),
-                "tool_results_history": final_state.get("tool_results_history", []),
-                "tool_node_messages": final_state.get("tool_node_messages", []),
-                "last_tool_artifact": final_state.get("last_tool_artifact", None),
-                "final_response": final_state.get("final_response", "No response generated")
-            }
-            logger.info("Run completed successfully")
-            if memory_object:
-                try:
-                    # Extract the final response text from aggregator (NOT tool_node_messages[-1])
-                    # 🟡 Fix: final_response is the aggregated synthesis from _aggregator_node, not the last worker message
-                    final_response = final_state.get("final_response", "No response generated")
-                    
-                    # Build a lookup: tool_call_id -> tool_name from tool_calls_history
-                    # ToolMessage only has `tool_call_id`, NOT the tool name
-                    # The tool name lives in ToolCall (from tool_calls_history)
-                    call_id_to_name = {
-                        call.get("id"): call.get("name", "unknown_tool")
-                        for call in final_state.get("tool_calls_history", [])
-                    }
-                    
-                    history_parts = []
-                    if final_state.get('tool_results_history'):
-                        history_parts.append("### Tool Executions:")
-                        for tool_msg in final_state['tool_results_history']:
-                            # Resolve tool name via tool_call_id
-                            tool_name = call_id_to_name.get(tool_msg.tool_call_id, "unknown_tool")
-                            artifact = tool_msg.artifact  # None if not a content_and_artifact tool
-                            history_parts.append(f"<TOOL_NAME>{tool_name}</TOOL_NAME>")
-                            history_parts.append(f"<TOOL_RESULT>{tool_msg.content}</TOOL_RESULT>")
-                            if artifact is not None:
-                                history_parts.append(f"<TOOL_ARTIFACT>{artifact}</TOOL_ARTIFACT>")
-                        
-                    history_parts.append("\n### Final Response:")
-                    history_parts.append(final_response)
-                    
-                    history_state_str = "\n".join(history_parts)
-
-                    memory_object.save_context(
-                        inputs={"input": request.user_query},  # Save original query, not formatted prompt
-                        outputs={"output": history_state_str}  # Save as a string format
-                    )
-                except Exception as e:
-                    logging.warning(f"Failed to save memory for session {session_id}: {e}")
-
-            logging.info("\n✓ Save memory successfully!\n")
-
-        except Exception as e:
-            logging.error(f"Error save memory: {e}", exc_info=True)
-            return "✗ Unable to save memory for this data."
-        finally:
-            # Always cleanup connection
             try:
-                await self.cleanup(connection=connection, pool=pool, session_id=session_id)
-                logging.debug("✅ ChatAgent connection cleaned up")
-            except Exception as cleanup_error:
-                logging.error(f"❌ ChatAgent cleanup error: {cleanup_error}")
+                logger.info(f"Starting run for query: {request.user_query[:100]}...")
+                
+                # Load conversation history
+                with root_trace.start_as_current_observation(as_type="span", name="load_memory") as mem_span:
+                    chat_history = None
+                    if session_id:
+                        try:
+                            memory_object, connection, pool = await self.get_memory(session_id=session_id)
+                            try:
+                                history = memory_object.load_memory_variables({})
+                                chat_history = history.get("history")
+                                mem_span.update(output={"memory_loaded": True, "history_length": len(chat_history) if chat_history else 0})
+                            except Exception as e:
+                                logging.warning(f"Memory load failed for session {session_id}: {e}")
+                                mem_span.update(output={"memory_loaded": False, "error": str(e)})
+                        except Exception as e:
+                            logging.warning(f"Failed to obtain memory for session {session_id}: {e}")
+                            mem_span.update(output={"memory_loaded": False, "error": str(e)})
 
-        # Return the final response content from execution agent.
-        return result["final_response"]
+                # Format conversation history
+                history_text = ""
+                if chat_history:
+                    history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
+                    for msg in chat_history[-10:]:
+                        if hasattr(msg, 'content'):
+                            role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
+                            history_text += f"{role}: {msg.content}\n"
+                
+                initial_state = {
+                    "user_query": request.user_query,
+                    "additional_material": request.additional_material or [],
+                    "tool_chains": [],
+                    "sub_queries": [],
+                    "tool_calls_history": [],
+                    "tool_results_history": [],
+                    "tool_node_messages": [],
+                    "last_tool_artifact": None,
+                    "conversation_history": history_text,
+                    "parallel_results": [],
+                    "need_call_tools": True
+                }
+                logger.info("State initialized")
+                
+                # Execute the graph with the initial state
+                with root_trace.start_as_current_observation(as_type="span", name="execute_langgraph") as graph_span:
+                    graph_span.update(input={"initial_state": {k: (v if k != "additional_material" else "List[str]") for k, v in initial_state.items()}})
+                    final_state = await self.graph.ainvoke(initial_state)
+                    graph_span.update(
+                        output={
+                            "final_response": final_state.get("final_response", "No response generated"),
+                        }
+                    )
+                    logger.info("Graph execution completed")
+
+                result = {
+                    "user_query": request.user_query,
+                    "tool_chains": final_state.get("tool_chains", []),
+                    "tool_calls_history": final_state.get("tool_calls_history", []),
+                    "tool_results_history": final_state.get("tool_results_history", []),
+                    "final_response": final_state.get("final_response", "No response generated")
+                }
+
+                
+                if memory_object:
+                    try:
+                        final_response = result["final_response"]
+                        memory_object.save_context(
+                            inputs={"input": request.user_query},
+                            outputs={"output": final_response}
+                        )
+                    except Exception as e:
+                        logging.warning(f"Failed to save memory for session {session_id}: {e}")
+                logger.info("Run completed successfully")
+
+                root_trace.update(output={"final_response": result["final_response"]})
+                return result["final_response"]
+
+            except Exception as e:
+                logging.error(f"Error in agent execution: {e}", exc_info=True)
+                root_trace.update(output={"error": str(e)}, level="ERROR")
+                return f"✗ Error: {str(e)}"
+            finally:
+                # Cleanup connection
+                try:
+                    await self.cleanup(connection=connection, pool=pool, session_id=session_id)
+                    logging.debug("✅ ChatAgent connection cleaned up")
+                except Exception as cleanup_error:
+                    logging.error(f"❌ ChatAgent cleanup error: {cleanup_error}")
 
 # Do NOT create singleton here - it will be created in main.py lifespan
 # agent_service = SoccerAgent()
