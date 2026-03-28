@@ -120,7 +120,7 @@ class SoccerAgent:
             "game_search": game_search(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
-            "entity_recognition": entity_recognition(),
+            # "entity_recognition": entity_recognition(),
             "choice_selection": choice_selection(),
             "segment": segment(),
             # "frame_selection": frame_selection(),
@@ -505,6 +505,38 @@ class SoccerAgent:
         else:
             return "continue"
     
+    def _build_tool_summary_for_memory(
+        self,
+        tool_calls_history: List[ToolCall],
+        tool_results_history: List[ToolMessage],
+        final_response: str
+    ) -> str:
+        """
+        Build a structured string combining tool call details and final response
+        to be saved into conversation memory for a single chat turn.
+
+        Each tool entry includes: tool_name, input args, response content, and artifact (if any).
+        """
+        if not tool_calls_history:
+            return final_response
+
+        parts = ["[Tool Usage]"]
+        for i, tool_call in enumerate(tool_calls_history):
+            tool_name = tool_call.get("name", "unknown")
+            args = tool_call.get("args", {})
+            args_str = ", ".join(f"{k}={v}" for k, v in args.items())
+            parts.append(f"  Step {i + 1}: {tool_name}({args_str})")
+
+            if i < len(tool_results_history):
+                result_msg: ToolMessage = tool_results_history[i]
+                parts.append(f"    Response: {result_msg.content}")
+                artifact = getattr(result_msg, "artifact", None)
+                if artifact is not None:
+                    parts.append(f"    Artifact: {artifact}")
+
+        parts.append(f"\n[Final Response]\n{final_response}")
+        return "\n".join(parts)
+
     def _build_history_string(self, tool_calls_history: List[ToolCall], tool_results_history: List[ToolMessage]) -> str:
         """
         Build the execution history string for the prompt.
@@ -690,9 +722,14 @@ class SoccerAgent:
                 if memory_object:
                     try:
                         final_response = result["final_response"]
+                        output_with_tools = self._build_tool_summary_for_memory(
+                            tool_calls_history=result.get("tool_calls_history", []),
+                            tool_results_history=result.get("tool_results_history", []),
+                            final_response=final_response
+                        )
                         memory_object.save_context(
                             inputs={"input": request.user_query},
-                            outputs={"output": final_response}
+                            outputs={"output": output_with_tools}
                         )
                     except Exception as e:
                         logging.warning(f"Failed to save memory for session {session_id}: {e}")
