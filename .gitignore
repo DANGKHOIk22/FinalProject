@@ -238,3 +238,7 @@ __marimo__/
 example_images/
 img/
 *.DS_Store
+*.jpg
+*.png
+*.jpeg
+*.mp4

@@ -10,6 +10,7 @@ from langchain.chat_models import BaseChatModel
 from langchain_core.callbacks import CallbackManagerForToolRun
 from app.soccer_agent.factory.llm_provider import get_llm
 from langsmith import get_current_run_tree
+from app.config.config import GEMINI_2_0_FLASH_LITE
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,8 @@ class ChoiceSelection(BaseTool):
         super().__init__()
         self._llm = llm or get_llm(
             temperature=0.5,  
-            top_p=0.95
+            top_p=0.95,
+            model=GEMINI_2_0_FLASH_LITE,
         )
 
     def _run(self, query: str, open_ended_answer: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun]) -> Tuple[str, None]:

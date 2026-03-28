@@ -6,7 +6,7 @@ import os
 from typing import Optional
 from dotenv import load_dotenv
 from app.config.config import PROJECT_PATH
-load_dotenv()
+load_dotenv(override=True)
 
 class Settings:
     """Application settings loaded from environment variables."""

@@ -44,6 +44,7 @@ For all the QA, you need to decompose them and Here are the tools that you can u
 You must respond with a plan that populates the following fields based on your analysis. The framework will handle formatting.
 1.  **tool_chains**: A list of lists of EXACT tool names needed to answer the query. Each inner list represents an independent chain of tools that can run in parallel. Tools within an inner list run sequentially.
 2.  **sub_queries**: A list of strings, corresponding to each tool chain in `tool_chains`. Each string should be the specific decomposed part of the user query that the respective tool chain is responsible for answering.
+3.  **claried_query**: The user query rewritten with ALL pronouns resolved to their specific entity names using the conversation history. If the query contains no pronouns or no conversation history exists, return the original query unchanged.
 
 ## Output Format Instructions
 Follow these instructions carefully to ensure your response is correctly formatted:

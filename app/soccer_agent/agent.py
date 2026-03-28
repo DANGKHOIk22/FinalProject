@@ -21,7 +21,7 @@ from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
 from app.soccer_agent.prompts.agent import get_planning_prompt_template, get_execution_prompt_template,get_aggregator_prompt_template
 from app.config.config import (
-    DEFAULT_MODEL, GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
+    DEFAULT_MODEL,GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
 )
 from app.config.settings import settings
 
@@ -55,9 +55,10 @@ class PlanningOutput(BaseModel):
 class AgentState(TypedDict):
     """Parent state structure for the planning agent."""
     user_query: str # The user's soccer-related question
+    claried_query: str # User query with pronouns resolved to specific entity names
     additional_material: Optional[List[str]] # Additional material (e.g, image/video related to the user question)
-    tool_chains: List[List[str]] # The planned sequence of tools to execute. 
-    sub_queries: List[str] # The decomposed sub-queries for each worker. 
+    tool_chains: List[List[str]] # The planned sequence of tools to execute.
+    sub_queries: List[str] # The decomposed sub-queries for each worker.
     parallel_results: Annotated[List[str], operator.add] # Aggregated parallel results
     tool_calls_history: Annotated[List[ToolCall], operator.add] # History of tool calls
     tool_results_history: Annotated[List[ToolMessage], operator.add] # History of tool results
@@ -93,7 +94,7 @@ class SoccerAgent:
             model_name: The LLM model to use (default from config)
         """
         self.planning_llm = ChatGoogleGenerativeAI(
-            model=model_name if model_name else DEFAULT_MODEL, 
+            model=GEMINI_2_5_FLASH, 
             api_key=settings.GOOGLE_API_KEY,
             temperature=MODEL_TEMPERATURE, 
             top_p=MODEL_TOP_P,
@@ -102,7 +103,7 @@ class SoccerAgent:
             include_thoughts=True #type: ignore
         )
         self.execution_llm = ChatGoogleGenerativeAI(
-            model=model_name if model_name else DEFAULT_MODEL,
+            model=GEMINI_2_5_FLASH_LITE,
             api_key=settings.GOOGLE_API_KEY,
             temperature=MODEL_TEMPERATURE,
             top_p=MODEL_TOP_P,
@@ -120,7 +121,7 @@ class SoccerAgent:
             "game_search": game_search(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
-            "entity_recognition": entity_recognition(),
+            # "entity_recognition": entity_recognition(),
             "choice_selection": choice_selection(),
             "segment": segment(),
             # "frame_selection": frame_selection(),
@@ -301,8 +302,12 @@ class SoccerAgent:
             logger.info("✅ TOOL CHAIN PLANNING STEP COMPLETED")
             logger.info("="*70)
 
+        claried_query = planning_output.claried_query or state["user_query"]
+        logger.info(f"Clarified query: {claried_query}")
+
         return {
             "user_query": state["user_query"],
+            "claried_query": claried_query,
             "additional_material": state.get("additional_material", []),
             "tool_chains": planning_output.tool_chains or [],
             "sub_queries": planning_output.sub_queries or [],
@@ -320,12 +325,17 @@ class SoccerAgent:
         """Map worker executions for each parallel tool chain."""
         tool_chains = state.get("tool_chains", [])
         sub_queries = state.get("sub_queries") or []
-        if not tool_chains:
+        need_call_tools = state.get("need_call_tools", True)
+        
+        # Short-circuit to aggregator if planner says no tools needed, or no chains provided
+        if not need_call_tools or not tool_chains:
+            logger.info(f"⏭️ Skipping workers (need_call_tools={need_call_tools}, tool_chains={tool_chains}). Going straight to aggregator.")
             return "aggregator_node"
             
+        claried_query = state.get("claried_query") or state["user_query"]
         sends = []
         for idx, chain in enumerate(tool_chains):
-            sub_query = sub_queries[idx] if idx < len(sub_queries) else state["user_query"]
+            sub_query = sub_queries[idx] if idx < len(sub_queries) else claried_query
             worker_state = {
                 "sub_query": sub_query,
                 "additional_material": state.get("additional_material", []),
@@ -381,8 +391,12 @@ class SoccerAgent:
         })
         logger.info(f"Tool chain to execute: {' -> '.join(tool_chain) if tool_chain else 'No tools needed'}")
 
+
+        # 🔴 Fix: initialize to None so it's always bound, even if invoke() throws
+        response: AIMessage = None  # type: ignore
         try:
-            response: AIMessage = self.execution_llm_with_tools.invoke(execution_prompt) # type: ignore
+            # Invoke the model with the tool
+            response = self.execution_llm_with_tools.invoke(execution_prompt) # type: ignore
             logger.info(f"🤖 Response from execution agent: \n \t Response content: {response.text} \n \t Tool Calls: {response.tool_calls}")
             tool_node_messages = [response] # Add the message to tool_node_messages for tool_node if there is no tool call the should_or_continue node will end execution
             
@@ -411,10 +425,15 @@ class SoccerAgent:
             "last_tool_artifact": last_artifact
         }
         
-        if not response.tool_calls:
+        # 🔴 Fix: use getattr to safely check response.tool_calls (response may be None after an exception)
+        if not getattr(response, 'tool_calls', None):
             logger.info("✅ TOOL EXECUTION STEP COMPLETED FOR CHAIN")
             logger.info("="*70)
-            base_state["parallel_results"] = [response.text] if hasattr(response, 'text') else [response.content]
+            if response is not None:
+                result_text = getattr(response, 'text', None) or response.content
+            else:
+                result_text = "Worker stopped due to execution error."
+            base_state["parallel_results"] = [result_text]
 
         return base_state
     
@@ -450,7 +469,7 @@ class SoccerAgent:
             
                 aggregator_prompt_template = get_aggregator_prompt_template()
                 aggregator_prompt = aggregator_prompt_template.invoke({
-                    "user_query": state["user_query"],
+                    "user_query": state.get("claried_query") or state["user_query"],
                     "additional_material": additional_material,
                     "conversation_history": conversation_history,
                     "worker_results": worker_results_str
@@ -492,6 +511,38 @@ class SoccerAgent:
         else:
             return "continue"
     
+    def _build_tool_summary_for_memory(
+        self,
+        tool_calls_history: List[ToolCall],
+        tool_results_history: List[ToolMessage],
+        final_response: str
+    ) -> str:
+        """
+        Build a structured string combining tool call details and final response
+        to be saved into conversation memory for a single chat turn.
+
+        Each tool entry includes: tool_name, input args, response content, and artifact (if any).
+        """
+        if not tool_calls_history:
+            return final_response
+
+        parts = ["[Tool Usage]"]
+        for i, tool_call in enumerate(tool_calls_history):
+            tool_name = tool_call.get("name", "unknown")
+            args = tool_call.get("args", {})
+            args_str = ", ".join(f"{k}={v}" for k, v in args.items())
+            parts.append(f"  Step {i + 1}: {tool_name}({args_str})")
+
+            if i < len(tool_results_history):
+                result_msg: ToolMessage = tool_results_history[i]
+                parts.append(f"    Response: {result_msg.content}")
+                artifact = getattr(result_msg, "artifact", None)
+                if artifact is not None:
+                    parts.append(f"    Artifact: {artifact}")
+
+        parts.append(f"\n[Final Response]\n{final_response}")
+        return "\n".join(parts)
+
     def _build_history_string(self, tool_calls_history: List[ToolCall], tool_results_history: List[ToolMessage]) -> str:
         """
         Build the execution history string for the prompt.
@@ -641,6 +692,7 @@ class SoccerAgent:
                 
                 initial_state = {
                     "user_query": request.user_query,
+                    "claried_query": request.user_query,  # will be overwritten by planning node
                     "additional_material": request.additional_material or [],
                     "tool_chains": [],
                     "sub_queries": [],
@@ -677,9 +729,14 @@ class SoccerAgent:
                 if memory_object:
                     try:
                         final_response = result["final_response"]
+                        output_with_tools = self._build_tool_summary_for_memory(
+                            tool_calls_history=result.get("tool_calls_history", []),
+                            tool_results_history=result.get("tool_results_history", []),
+                            final_response=final_response
+                        )
                         memory_object.save_context(
                             inputs={"input": request.user_query},
-                            outputs={"output": final_response}
+                            outputs={"output": output_with_tools}
                         )
                     except Exception as e:
                         logging.warning(f"Failed to save memory for session {session_id}: {e}")
