@@ -53,21 +53,22 @@ FinalProject/
 The **SoccerAgent** implements a parallel multi-worker architecture using LangGraph:
 
 #### State Management
-- **AgentState**: Parent state containing user query, tool chains, parallel results
+- **AgentState**: Parent state containing user query, `claried_query` (pronoun-resolved query), tool chains, parallel results
 - **WorkerState**: Individual worker state for parallel tool execution
 
 #### Agent Flow
-1. **Planning Node**: Analyzes user query, decomposes into sub-queries, plans tool chains
-2. **Worker Dispatch**: Routes sub-queries to parallel workers
-3. **Execution Workers**: Each executes a tool chain independently
-4. **Aggregator Node**: Combines parallel results into final response
+1. **Planning Node** (`_tool_chain_planning`): Analyzes user query, resolves pronouns → `claried_query`, decomposes into sub-queries, plans tool chains
+2. **Worker Dispatch** (`_trigger_workers`): Routes sub-queries to parallel workers; uses `claried_query` as fallback when no sub_queries
+3. **Execution Workers** (`_execution_node`): Each executes a tool chain independently
+4. **Aggregator Node** (`_aggregator_node`): Combines parallel results into final response; uses `claried_query` as effective user query
 
 #### Key Methods
 - `run(request: ChatRequest)` - Main entry point for processing user queries
-- `planning_node()` - Query decomposition and tool chain planning
-- `worker_node()` - Individual tool chain execution
-- `aggregator_node()` - Result aggregation
-- `router_after_planning()` - Dispatches to workers or direct response
+- `_tool_chain_planning()` - Query decomposition, pronoun resolution, and tool chain planning
+- `_worker_node()` / `_execution_node()` - Individual tool chain execution
+- `_aggregator_node()` - Result aggregation
+- `_trigger_workers()` - Dispatches to workers or direct response
+- `_build_tool_summary_for_memory()` - Formats tool call details (name, args, response, artifact) for saving into conversation memory
 
 ### 2. Toolbox (`app/soccer_agent/toolbox/`)
 
@@ -81,10 +82,10 @@ Available tools for the agent:
 - **game_search**: Search matches by criteria
 
 #### Visual Tools
-- **entity_recognition**: Recognize players/coaches in images (uses DeepFace)
 - **segment**: Segment images to detect objects (uses GroundingDINO)
-- **frame_selection**: Select relevant frames from videos (uses CLIP)
 - **commentary_generation**: Generate commentary from visual analysis
+- ~~**entity_recognition**~~: *Currently disabled* (uses DeepFace) — commented out in `tool_registry`
+- ~~**frame_selection**~~: *Currently disabled* (uses CLIP) — commented out in `tool_registry`
 
 #### Utility Tools
 - **choice_selection**: Select best option from choices
@@ -92,7 +93,8 @@ Available tools for the agent:
 ### 3. Memory System (`app/soccer_agent/memory/`)
 
 - **PostgreSQL Memory**: Stores conversation history with `langchain-postgres`
-- **System Prompt Memory**: Manages conversation context and clarifications
+- **System Prompt Memory** (`CustomSystemPromptMemory`): Manages conversation context and clarifications; trims to last `max_history=15` messages
+- **Tool-enriched history**: Each saved turn includes tool call details (tool name, input args, response content, artifact if any) formatted via `_build_tool_summary_for_memory()`, followed by the final response. This lets future turns see what tools were used and what they returned.
 
 ### 4. API Endpoints (`app/api/`)
 
@@ -288,17 +290,19 @@ print(result["agent_response"])
 
 ## Important Notes for Claude
 
-1. **LangGraph Architecture**: This uses state-based routing with conditional edges. The agent has planning → dispatch → workers → aggregation flow.
+1. **LangGraph Architecture**: State-based routing with conditional edges. Flow: planning → dispatch → workers → aggregation.
 
 2. **Async/Await**: Most operations are async. The agent uses `asyncio` for parallel worker execution.
 
-3. **Tool Calling**: Tools are registered with the LLM, which decides when to call them based on context.
+3. **Tool Calling**: Tools are registered with the LLM via `bind_tools`. The execution LLM decides which tool to call at each step; only one tool is called per generation cycle.
 
-4. **Memory Management**: Conversation history is automatically managed through PostgreSQL checkpointer.
+4. **Memory Management**: Conversation history saved to PostgreSQL via `CustomSystemPromptMemory`. Each turn stores: tool usage summary (name + args + response + artifact per step) + final response as a single assistant message.
 
-5. **Error Handling**: Most errors are caught and logged. Check `logger.error()` calls for debugging.
+5. **Pronoun Resolution (`claried_query`)**: The planning node resolves pronouns in the user query by checking conversation history. The resolved query is stored in `AgentState.claried_query` and used by workers (as sub_query fallback) and the aggregator (as the effective user query). The original `user_query` is preserved for traceability.
 
-6. **Configuration Priority**: Environment variables > `settings.py` > `config.py` defaults
+6. **Error Handling**: Most errors are caught and logged. Check `logger.error()` calls for debugging. Worker timeouts are set to 120 seconds.
+
+7. **Configuration Priority**: Environment variables > `settings.py` > `config.py` defaults
 
 ## Contact & Support
 
@@ -309,6 +313,6 @@ For questions about this codebase, review:
 
 ---
 
-**Last Updated**: March 2026
+**Last Updated**: 2026-03-28
 **Python Version**: 3.11
 **Framework Version**: FastAPI 0.118.2, LangGraph (latest)
