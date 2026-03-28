@@ -55,9 +55,10 @@ class PlanningOutput(BaseModel):
 class AgentState(TypedDict):
     """Parent state structure for the planning agent."""
     user_query: str # The user's soccer-related question
+    claried_query: str # User query with pronouns resolved to specific entity names
     additional_material: Optional[List[str]] # Additional material (e.g, image/video related to the user question)
-    tool_chains: List[List[str]] # The planned sequence of tools to execute. 
-    sub_queries: List[str] # The decomposed sub-queries for each worker. 
+    tool_chains: List[List[str]] # The planned sequence of tools to execute.
+    sub_queries: List[str] # The decomposed sub-queries for each worker.
     parallel_results: Annotated[List[str], operator.add] # Aggregated parallel results
     tool_calls_history: Annotated[List[ToolCall], operator.add] # History of tool calls
     tool_results_history: Annotated[List[ToolMessage], operator.add] # History of tool results
@@ -301,8 +302,12 @@ class SoccerAgent:
             logger.info("✅ TOOL CHAIN PLANNING STEP COMPLETED")
             logger.info("="*70)
 
+        claried_query = planning_output.claried_query or state["user_query"]
+        logger.info(f"Clarified query: {claried_query}")
+
         return {
             "user_query": state["user_query"],
+            "claried_query": claried_query,
             "additional_material": state.get("additional_material", []),
             "tool_chains": planning_output.tool_chains or [],
             "sub_queries": planning_output.sub_queries or [],
@@ -327,9 +332,10 @@ class SoccerAgent:
             logger.info(f"⏭️ Skipping workers (need_call_tools={need_call_tools}, tool_chains={tool_chains}). Going straight to aggregator.")
             return "aggregator_node"
             
+        claried_query = state.get("claried_query") or state["user_query"]
         sends = []
         for idx, chain in enumerate(tool_chains):
-            sub_query = sub_queries[idx] if idx < len(sub_queries) else state["user_query"]
+            sub_query = sub_queries[idx] if idx < len(sub_queries) else claried_query
             worker_state = {
                 "sub_query": sub_query,
                 "additional_material": state.get("additional_material", []),
@@ -463,7 +469,7 @@ class SoccerAgent:
             
                 aggregator_prompt_template = get_aggregator_prompt_template()
                 aggregator_prompt = aggregator_prompt_template.invoke({
-                    "user_query": state["user_query"],
+                    "user_query": state.get("claried_query") or state["user_query"],
                     "additional_material": additional_material,
                     "conversation_history": conversation_history,
                     "worker_results": worker_results_str
@@ -686,6 +692,7 @@ class SoccerAgent:
                 
                 initial_state = {
                     "user_query": request.user_query,
+                    "claried_query": request.user_query,  # will be overwritten by planning node
                     "additional_material": request.additional_material or [],
                     "tool_chains": [],
                     "sub_queries": [],
