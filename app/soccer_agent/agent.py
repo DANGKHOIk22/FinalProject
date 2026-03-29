@@ -434,7 +434,7 @@ class SoccerAgent:
             
             # Cache the successful worker result
             if sub_query:
-                semantic_cache.set(sub_query, final_text)
+                semantic_cache.set(sub_query, final_text, additional_material_list)
 
         return base_state
 
@@ -444,7 +444,8 @@ class SoccerAgent:
         if not sub_query:
             return {}
             
-        cached_result = semantic_cache.check(sub_query)
+        additional_material = state.get("additional_material", [])
+        cached_result = semantic_cache.check(sub_query, additional_material)
         
         if cached_result:
             logger.info("⚡ Skipping worker execution due to cache hit (>0.9 similarity).")
