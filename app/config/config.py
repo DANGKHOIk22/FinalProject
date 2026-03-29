@@ -10,7 +10,7 @@ TEMPORARY_DIR = os.path.join(PROJECT_PATH, "temporary")
 # Canonical model name constants
 GEMINI_2_5_FLASH = "gemini-2.5-flash"
 GEMINI_2_5_FLASH_LITE = "gemini-2.5-flash-lite"
-
+GEMINI_2_0_FLASH_LITE = GEMINI_2_5_FLASH_LITE
 # Backwards-compatible default model
 DEFAULT_MODEL = GEMINI_2_5_FLASH
 MODEL_TEMPERATURE = 0.2
@@ -28,6 +28,10 @@ QDRANT_SEARCH_SCORE_THRESHOLD = 0.5
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 LOG_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 LOG_LEVEL = 'INFO'
+
+# Session Memory
+SESSION_MEMORY_TOKEN_THRESHOLD = 12600  # len(text) // 4 ≈ số token
+SESSION_MEMORY_RECENT_KEEP = 5         # tin nhắn giữ verbatim sau khi vượt ngưỡng
 
 
 

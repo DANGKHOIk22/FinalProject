@@ -8,7 +8,7 @@ from app.soccer_agent.factory.llm_provider import get_llm
 from typing import Any
 from langsmith import get_current_run_tree
 
-from app.config.config import DEFAULT_MODEL
+from app.config.config import GEMINI_2_5_FLASH_LITE
 from app.config.settings import Settings
 from app.schema.textual_entity_search import SearchingResult
 from app.soccer_agent.prompts.toolbox.textual_retrieval_augment import get_textual_retrieval_augment_prompt_template
@@ -34,7 +34,8 @@ class TextualRetrievalAugmentTool(BaseTool):
         super().__init__()
         self._llm = get_llm(
             temperature=0.5,  
-            top_p=0.95
+            top_p=0.95,
+            model=GEMINI_2_5_FLASH_LITE,
         )
 
     def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, None]:

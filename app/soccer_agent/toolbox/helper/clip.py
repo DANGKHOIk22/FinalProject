@@ -4,7 +4,7 @@ import os
 from app.config.config import DEVICE,TEMPORARY_DIR
 from PIL import Image
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 class CLIPHelper:
     def __init__(self, model_name: str = "openai/clip-vit-large-patch14"):

@@ -16,22 +16,16 @@ def get_planning_prompt_template() -> ChatPromptTemplate:
 - You might also receive one or more video clips or images as context
 - You might also receive conversation history showing previous interactions
 
-Your task involves three sequential parts:
+Your task involves two sequential parts:
 1. Problem Decomposition (Part 1)
-- **CRITICAL: If the query uses pronouns (he, him, she, her, his, they, them, it, etc.) instead of specific entity names, you MUST check the conversation history FIRST to identify which specific entity is being referenced.**
-- After resolving any pronouns to specific entities, check if the SPECIFIC INFORMATION requested about that entity is already available in the conversation history
-- If the entity is mentioned in conversation history BUT the specific information requested is NOT there, you MUST include tools to retrieve that information
-- Identify available information from the query and context
-- Break down the question into independent, parallel tasks and sequential steps within those tasks.
+- The query you receive has already been clarified (pronouns resolved, abbreviations expanded). Take it as-is.
+- Check if the SPECIFIC INFORMATION requested is already available in the conversation history.
+- If found in history → set need_call_tools=false. Otherwise, break down the question into independent, parallel tasks and sequential steps.
 
 2. Parallel Tool Application (Part 2)
 - Determine which tools can be executed independently in parallel branches.
 - Group tools that must be executed sequentially into the same chain.
 - Create multiple independent tool chains if there are independent branches of investigation.
-
-3. Solution Synthesis (Part 3)
-- Integrate all results.
-- Generate final answer.
 
 ## Conversation History
 {conversation_history}
@@ -85,12 +79,11 @@ Follow these instructions carefully to ensure your response is correctly formatt
     
 ## Important Rules
 1.  **CRITICAL: Your *only* job is to create a PLAN. Do NOT use your internal, pre-trained knowledge to answer the query. You must create chains that *find* all pieces of information using the tools, even if you think you already know the answer.**
-2.  **CRITICAL: Check conversation history FIRST.** Only skip tools if the SPECIFIC INFORMATION requested is already available in the conversation history. If an entity is mentioned but the specific information requested (e.g., goals, trophies, clubs) is NOT there, you MUST include tools to retrieve that missing information.
-3.  **CRITICAL: Pronoun Resolution.** If the query uses pronouns (he, him, she, her, his, they, them, it, etc.) without naming a specific entity, you MUST examine the conversation history to determine which specific entity is being referenced.
-4.  You should only use the tools provided in the toolbox to answer the questions and provide the EXACT tool names as listed above.
-8. Should use segement tool first if the question involves an image to identify the entity more accurately.
-9. Route the request based on input type: Use entity_recognition for image analysis OR textual_entity_search for text analysis. Never use both sequentially for the same entity.
-10.  Try your best to decompose the question into independent parallel tasks when appropriate. 
+2.  **CRITICAL: Check conversation history FIRST.** Only skip tools (need_call_tools=false) if the SPECIFIC INFORMATION requested is already available in the conversation history. If an entity is mentioned but the specific information requested (e.g., goals, trophies, clubs) is NOT there, you MUST include tools to retrieve that missing information.
+3.  You should only use the tools provided in the toolbox to answer the questions and provide the EXACT tool names as listed above.
+4.  Should use segment tool first if the question involves an image to identify the entity more accurately.
+5.  Route the request based on input type: Use entity_recognition for image analysis OR textual_entity_search for text analysis. Never use both sequentially for the same entity.
+6.  Try your best to decompose the question into independent parallel tasks when appropriate.
 
 ---
 ---
