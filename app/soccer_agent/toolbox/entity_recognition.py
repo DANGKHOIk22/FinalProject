@@ -81,6 +81,9 @@ class EntityRecognitionTool(BaseTool):
             self._qdrant_client = QdrantClient(
                 url=qdrant_url,
                 api_key=qdrant_api_key,
+                prefer_grpc=True,
+                check_compatibility=False,
+                timeout=20
             )
             logger.info("✅ Qdrant client initialized successfully")
         
