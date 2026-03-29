@@ -35,8 +35,9 @@ class SubQuerySemanticCache:
         try:
             result = self.cache.lookup(query, self.llm_string)
             if result and len(result) > 0:
-                logger.info(f"🎯 Semantic cache HIGH SIMILARITY HIT (>0.9) for query: '{query}'")
+                logger.info(f"🎯 Semantic cache HIT for query: '{query}'")
                 return result[0].text
+            logger.info(f"⏳ Semantic cache MISS for query: '{query}'")
         except Exception as e:
             logger.error(f"Semantic cache lookup error: {e}")
         return None

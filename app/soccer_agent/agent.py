@@ -444,7 +444,6 @@ class SoccerAgent:
         if not sub_query:
             return {}
             
-        logger.info(f"🔍 Checking semantic cache for sub-query: {sub_query}")
         cached_result = semantic_cache.check(sub_query)
         
         if cached_result:
