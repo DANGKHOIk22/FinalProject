@@ -12,6 +12,7 @@ from langsmith import get_current_run_tree
 
 from app.schema.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
 from app.schema.textual_entity_search import SoccerEntities, SearchingResult
+from app.cache.standard_cache import standard_cache
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ class TextualEntitySearchInput(BaseModel):
             "List of soccer-related entity names already extracted from the user's question or inferred by previous tools results. "
             "Each item should be a direct name (player, team, venue, referee, coach, club) without extra narration. "
             "Use this tool only after the agent has resolved the names; do not pass raw user questions here."
+            "Remember to capitalize the first letter of each word in the entity names."
         ),
         examples=[
             ["Lionel Messi", "Barcelona"],
@@ -126,6 +128,7 @@ class TextualEntitySearchTool(BaseTool):
         return None
       
     @staticmethod
+    @standard_cache.cache(ttl=60 * 60, validatedModel=SearchingResult)
     def _query_database(soccer_entities: SoccerEntities) -> SearchingResult:
         """
         Query MongoDB database for information on the extracted soccer entities.

@@ -40,4 +40,6 @@ dependencies = [
     "bcrypt>=5.0.0",
     "openai>=2.29.0",
     "dashscope>=1.25.15",
+    "langchain-openai>=1.1.11",
+    "langchain-redis>=0.2.5",
 ]

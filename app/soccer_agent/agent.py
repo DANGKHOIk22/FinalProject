@@ -41,6 +41,7 @@ from app.soccer_agent.toolbox import (
     commentary_generation,
 )
 from app.schema.chat import ChatRequest
+from app.cache.semantic_cache import semantic_cache
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -150,9 +151,22 @@ class SoccerAgent:
         """Build the LangGraph worker workflow."""
         workflow = StateGraph(WorkerState)
         tool_node = ToolNode(self.tools, messages_key="tool_node_messages")
+        
+        workflow.add_node("check_cache_node", self._check_cache_node)
         workflow.add_node("execution_node", self._execution_node)
         workflow.add_node("tool_node", tool_node)
-        workflow.set_entry_point("execution_node")
+        
+        workflow.set_entry_point("check_cache_node")
+        
+        workflow.add_conditional_edges(
+            "check_cache_node",
+            self.should_execute_worker,
+            {
+                "execute": "execution_node",
+                "end": END
+            }
+        )
+        
         workflow.add_conditional_edges(
             "execution_node",
             self.should_continue_call_tool,
@@ -313,8 +327,8 @@ class SoccerAgent:
 
         return {
             "user_query": state["user_query"],
+            "additional_material": sorted(state.get("additional_material") or []),
             "claried_query": state.get("claried_query") or state["user_query"],
-            "additional_material": state.get("additional_material", []),
             "tool_chains": planning_output.tool_chains or [],
             "sub_queries": planning_output.sub_queries or [],
             "parallel_results": state.get("parallel_results", []),
@@ -350,6 +364,7 @@ class SoccerAgent:
                 "tool_results_history": [],
                 "tool_node_messages": [],
                 "last_tool_artifact": None,
+                "parallel_results": []
             }
             sends.append(Send("worker_graph", worker_state))
         return sends
@@ -460,8 +475,32 @@ class SoccerAgent:
             else:
                 result_text = "Worker stopped due to execution error."
             base_state["parallel_results"] = [result_text]
+            if sub_query:
+                semantic_cache.set(sub_query, result_text, additional_material_list)
 
         return base_state
+
+    def _check_cache_node(self, state: WorkerState) -> dict:
+        """Check semantic cache before executing worker."""
+        sub_query = state.get("sub_query")
+        if not sub_query:
+            return {}
+            
+        additional_material = state.get("additional_material", [])
+        cached_result = semantic_cache.check(sub_query, additional_material)
+        
+        if cached_result:
+            logger.info("⚡ Skipping worker execution due to cache hit (>0.9 similarity).")
+            return {
+                "parallel_results": [cached_result]
+            }
+        return {}
+
+    def should_execute_worker(self, state: WorkerState):
+        """If we already have parallel_results from cache hit, skipping worker execution."""
+        if state.get("parallel_results"):
+            return "end"
+        return "execute"
     
     async def _aggregator_node(self, state: AgentState) -> dict:
         """Aggregate results from parallel executions and provide the final response."""
