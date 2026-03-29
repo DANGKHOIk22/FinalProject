@@ -15,7 +15,7 @@ from app.config.config import DEFAULT_MODEL
 from app.config.settings import Settings
 from app.soccer_agent.prompts.toolbox.commentary_generation import get_commentary_generation_prompt_template
 from app.schema.match import Annotation
-from app.cache.exact_cache import exact_cache
+from app.cache.standard_cache import standard_cache
 
 
 class CommentaryGenerationInput(BaseModel):
@@ -93,7 +93,7 @@ class CommentaryGenerationTool(BaseTool):
                 [],
             )
 
-    @exact_cache.cache(ttl=60 * 60, validatedModel=_CommentaryGenerationOutput)
+    @standard_cache.cache(ttl=60 * 60, validatedModel=_CommentaryGenerationOutput)
     def _cached_generate_commentary(self, material: List[str], query: Optional[str] = None) -> _CommentaryGenerationOutput:
         """Internal method to handle the VLM generation with caching."""
         self.validate_tool_input(material)
