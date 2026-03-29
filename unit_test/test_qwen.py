@@ -1,7 +1,7 @@
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 client = OpenAI(
     # If the environment variable is not set, replace the following line with: api_key="sk-xxx"
     api_key=os.getenv("DASHSCOPE_API_KEY"),

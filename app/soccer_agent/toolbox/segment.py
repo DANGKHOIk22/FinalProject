@@ -7,6 +7,8 @@ from datetime import datetime
 
 from typing import Any, Type, Optional, List, Dict, Literal, Tuple
 from dotenv import load_dotenv
+import cv2
+import numpy as np
 from PIL import Image
 from pydantic import BaseModel, Field, PrivateAttr
 from langsmith import get_current_run_tree
@@ -97,11 +99,15 @@ class SegmentTool(BaseTool):
                 `[{"bbox_2d": [xmin, ymin, xmax, ymax], "label": "placeholder"}, ...]`. 
                 For example, a valid response could be: 
                 `[{"bbox_2d": [10, 30, 20, 60], "label": "placeholder"}, {"bbox_2d": [40, 15, 52, 27], "label": "placeholder"}]`.
+                Return ONLY ONE bounding box for the single most prominent person matching the description.
                 """
             )
             
             queries = ".".join(entities_description)
-            user_prompt = f"Detect these specific elements based on this description and return bounding boxes: {queries}"
+            user_prompt = (
+                f"Detect ONLY ONE bounding box for the single most prominent person that best matches the description. "
+                f"Do NOT return multiple boxes. Description: {queries}"
+            )
             
             # Call Qwen-VL via OpenAI client
             response = self._client.chat.completions.create(
@@ -188,6 +194,53 @@ class SegmentTool(BaseTool):
             logger.error(error_msg)
             raise RuntimeError(error_msg) from e
 
+    def _extract_largest_face(self, pil_image: Image.Image, padding: float = 0.20) -> Image.Image:
+        """
+        Detect faces in the given PIL image using OpenCV Haar Cascade and return
+        a padded crop of the single largest face found.
+        If no face is detected, the original image is returned as-is (safe fallback).
+
+        Args:
+            pil_image:  PIL image (the coarse crop from Qwen-VL).
+            padding:    Fraction of face size to add as padding on each side (default 20%).
+        Returns:
+            PIL image containing only the dominant face (or original crop if no face found).
+        """
+        # Convert PIL → OpenCV BGR → grayscale for detection
+        cv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+
+        # Use the built-in frontal-face cascade (ships with opencv-python)
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        face_cascade = cv2.CascadeClassifier(cascade_path)
+
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=4,
+            minSize=(30, 30),
+        )
+
+        if len(faces) == 0:
+            logger.info("No face detected in crop — returning original coarse crop.")
+            return pil_image
+
+        # Pick the largest face by area (w * h)
+        x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+        if len(faces) > 1:
+            logger.info(f"Multiple faces found in crop ({len(faces)}) — keeping largest one.")
+
+        # Add padding (clamped to image boundaries)
+        img_w, img_h = pil_image.size
+        pad_x = int(w * padding)
+        pad_y = int(h * padding)
+        x1 = max(0, x - pad_x)
+        y1 = max(0, y - pad_y)
+        x2 = min(img_w, x + w + pad_x)
+        y2 = min(img_h, y + h + pad_y)
+
+        return pil_image.crop((x1, y1, x2, y2))
+
     def _post_proccessing_segmented_entities(self, image_path: str, segmented_entities: List[Dict]) -> List[str]:
         """
         Post-process and save segmented entities as image files.
@@ -204,13 +257,15 @@ class SegmentTool(BaseTool):
         for entity_idx, segmented_entity in enumerate(segmented_entities):
             box: Dict[str, float] = segmented_entity.get("box", {})
             x_min, y_min, x_max, y_max = box.values()
-            score = segmented_entity.get("score")
             label: str = segmented_entity.get("label", "")
-            
-            # Crop the object from the original image
-            segmented_object = image.crop((x_min, y_min, x_max, y_max))            
-        
-            #Save segmented objects to temporary/segmented_images folder
+
+            # Step 1: Coarse crop from Qwen-VL bounding box
+            coarse_crop = image.crop((x_min, y_min, x_max, y_max))
+
+            # Step 2: Refine to a single dominant face using OpenCV
+            segmented_object = self._extract_largest_face(coarse_crop)
+
+            # Save segmented objects to temporary/segmented_images folder
             safe_label = label.replace(" ", "_").replace("/", "-")
             segmented_filename = f"entity_recognition_{safe_label}_{timestamp}_{entity_idx+1}.png"
             segmented_path = os.path.join(SEGMENT_IMAGE_FOLDER, segmented_filename)

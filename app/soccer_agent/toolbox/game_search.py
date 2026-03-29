@@ -10,7 +10,7 @@ from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.output_parsers import PydanticOutputParser
 
 # Import config và prompts từ project của bạn
-from app.config.config import PROJECT_PATH, DEFAULT_MODEL
+from app.config.config import PROJECT_PATH, GEMINI_2_0_FLASH_LITE
 from app.config.settings import Settings
 from app.schema.match import MatchInfo
 from app.soccer_agent.prompts.toolbox.game_search import get_extraction_prompt_template, get_match_selection_prompt_template
@@ -56,7 +56,8 @@ class GameSearchTool(BaseTool):
         
         # Khởi tạo LLM
         self._llm = get_llm(
-            temperature=0
+            temperature=0,
+            model=GEMINI_2_0_FLASH_LITE,
         )
         
         # Khởi tạo parser
