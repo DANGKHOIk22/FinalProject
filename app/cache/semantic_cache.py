@@ -2,7 +2,6 @@ import logging
 from typing import List, Optional
 from redisvl.query.filter import Tag
 from langchain_redis import RedisConfig, RedisVectorStore
-from langchain_core.documents import Document
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from app.config.settings import settings
 
@@ -16,7 +15,7 @@ class SubQuerySemanticCache:
                 model="gemini-embedding-001",
                 output_dimensionality=768,
                 google_api_key=settings.GOOGLE_API_KEY,
-                task_type="RETRIEVAL_DOCUMENT"
+                task_type="RETRIEVAL_QUERY"
             )
             config = RedisConfig(
                 index_name="semantic_cache",
@@ -71,17 +70,17 @@ class SubQuerySemanticCache:
             
         material_str = ", ".join(material) if material else "None"
         try:
-            doc = Document(
-                page_content=query,
-                metadata={
-                    "response": response,
-                    "material": material_str
-                }
+            metadata = {
+                "response": response,
+                "material": material_str
+            }
+            self.vector_store.add_texts(
+                texts=[query],
+                metadatas=[metadata]
             )
-            self.vector_store.add_documents([doc])
             logger.info(f"💾 Saved worker result to Semantic cache for query: '{query}' with material: '{material_str}'")
         except Exception as e:
             logger.error(f"Semantic cache update error: {e}")
 
-# Global instance with proximity threshold (0.1 means high similarity in most cosine calculations)
-semantic_cache = SubQuerySemanticCache(threshold=0.1, ttl=60 * 60)
+# Global instance with proximity threshold
+semantic_cache = SubQuerySemanticCache(threshold=0.15, ttl=60 * 60)

@@ -456,7 +456,7 @@ class SoccerAgent:
                 result_text = "Worker stopped due to execution error."
             base_state["parallel_results"] = [result_text]
             if sub_query:
-                semantic_cache.set(sub_query, final_text, additional_material_list)
+                semantic_cache.set(sub_query, result_text, additional_material_list)
 
         return base_state
 
