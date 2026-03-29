@@ -36,6 +36,9 @@ class Settings:
     CLIP_ENDPOINT_KEY: Optional[str] = os.getenv('CLIP_ENDPOINT_KEY')
     CLIP_GROUNDINGDINO_ENDPOINT_URI: Optional[str] = os.getenv('CLIP_GROUNDINGDINO_ENDPOINT_URI')
     CLIP_GROUNDINGDINO_ENDPOINT_KEY: Optional[str] = os.getenv('CLIP_GROUNDINGDINO_ENDPOINT_KEY')
+
+    # Redis Configuration
+    REDIS_URL: Optional[str] = os.getenv('REDIS_URL')
     
 
     @classmethod
@@ -69,7 +72,14 @@ class Settings:
             raise ValueError("CLIP_ENDPOINT_URI is required but not set")
         if not cls.CLIP_ENDPOINT_KEY:
             raise ValueError("CLIP_ENDPOINT_KEY is required but not set")
+        
+
+        #Validate Redis settings
+        if not cls.REDIS_URL:
+            raise ValueError("REDIS_URL is required but not set")
         return True
+    
+    
 
 
 # Create a singleton instance
