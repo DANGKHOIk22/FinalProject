@@ -21,8 +21,11 @@ from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
 from app.soccer_agent.prompts.agent import get_planning_prompt_template, get_execution_prompt_template,get_aggregator_prompt_template
 from app.config.config import (
-    DEFAULT_MODEL,GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
+    DEFAULT_MODEL, GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
+    SESSION_MEMORY_TOKEN_THRESHOLD, SESSION_MEMORY_RECENT_KEEP,
 )
+from app.soccer_agent.memory.session_memory import SessionMemoryManager, SessionMemory
+from app.soccer_agent.memory.query_understanding import QueryUnderstandingPipeline
 from app.config.settings import settings
 
 from app.soccer_agent.toolbox import (
@@ -47,16 +50,15 @@ langfuse_client = get_client()
 # Structured output models for LLM responses
 class PlanningOutput(BaseModel):
     """Structured output for tool chain planning."""
-    tool_chains: Optional[List[List[str]]] = Field(default=None,description="List of independent tool chains to answer the query")
+    tool_chains: Optional[List[List[str]]] = Field(default=None, description="List of independent tool chains to answer the query")
     sub_queries: Optional[List[str]] = Field(default=None, description="List of specific decomposed sub-queries, each corresponding to a tool chain")
     need_call_tools: Optional[bool] = Field(default=True, description="Indicates whether tool calls are necessary")
-    claried_query: str = Field(default="", description="Clarified query after resolving pronouns and checking conversation history. If don't need, return the same query.")    
 
 # Define the state structure for the agent
 class AgentState(TypedDict):
     """Parent state structure for the planning agent."""
     user_query: str # The user's soccer-related question
-    claried_query: str # User query with pronouns resolved to specific entity names
+    claried_query: str # User query with pronouns/abbreviations resolved by QueryUnderstandingPipeline
     additional_material: Optional[List[str]] # Additional material (e.g, image/video related to the user question)
     tool_chains: List[List[str]] # The planned sequence of tools to execute.
     sub_queries: List[str] # The decomposed sub-queries for each worker.
@@ -114,7 +116,14 @@ class SoccerAgent:
         )
         self.planning_parser = PydanticOutputParser(pydantic_object=PlanningOutput)
 
-        
+        # Session memory + query understanding (use execution_llm: Flash Lite, fast)
+        self.session_memory_manager = SessionMemoryManager(
+            llm=self.execution_llm,
+            token_threshold=SESSION_MEMORY_TOKEN_THRESHOLD,
+            recent_messages_to_keep=SESSION_MEMORY_RECENT_KEEP,
+        )
+        self.query_understanding = QueryUnderstandingPipeline(llm=self.execution_llm)
+
         # Tool mapping dictionary using LangChain @tool decorated functions
         self.tool_registry: dict[str, BaseTool] = {
             "textual_entity_search": textual_entity_search(),
@@ -276,7 +285,7 @@ class SoccerAgent:
                 planning_agent_prompt = planning_agent_prompt_template.invoke({
                     "toolbox_descriptions": tool_descriptions,
                     "format_instructions": format_instructions,
-                    "user_query": state["user_query"],
+                    "user_query": state.get("claried_query") or state["user_query"],
                     "additional_material": additional_material,
                     "conversation_history": conversation_history
                 })
@@ -316,12 +325,9 @@ class SoccerAgent:
             logger.info("✅ TOOL CHAIN PLANNING STEP COMPLETED")
             logger.info("="*70)
 
-        claried_query = planning_output.claried_query or state["user_query"]
-        logger.info(f"Clarified query: {claried_query}")
-
         return {
             "user_query": state["user_query"],
-            "claried_query": claried_query,
+            "claried_query": state.get("claried_query") or state["user_query"],
             "additional_material": state.get("additional_material", []),
             "tool_chains": planning_output.tool_chains or [],
             "sub_queries": planning_output.sub_queries or [],
@@ -719,18 +725,68 @@ class SoccerAgent:
                             logging.warning(f"Failed to obtain memory for session {session_id}: {e}")
                             mem_span.update(output={"memory_loaded": False, "error": str(e)})
 
-                # Format conversation history
+                # Build history and run Query Understanding on all paths
                 history_text = ""
+                effective_memory = SessionMemory()
+                recent_msgs_for_qu = []
+
                 if chat_history:
-                    history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
+                    raw_history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
                     for msg in chat_history[-10:]:
                         if hasattr(msg, 'content'):
                             role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
-                            history_text += f"{role}: {msg.content}\n"
-                
+                            raw_history_text += f"{role}: {msg.content}\n"
+
+                    token_count = self.session_memory_manager.count_tokens(raw_history_text)
+
+                    if token_count > SESSION_MEMORY_TOKEN_THRESHOLD:
+                        # Path B: history exceeds threshold — use SessionMemory + recent slice
+                        old_msgs = chat_history[:-SESSION_MEMORY_RECENT_KEEP]
+                        recent_msgs_for_qu = chat_history[-SESSION_MEMORY_RECENT_KEEP:]
+
+                        cached_memory = await self.session_memory_manager.load_cached_memory(session_id)
+                        if cached_memory is None:
+                            if old_msgs:
+                                asyncio.create_task(
+                                    self.session_memory_manager.background_summarise(session_id, old_msgs)
+                                )
+                        else:
+                            effective_memory = cached_memory
+
+                        history_text = self.session_memory_manager.format_compressed_history(
+                            effective_memory, recent_msgs_for_qu
+                        )
+                        logger.info(f"[Path B] token_count={token_count}.")
+                    else:
+                        # Path A: full history fits — pass all as recent context
+                        recent_msgs_for_qu = chat_history
+                        history_text = raw_history_text
+                        logger.info(f"[Path A] token_count={token_count}.")
+
+                # Always run QueryUnderstanding — handles jargon, abbreviations, pronouns
+                qu_output = await self.query_understanding.run(
+                    user_query=request.user_query,
+                    session_memory=effective_memory,
+                    recent_messages=recent_msgs_for_qu,
+                )
+                logger.info(f"[QU] clarified='{qu_output.clarified_query}' is_ambiguous={qu_output.is_ambiguous}")
+
+                # Short-circuit: if query is ambiguous, ask for clarification immediately
+                if qu_output.is_ambiguous and qu_output.clarifying_questions:
+                    questions_text = "\n".join(f"- {q}" for q in qu_output.clarifying_questions)
+                    clarification_response = (
+                        f"Câu hỏi của bạn chưa đủ rõ ràng để tôi trả lời chính xác. "
+                        f"Bạn có thể làm rõ thêm không?\n{questions_text}"
+                    )
+                    logger.info("[QU] is_ambiguous=True — returning clarification request, skipping graph.")
+                    root_trace.update(output={"final_response": clarification_response, "is_ambiguous": True})
+                    return clarification_response
+
+                claried_query = qu_output.clarified_query
+
                 initial_state = {
                     "user_query": request.user_query,
-                    "claried_query": request.user_query,  # will be overwritten by planning node
+                    "claried_query": claried_query,
                     "additional_material": request.additional_material or [],
                     "tool_chains": [],
                     "sub_queries": [],
