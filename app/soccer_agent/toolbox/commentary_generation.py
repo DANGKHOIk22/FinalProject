@@ -15,6 +15,7 @@ from app.config.config import DEFAULT_MODEL
 from app.config.settings import Settings
 from app.soccer_agent.prompts.toolbox.commentary_generation import get_commentary_generation_prompt_template
 from app.schema.match import Annotation
+from app.cache.exact_cache import exact_cache
 
 
 class CommentaryGenerationInput(BaseModel):
@@ -69,29 +70,11 @@ class CommentaryGenerationTool(BaseTool):
     ) -> Tuple[str, List[Annotation]]:
         run_tree = get_current_run_tree()
         try:
-            self.validate_tool_input(material)
-            media_parts = self.transform_input(material)
-
-            parser = PydanticOutputParser(pydantic_object=_CommentaryGenerationOutput)
-            prompt_template = get_commentary_generation_prompt_template()
-            
-            # TODO: Refactor to handle multiple video
-            prompt_value = prompt_template.invoke(
-                {
-                    "output_format": parser.get_format_instructions(),
-                    "mime_type": media_parts[0]["mime_type"],
-                    "video_base64": media_parts[0]["data"],
-                }
-            )
-            response = self._vlm.invoke(prompt_value)
-            response_text = response.content[1] if isinstance(response.content, list) else str(response.content)
-
-            # The response.content includes 2 dictionaries, the first is the model's thoughts, the second is the actual output
-            output: _CommentaryGenerationOutput = parser.parse(response_text) # type: ignore
+            output = self._cached_generate_commentary(material, query)
 
             content_msg = (
                 "Successfully generated commentary from the provided video material. "
-                f"Extracted {len(output.annotations)} annotations."
+                f"Extracted {len(output.annotations)} annotations. "
                 f"This is the short commentary:\n\n{output.commentary}"
             )
             return content_msg, output.annotations
@@ -109,6 +92,29 @@ class CommentaryGenerationTool(BaseTool):
                 error_msg,
                 [],
             )
+
+    @exact_cache.cache(ttl=60 * 60, validatedModel=_CommentaryGenerationOutput)
+    def _cached_generate_commentary(self, material: List[str], query: Optional[str] = None) -> _CommentaryGenerationOutput:
+        """Internal method to handle the VLM generation with caching."""
+        self.validate_tool_input(material)
+        media_parts = self.transform_input(material)
+
+        parser = PydanticOutputParser(pydantic_object=_CommentaryGenerationOutput)
+        prompt_template = get_commentary_generation_prompt_template()
+        
+        # Use first video for generation
+        prompt_value = prompt_template.invoke(
+            {
+                "output_format": parser.get_format_instructions(),
+                "mime_type": media_parts[0]["mime_type"],
+                "video_base64": media_parts[0]["data"],
+            }
+        )
+        response = self._vlm.invoke(prompt_value)
+        response_text = response.content[1] if isinstance(response.content, list) else str(response.content)
+
+        output: _CommentaryGenerationOutput = parser.parse(response_text) # type: ignore
+        return output
 
     @staticmethod
     def validate_tool_input(material: Any) -> None:

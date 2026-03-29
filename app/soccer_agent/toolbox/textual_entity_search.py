@@ -12,6 +12,7 @@ from langsmith import get_current_run_tree
 
 from app.schema.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
 from app.schema.textual_entity_search import SoccerEntities, SearchingResult
+from app.cache.exact_cache import exact_cache
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -126,6 +127,7 @@ class TextualEntitySearchTool(BaseTool):
         return None
       
     @staticmethod
+    @exact_cache.cache(ttl=86400, validatedModel=SearchingResult)
     def _query_database(soccer_entities: SoccerEntities) -> SearchingResult:
         """
         Query MongoDB database for information on the extracted soccer entities.
