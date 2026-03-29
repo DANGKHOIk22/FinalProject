@@ -44,10 +44,10 @@ class EntityRecognitionTool(BaseTool):
     _mongo_client: Optional[pymongo.MongoClient] = PrivateAttr(default=None)
     _deepface_rep: Any = PrivateAttr(default=None)
 
-    # Azure DeepFace Endpoint attributes
-    _df_endpoint_uri: str = PrivateAttr(default="")
-    _df_payload_header: Dict[str, str] = PrivateAttr(default={})
-    _df_endpoint_key: str = PrivateAttr(default="")
+    # Azure InsightFace Endpoint attributes
+    _insight_endpoint_uri: str = PrivateAttr(default="")
+    _insight_payload_header: Dict[str, str] = PrivateAttr(default={})
+    _insight_endpoint_key: str = PrivateAttr(default="")
 
     class Config:
         arbitrary_types_allowed = True
@@ -98,33 +98,33 @@ class EntityRecognitionTool(BaseTool):
                 logger.info("✅ MongoDB client initialized successfully")
         
         # Intialize Azure Endpoint client
-        self._df_endpoint_uri = settings.DEEPFACE_ENDPOINT_URI
-        self._df_endpoint_key = settings.DEEPFACE_ENDPOINT_KEY
+        self._insight_endpoint_uri = settings.INSIGHTFACE_ENDPOINT_URI or ""
+        self._insight_endpoint_key = settings.INSIGHTFACE_ENDPOINT_KEY or ""
         
         # Validate endpoint configuration
-        if not self._df_endpoint_uri:
-            logger.error(f"DEEPFACE_ENDPOINT_URI is empty or not configured. Value: '{self._df_endpoint_uri}'")
-            raise ValueError("DEEPFACE_ENDPOINT_URI is not configured. Please check settings.")
-        if not self._df_endpoint_key:
-            logger.error(f"DEEPFACE_ENDPOINT_KEY is empty or not configured.")
-            raise ValueError("DEEPFACE_ENDPOINT_KEY is not configured. Please check settings.")
+        if not self._insight_endpoint_uri:
+            logger.error(f"INSIGHTFACE_ENDPOINT_URI is empty or not configured. Value: '{self._insight_endpoint_uri}'")
+            raise ValueError("INSIGHTFACE_ENDPOINT_URI is not configured. Please check settings.")
+        if not self._insight_endpoint_key:
+            logger.error("INSIGHTFACE_ENDPOINT_KEY is empty or not configured.")
+            raise ValueError("INSIGHTFACE_ENDPOINT_KEY is not configured. Please check settings.")
         
-        logger.info(f"DeepFace Endpoint URI: {self._df_endpoint_uri}")
+        logger.info(f"InsightFace Endpoint URI: {self._insight_endpoint_uri}")
         
-        self._df_payload_header = {
+        self._insight_payload_header = {
             'Content-Type': 'application/json',
-            'Authorization': f'Bearer {self._df_endpoint_key}'
+            'Authorization': f'Bearer {self._insight_endpoint_key}'
         }
-        response = requests.post(url=self._df_endpoint_uri, headers=self._df_payload_header, timeout=60)
+        response = requests.post(url=self._insight_endpoint_uri, headers=self._insight_payload_header, timeout=60)
         if response.status_code == 200:
-            logger.info("✅ DeepFace endpoint is reachable")
+            logger.info("✅ InsightFace endpoint is reachable")
         else:
-            raise ConnectionError(f"Failed to connect to DeepFace endpoint: {response.status_code} - {response.text}")
+            raise ConnectionError(f"Failed to connect to InsightFace endpoint: {response.status_code} - {response.text}")
 
     
-    def _create_payload(self, image_path: str, max_faces: int = 5, confidence_threshold: float = 0.85) -> Dict:
+    def _create_payload(self, image_path: str, max_faces: int = 5, confidence_threshold: float = 0.85) -> Dict[str, Any]:
         """
-        Create payload for DeepFace endpoint.
+        Create payload for InsightFace endpoint.
         
         :param image_path: Path to the image file
         :type image_path: str
@@ -147,8 +147,8 @@ class EntityRecognitionTool(BaseTool):
             "max_faces": max_faces,
             "confidence_threshold": confidence_threshold
         }
-  
-        return json.dumps(payload)
+
+        return payload
     
     @staticmethod    
     def cosine_similarity(a, b):
@@ -166,40 +166,44 @@ class EntityRecognitionTool(BaseTool):
         """
         collection_name = settings.QDRANT_COLLECTION_NAME 
         assert collection_name is not None, "Qdrant client is not initialized"
+        assert self._qdrant_client is not None, "Qdrant client is not initialized"
         
-        # Create payload for DeepFace endpoint
-        payload = self._create_payload(image_path=image_path, max_faces=5, confidence_threshold=0.85)
+        # Create payload for InsightFace endpoint
+        payload = self._create_payload(image_path=image_path, max_faces=5, confidence_threshold=0.80)
 
         try:
-        # Call to DeepFace Endpoint
+        # Call to InsightFace endpoint
             response: requests.Response = requests.post(
-                url=self._df_endpoint_uri,
-                headers=self._df_payload_header,
-                data=payload,
+                url=self._insight_endpoint_uri,
+                headers=self._insight_payload_header,
+                json=payload,
                 timeout=60
             )
         except requests.RequestException as e:
-            raise Exception(f"DeepFace endpoint request error: {str(e)}")
+            raise Exception(f"InsightFace endpoint request error: {str(e)}")
+        
         response_dict: Dict = response.json()
-
-
         # Handle response
         if response.status_code != 200:
-            raise Exception(f"DeepFace endpoint request failed: {response.status_code} - {response.text}")
+            raise Exception(f"InsightFace endpoint request failed: {response.status_code} - {response.text}")
         if response_dict.get("success", False) is False:
-            raise Exception(f"DeepFace endpoint error: {response_dict.get('error', 'Unknown error')} ")
+            raise Exception(f"InsightFace endpoint error: {response_dict.get('error', 'Unknown error')} ")
 
         results = response_dict.get("result") or []
-        logger.info(f"✅ DeepFace endpoint response received successfully. There are {len(results)} results")
+        logger.info(f"✅ InsightFace endpoint response received successfully. There are {len(results)} results")
         # Print out each result for debugging
         for idx, res in enumerate(results):
-            logger.info(f"Result {idx+1}: {res.get('facial_area', {})}, Confidence: {res.get('face_confidence', 0.0)}")
+            logger.info(f"Result {idx+1}: bbox={res.get('bbox', [])}, Confidence: {res.get('det_score', 0.0)}")
         
         # Search entities in Qdrant
         detected_faces = results
         soccer_entities = []
         for idx, detected_face in enumerate(detected_faces):
             detected_face_embedding = detected_face.get("embedding", [])
+            if not detected_face_embedding:
+                logger.info("Face %d has empty embedding; skipping", idx + 1)
+                continue
+
             search_result = self._qdrant_client.query_points(
                 collection_name=collection_name,
                 query=detected_face_embedding,
@@ -401,7 +405,6 @@ class EntityRecognitionTool(BaseTool):
             
             response_msg = "Successfully retrieved soccer-related entities. " + " ".join(parts)
             return response_msg, db_result
-        
         except Exception as e:
             error_msg = f"Error in entity recognition: {str(e)}"
             logger.error(error_msg)
