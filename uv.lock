@@ -519,6 +519,21 @@ wheels = [
 ]
 
 [[package]]
+name = "dashscope"
+version = "1.25.15"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "certifi" },
+    { name = "cryptography" },
+    { name = "requests" },
+    { name = "websocket-client" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/54/39/a5a517d260e9f481e6d1e41ad7fcb021ad52327483ee2847fbb0f6350984/dashscope-1.25.15-py3-none-any.whl", hash = "sha256:0a1d2e43d8ad5447fccbbf9e29f38d7f2241c6c83c4e2c85f165a524ffb9121e", size = 1343122, upload-time = "2026-03-24T07:20:19.106Z" },
+]
+
+[[package]]
 name = "dataclasses-json"
 version = "0.6.7"
 source = { registry = "https://pypi.org/simple" }
@@ -617,6 +632,7 @@ dependencies = [
     { name = "azure-ai-ml" },
     { name = "azure-identity" },
     { name = "bcrypt" },
+    { name = "dashscope" },
     { name = "dnspython" },
     { name = "docker" },
     { name = "fastapi" },
@@ -654,6 +670,7 @@ requires-dist = [
     { name = "azure-ai-ml", specifier = ">=1.30.0" },
     { name = "azure-identity", specifier = ">=1.25.1" },
     { name = "bcrypt", specifier = ">=5.0.0" },
+    { name = "dashscope", specifier = ">=1.25.15" },
     { name = "dnspython", specifier = ">=2.4.2" },
     { name = "docker", specifier = ">=7.1.0" },
     { name = "fastapi", specifier = ">=0.118.2" },
@@ -2599,6 +2616,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e3/ad/4a96c425be6fb67e0621e62d86c402b4a17ab2be7f7c055d9bd2f638b9e2/uvicorn-0.42.0.tar.gz", hash = "sha256:9b1f190ce15a2dd22e7758651d9b6d12df09a13d51ba5bf4fc33c383a48e1775", size = 85393, upload-time = "2026-03-16T06:19:50.077Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0a/89/f8827ccff89c1586027a105e5630ff6139a64da2515e24dafe860bd9ae4d/uvicorn-0.42.0-py3-none-any.whl", hash = "sha256:96c30f5c7abe6f74ae8900a70e92b85ad6613b745d4879eb9b16ccad15645359", size = 68830, upload-time = "2026-03-16T06:19:48.325Z" },
+]
+
+[[package]]
+name = "websocket-client"
+version = "1.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/41/aa4bf9664e4cda14c3b39865b12251e8e7d239f4cd0e3cc1b6c2ccde25c1/websocket_client-1.9.0.tar.gz", hash = "sha256:9e813624b6eb619999a97dc7958469217c3176312b3a16a4bd1bc7e08a46ec98", size = 70576, upload-time = "2025-10-07T21:16:36.495Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/34/db/b10e48aa8fff7407e67470363eac595018441cf32d5e1001567a7aeba5d2/websocket_client-1.9.0-py3-none-any.whl", hash = "sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef", size = 82616, upload-time = "2025-10-07T21:16:34.951Z" },
 ]
 
 [[package]]

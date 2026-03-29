@@ -7,8 +7,8 @@ exceeds SESSION_MEMORY_TOKEN_THRESHOLD, this module:
 2. If no cache: triggers background LLM summarization → saves to PostgreSQL.
 3. Always runs QueryUnderstandingPipeline in the hot path (1 LLM call only).
 
-Token counting uses the Gemini count_tokens API via llm.get_num_tokens() for exact
-results, with a character-based fallback (len // 4) if the API call fails.
+Token counting uses a fast character-based approximation (len // 4) since it is
+only used for threshold decisions where precision is unnecessary.
 """
 import asyncio
 import json
@@ -67,14 +67,11 @@ class SessionMemoryManager:
     # ── Token counting ────────────────────────────────────────────────────────
 
     def count_tokens(self, text: str) -> int:
-        """Count tokens using the model's exact tokenizer via Gemini count_tokens API.
-        Falls back to character-based approximation if the API call fails.
+        """Fast token estimate for threshold decisions. 1 token ~ 4 chars.
+        Avoids a Gemini API round-trip (~100-300ms) since this is only used
+        for the Path A/B threshold comparison, where precision is unnecessary.
         """
-        try:
-            return self.llm.get_num_tokens(text)
-        except Exception as e:
-            logger.debug(f"[SessionMemory] count_tokens API call failed, falling back to char estimate: {e}")
-            return len(text) // 4
+        return len(text) // 4
 
     # ── PostgreSQL persistence ────────────────────────────────────────────────
 

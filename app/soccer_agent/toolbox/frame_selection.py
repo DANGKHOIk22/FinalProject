@@ -1,17 +1,17 @@
 import os
-import io
-import base64
 import logging
 import random
 import cv2
+import numpy as np
 from datetime import datetime
-from typing import Type, List, Optional, Literal, Tuple
-import requests
+from typing import Type, List, Optional, Literal, Tuple, Union
 from PIL import Image
 from pydantic import BaseModel, Field, PrivateAttr
 from langchain_core.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langsmith import get_current_run_tree
+import dashscope
+from dashscope import MultiModalEmbedding
 from app.config import settings
 from app.config.config import PROJECT_PATH
 
@@ -41,53 +41,26 @@ class FrameSelectionTool(BaseTool):
     project_path: str = PROJECT_PATH
     output_dir: str = os.path.join(PROJECT_PATH, "temporary", "frames")
 
-    _cg_endpoint_uri: str = PrivateAttr("")
-    _cg_endpoint_key: str = PrivateAttr("")
-    _cg_payload_header: dict = PrivateAttr({})
+    _dashscope_api_key: str = PrivateAttr("")
+    _embedding_model: str = PrivateAttr("qwen3-vl-embedding")
 
     def __init__(self):
         super().__init__()
         os.makedirs(self.output_dir, exist_ok=True)
-        self._initialize_endpoint()
+        self._initialize_dashscope()
 
-    def _initialize_endpoint(self) -> None:
-        # Prefer combined CLIP+GroundingDINO endpoint; fallback to legacy CLIP endpoint if needed
-        self._cg_endpoint_uri = (
-            settings.CLIP_GROUNDINGDINO_ENDPOINT_URI
-            or settings.CLIP_ENDPOINT_URI
-            or ""
-        )
-        self._cg_endpoint_key = (
-            settings.CLIP_GROUNDINGDINO_ENDPOINT_KEY
-            or settings.CLIP_ENDPOINT_KEY
-            or ""
-        )
+    def _initialize_dashscope(self) -> None:
+        """Initialize DashScope API for Qwen3-VL-Embedding."""
+        self._dashscope_api_key = settings.DASHSCOPE_API_KEY or ""
 
-        if not self._cg_endpoint_uri or not self._cg_endpoint_key:
-            raise ValueError("CLIP/GroundingDINO endpoint URI/Key is not configured.")
+        if not self._dashscope_api_key:
+            raise ValueError("DASHSCOPE_API_KEY is not configured in environment variables.")
 
-        self._cg_payload_header = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self._cg_endpoint_key}",
-        }
-
+        # Test connectivity with a simple request
         try:
-            response = requests.post(
-                url=self._cg_endpoint_uri,
-                headers=self._cg_payload_header,
-                json={"ping": True},
-                timeout=60,
-            )
-            if response.status_code == 200:
-                logger.info("✅ CLIP/GroundingDINO endpoint is reachable")
-            else:
-                logger.warning(
-                    "CLIP/GroundingDINO endpoint healthcheck returned %s: %s",
-                    response.status_code,
-                    response.text,
-                )
+            logger.info("✅ DashScope API is configured for Qwen3-VL-Embedding")
         except Exception as exc:
-            logger.warning("Could not reach CLIP/GroundingDINO endpoint during init: %s", exc)
+            logger.warning("Error initializing DashScope: %s", exc)
 
     def _select_random_frame(self, video_path: str) -> Optional[str]:
         """Chọn ngẫu nhiên 1 frame nếu CLIP thất bại."""
@@ -131,14 +104,14 @@ class FrameSelectionTool(BaseTool):
         jpeg_quality: int = 100,
         max_frames: int = 1500,
     ) -> Tuple[List[Image.Image], List[str]]:
-        """Preprocess video: extract frames, resize, compress, and encode to base64. This function helps reduce the payload size for CLIP endpoint.
+        """Preprocess video: extract frames, resize, and save as temporary files.
 
         :param video_path: Path to the input video file.
-        :param desired_fps: Target frames per second to sample from the video. 
-        :param shortest_edge: The size of the shortest edge after resizing. 
+        :param desired_fps: Target frames per second to sample from the video.
+        :param shortest_edge: The size of the shortest edge after resizing.
         :param jpeg_quality: Quality of JPEG compression (1-100).
         :param max_frames: Maximum number of frames to process.
-        :return: A tuple containing a list of original PIL Images and a list of base64-encoded JPEG strings.
+        :return: A tuple containing a list of original PIL Images and a list of temporary frame file paths.
         """
 
         # Open video file with OpenCV
@@ -166,7 +139,8 @@ class FrameSelectionTool(BaseTool):
         # Extract and process frames
         frame_count = 0
         original_frames: List[Image.Image] = []
-        processed_b64: List[str] = []
+        temp_frame_paths: List[str] = []
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         while True:
             ret, frame = cap.read()
@@ -178,85 +152,92 @@ class FrameSelectionTool(BaseTool):
                 pil_original = Image.fromarray(rgb_frame)
                 original_frames.append(pil_original)
 
+                # Save resized frame to temporary file
                 resized_frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
                 rgb_resized = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
                 pil_resized = Image.fromarray(rgb_resized)
 
-                buffer = io.BytesIO()
-                pil_resized.save(buffer, format="JPEG", quality=jpeg_quality, optimize=True)
-                encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
-                processed_b64.append(encoded)
+                temp_filename = f"FRAME_TEMP_{timestamp}_{frame_count}.jpg"
+                temp_path = os.path.join(self.output_dir, temp_filename)
+                pil_resized.save(temp_path, format="JPEG", quality=jpeg_quality, optimize=True)
+                temp_frame_paths.append(temp_path)
 
-                if max_frames and len(processed_b64) >= max_frames:
+                if max_frames and len(temp_frame_paths) >= max_frames:
                     break
 
             frame_count += 1
-        logger.info(f"Total frames processed: {len(processed_b64)}")
+        logger.info(f"Total frames processed: {len(temp_frame_paths)}")
         cap.release()
-        return original_frames, processed_b64
+        return original_frames, temp_frame_paths
 
-    def _call_clip_endpoint(
+    def _call_qwen_embedding(
         self,
         query: str,
-        frames_b64: List[str],
+        frame_paths: List[str],
         topk: int = 1,
-        threshold: float = 0.0,
     ) -> List[int]:
-        """Call CLIP endpoint to select frames based on query.
-         :param query: Textual description to match frames against.
-         :param frames_b64: List of base64-encoded JPEG frames.
-         :param topk: Number of top frames to return.
-         :param threshold: Similarity threshold for frame selection.
-         :return: List of selected frame indices.
+        """Call Qwen3-VL-Embedding via DashScope to select frames based on query.
+
+        :param query: Textual description to match frames against.
+        :param frame_paths: List of frame file paths (saved as temporary images).
+        :param topk: Number of top frames to return.
+        :return: List of selected frame indices (sorted by similarity, descending).
         """
-        if not frames_b64:
+        if not frame_paths:
             return []
 
-        # Prepare payload for CLIP endpoint
-        payload = {
-            "task": "clip",
-            "query": query,
-            "images": frames_b64,
-            "topk": max(1, min(topk, 10)),
-            "threshold": max(0.0, min(threshold, 1.0)),
-        }
-
-        # Make request to CLIP endpoint
-        response = requests.post(
-            url=self._cg_endpoint_uri,
-            headers=self._cg_payload_header,
-            json=payload,
-            timeout=120,
-        )
-
-        # Parse response
         try:
-            response_dict = response.json()
-        except Exception:
-            raise ValueError("Invalid JSON response from CLIP endpoint. Trying to retry the request later.")
-            
+            # Prepare inputs: query as text, each frame as image
+            inputs: List[Union[dict, dict]] = [{"text": query}]
+            for frame_path in frame_paths:
+                if os.path.exists(frame_path):
+                    inputs.append({"image": frame_path})
 
-        # Handle errors
-        if response.status_code != 200 or not response_dict.get("success", False):
-            logger.error(
-                "CLIP/GroundingDINO endpoint request failed (%s): %s",
-                response.status_code,
-                response_dict.get("error") or response.text,
+            if len(inputs) < 2:
+                logger.warning("No valid frames to process for embedding")
+                return []
+
+            # Call DashScope API
+            response = MultiModalEmbedding.call(
+                api_key=self._dashscope_api_key,
+                model=self._embedding_model,
+                input=inputs  # type: ignore
             )
-            raise ValueError("CLIP endpoint request failed. Please check the logs for details.")
 
-        # Extract selected frame indices
-        selected_indices = response_dict.get("selected_frames") or []
-        if not isinstance(selected_indices, list):
-            logger.error("CLIP endpoint returned invalid selected_frames format")
-            raise ValueError("Invalid selected_frames format from CLIP endpoint.")
+            # Handle API response
+            if response.status_code != 200:
+                raise ValueError(f"DashScope API error: {response.message}")
 
+            # Extract embeddings
+            embeddings_output = response.output.get("embeddings", [])
+            if not embeddings_output or len(embeddings_output) < 2:
+                logger.error("DashScope returned invalid embeddings")
+                raise ValueError("Invalid embeddings from DashScope API")
 
-        return [
-            int(idx)
-            for idx in selected_indices
-            if isinstance(idx, (int, float)) and 0 <= int(idx) < len(frames_b64)
-        ]
+            # Query embedding is the first one, frame embeddings are the rest
+            # Each item in embeddings_output is a dict with "embedding" key
+            query_embedding = np.array(embeddings_output[0]["embedding"])
+            frame_embeddings = np.array([e["embedding"] for e in embeddings_output[1:]])
+
+            # Calculate cosine similarity
+            similarities = []
+            for frame_emb in frame_embeddings:
+                # Cosine similarity = dot(a, b) / (norm(a) * norm(b))
+                similarity = np.dot(query_embedding, frame_emb) / (
+                    np.linalg.norm(query_embedding) * np.linalg.norm(frame_emb) + 1e-8
+                )
+                similarities.append(similarity)
+
+            # Sort by similarity descending and get top-k indices
+            sorted_indices = np.argsort(similarities)[::-1]
+            selected_indices = sorted_indices[:min(topk, len(sorted_indices))].tolist()
+
+            logger.info(f"Selected frames: {selected_indices} with similarities: {[similarities[i] for i in selected_indices]}")
+            return selected_indices
+
+        except Exception as e:
+            logger.error(f"Error in Qwen embedding call: {e}")
+            raise ValueError(f"DashScope embedding call failed: {str(e)}")
 
     def _save_selected_frames(self, indices: List[int], frames: List[Image.Image]) -> List[str]:
         """Save selected frames to disk and return their paths.
@@ -278,7 +259,7 @@ class FrameSelectionTool(BaseTool):
         return saved_paths
 
     def _run(self, query: str, material: List[str], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, Optional[List[str]]]:
-        """Hàm thực thi chính."""
+        """Main execution method using Qwen3-VL-Embedding for frame selection."""
         try:
             logger.info("🔍 Frame selection started for query: %s", query)
             if not material:
@@ -286,38 +267,84 @@ class FrameSelectionTool(BaseTool):
 
             file_path_raw = material[0]
             full_path = os.path.join(self.project_path, file_path_raw) if not os.path.isabs(file_path_raw) else file_path_raw
-        
-            # Fallback check path
+
+            # Validate video file exists
             if not os.path.exists(full_path):
                 raise ValueError(f"Video file not found at {full_path}")
 
             logger.info(f"🎞️ Frame Selection from: {full_path}")
-            # Preprocess video and call CLIP endpoint
-            original_frames, processed_b64 = self._preprocess_video(full_path, desired_fps=1, shortest_edge=224, jpeg_quality=100, max_frames=1500)
-            selected_indices = self._call_clip_endpoint(query, processed_b64, topk=1, threshold=0.0)
 
-            # Process and save selected frames
+            # Preprocess video and extract frames
+            original_frames, temp_frame_paths = self._preprocess_video(
+                full_path, desired_fps=1, shortest_edge=224, jpeg_quality=100, max_frames=1500
+            )
+
+            if not temp_frame_paths:
+                logger.warning("No frames extracted from video")
+                fallback_path = self._select_random_frame(full_path)
+                if fallback_path:
+                    return f"No frames extracted. Selected random frame: {fallback_path}", [fallback_path]
+                else:
+                    return "No frames could be extracted from video", None
+
+            # Call Qwen3-VL-Embedding to select best frames
+            try:
+                selected_indices = self._call_qwen_embedding(query, temp_frame_paths, topk=1)
+            except Exception as qwen_error:
+                logger.error(f"Qwen embedding failed: {qwen_error}. Falling back to random frame selection.")
+                # Cleanup temp frames before fallback
+                for temp_path in temp_frame_paths:
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
+                del original_frames
+                del temp_frame_paths
+                fallback_path = self._select_random_frame(full_path)
+                if fallback_path:
+                    return f"Qwen API failed. Selected a random frame as fallback: {fallback_path}", [fallback_path]
+                else:
+                    return f"Both Qwen API and random selection failed: {qwen_error}", None
+
+            # Save selected frames and clean up temp files
             if selected_indices and original_frames:
                 saved_paths = self._save_selected_frames(selected_indices, original_frames)
+
+                # Clean up temporary frame files
+                for temp_path in temp_frame_paths:
+                    try:
+                        os.remove(temp_path)
+                    except Exception as e:
+                        logger.debug(f"Could not delete temp frame {temp_path}: {e}")
+
                 if saved_paths:
                     saved_paths_str = "\n".join(saved_paths)
                     msg = (
                         f"Successfully selected {len(saved_paths)} frame(s) for query '{query}'. Continue call next tool to analyze extracted frames.\n"
-                        f"The most relevant frame is saved at: "
-                        f"{saved_paths_str}."
+                        f"The most relevant frame is saved at: {saved_paths_str}."
                     )
                     return msg, saved_paths
+
+            # Cleanup if no frames selected
+            for temp_path in temp_frame_paths:
+                try:
+                    os.remove(temp_path)
+                except Exception as e:
+                    logger.debug(f"Could not delete temp frame {temp_path}: {e}")
+
             del original_frames
-            del processed_b64
+            del temp_frame_paths
+
+            logger.warning("No frames were selected by Qwen embedding")
+            return "No suitable frames found for the query", None
+
         except Exception as e:
             error_msg = f"Error in frame selection tool: {str(e)}"
-            logger.error(error_msg)                       
+            logger.error(error_msg)
             # Send error to LangSmith run tree
             run_tree = get_current_run_tree()
             if run_tree:
-                run_tree.end(
-                    error=error_msg
-                )
+                run_tree.end(error=error_msg)
             return f"Error during frame selection: {e}", None
 
 

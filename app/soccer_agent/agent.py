@@ -242,7 +242,7 @@ class SoccerAgent:
                 "tool_node_messages": []
             }
     
-    def _tool_chain_planning(self, state: AgentState) -> AgentState:
+    async def _tool_chain_planning(self, state: AgentState) -> AgentState:
         """
         This node is responsible for planning the tool chain to answer the user's query.
         
@@ -283,7 +283,7 @@ class SoccerAgent:
             
             # Call the planning model to get the tool chain
             langfuse_handler = CallbackHandler()
-            response = self.planning_llm.invoke(
+            response = await self.planning_llm.ainvoke(
                 planning_agent_prompt,
                 config={
                     "callbacks": [langfuse_handler],
@@ -354,7 +354,7 @@ class SoccerAgent:
             sends.append(Send("worker_graph", worker_state))
         return sends
     
-    def _execution_node(self, state: WorkerState) -> dict:
+    async def _execution_node(self, state: WorkerState) -> dict:
         """
         Iteratively execute the tool chain step by step using bind_tools with tool_choice.
         This allows the LLM to see the full tool schema and automatically generate correct parameters.
@@ -381,7 +381,27 @@ class SoccerAgent:
             tool_results_history.append(tool_result)
             last_artifact = tool_result.artifact if hasattr(tool_result, 'artifact') else None
             logger.info(f"Received tool result: {tool_result.content}")
-        
+
+        # Early exit: all planned tools have been executed — skip the termination LLM call
+        if tool_chain and len(tool_calls_history) >= len(tool_chain):
+            summary_parts = []
+            for i, tc in enumerate(tool_calls_history):
+                tool_name = tc.get("name", "unknown")
+                if i < len(tool_results_history):
+                    summary_parts.append(f"{tool_name}: {tool_results_history[i].content}")
+            result_text = "\n".join(summary_parts) if summary_parts else "All tools completed."
+            logger.info(f"✅ All {len(tool_chain)} tools executed — skipping termination LLM call")
+            logger.info("="*70)
+            return {
+                "additional_material": additional_material_list,
+                "tool_calls_history": tool_calls_history,
+                "tool_results_history": tool_results_history,
+                "tool_chain": tool_chain,
+                "tool_node_messages": [],
+                "last_tool_artifact": last_artifact,
+                "parallel_results": [result_text],
+            }
+
         # Format List[str] to string for prompt
         additional_material_str = ", ".join(additional_material_list) if additional_material_list else "None"
         
@@ -402,7 +422,7 @@ class SoccerAgent:
         response: AIMessage = None  # type: ignore
         try:
             # Invoke the model with the tool
-            response = self.execution_llm_with_tools.invoke(execution_prompt) # type: ignore
+            response = await self.execution_llm_with_tools.ainvoke(execution_prompt) # type: ignore
             logger.info(f"🤖 Response from execution agent: \n \t Response content: {response.text} \n \t Tool Calls: {response.tool_calls}")
             tool_node_messages = [response] # Add the message to tool_node_messages for tool_node if there is no tool call the should_or_continue node will end execution
             
@@ -443,7 +463,7 @@ class SoccerAgent:
 
         return base_state
     
-    def _aggregator_node(self, state: AgentState) -> dict:
+    async def _aggregator_node(self, state: AgentState) -> dict:
         """Aggregate results from parallel executions and provide the final response."""
         with langfuse_client.start_as_current_observation(as_type="span", name="aggregator") as root_span:
             logger.info("="*70)
@@ -483,7 +503,7 @@ class SoccerAgent:
                 prep_span.update(output={"aggregator_prompt": aggregator_prompt})
                 
             langfuse_handler = CallbackHandler()
-            response = self.execution_llm.invoke(
+            response = await self.execution_llm.ainvoke(
                 aggregator_prompt,
                 config={
                     "callbacks": [langfuse_handler],
@@ -645,13 +665,36 @@ class SoccerAgent:
             except Exception:
                 pass
 
+    async def _background_save_memory(
+        self, session_id: str, user_query: str, output_with_tools: str
+    ) -> None:
+        """Save conversation memory in background with a dedicated DB connection."""
+        try:
+            mem, conn, pool = get_postgres_memory(session_id)
+            mem_obj = CustomSystemPromptMemory(
+                memory_key="history",
+                chat_memory=mem.chat_memory,
+                return_messages=True,
+                max_history=15,
+            )
+            await asyncio.to_thread(
+                mem_obj.save_context,
+                {"input": user_query},
+                {"output": output_with_tools},
+            )
+            if conn and pool:
+                conn.commit()
+                pool.putconn(conn)
+        except Exception as e:
+            logger.warning(f"[BackgroundSave] Failed for session {session_id}: {e}")
+
     async def run(self, request: ChatRequest) -> str:
         """
         Run the complete workflow: planning + execution.
-        
+
         Args:
             request: The ChatRequest object containing user_query and additional_material
-            
+
         Returns:
             Final response from the agent
         """
@@ -782,20 +825,18 @@ class SoccerAgent:
                 }
 
                 
-                if memory_object:
-                    try:
-                        final_response = result["final_response"]
-                        output_with_tools = self._build_tool_summary_for_memory(
-                            tool_calls_history=result.get("tool_calls_history", []),
-                            tool_results_history=result.get("tool_results_history", []),
-                            final_response=final_response
-                        )
-                        memory_object.save_context(
-                            inputs={"input": request.user_query},
-                            outputs={"output": output_with_tools}
-                        )
-                    except Exception as e:
-                        logging.warning(f"Failed to save memory for session {session_id}: {e}")
+                # Save conversation memory in background (non-blocking, uses its own DB connection)
+                try:
+                    output_with_tools = self._build_tool_summary_for_memory(
+                        tool_calls_history=result.get("tool_calls_history", []),
+                        tool_results_history=result.get("tool_results_history", []),
+                        final_response=result["final_response"],
+                    )
+                    asyncio.create_task(
+                        self._background_save_memory(session_id, request.user_query, output_with_tools)
+                    )
+                except Exception as e:
+                    logging.warning(f"Failed to prepare memory save for session {session_id}: {e}")
                 logger.info("Run completed successfully")
 
                 root_trace.update(output={"final_response": result["final_response"]})
