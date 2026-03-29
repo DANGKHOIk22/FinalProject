@@ -785,7 +785,7 @@ class SoccerAgent:
 
                     if token_count > SESSION_MEMORY_TOKEN_THRESHOLD:
                         # Path B: history exceeds threshold — use SessionMemory + recent slice
-                        old_msgs = chat_history[:-SESSION_MEMORY_RECENT_KEEP]
+                        old_msgs = chat_history[:-(SESSION_MEMORY_RECENT_KEEP-1)]
                         recent_msgs_for_qu = chat_history[-SESSION_MEMORY_RECENT_KEEP:]
 
                         cached_memory = await self.session_memory_manager.load_cached_memory(session_id)
@@ -874,6 +874,11 @@ class SoccerAgent:
                     asyncio.create_task(
                         self._background_save_memory(session_id, request.user_query, output_with_tools)
                     )
+                    # Incremental update of Redis SessionMemory if tool calls were made
+                    if result.get("tool_calls_history"):
+                        asyncio.create_task(
+                            self.session_memory_manager.background_update(session_id, output_with_tools)
+                        )
                 except Exception as e:
                     logging.warning(f"Failed to prepare memory save for session {session_id}: {e}")
                 logger.info("Run completed successfully")
