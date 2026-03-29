@@ -24,6 +24,7 @@ class TextualEntitySearchInput(BaseModel):
             "List of soccer-related entity names already extracted from the user's question or inferred by previous tools results. "
             "Each item should be a direct name (player, team, venue, referee, coach, club) without extra narration. "
             "Use this tool only after the agent has resolved the names; do not pass raw user questions here."
+            "Remember to capitalize the first letter of each word in the entity names."
         ),
         examples=[
             ["Lionel Messi", "Barcelona"],
