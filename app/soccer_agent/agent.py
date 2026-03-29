@@ -317,7 +317,7 @@ class SoccerAgent:
 
         return {
             "user_query": state["user_query"],
-            "additional_material": state.get("additional_material", []),
+            "additional_material": sorted(state.get("additional_material") or []),
             "tool_chains": planning_output.tool_chains or [],
             "sub_queries": planning_output.sub_queries or [],
             "parallel_results": state.get("parallel_results", []),
