@@ -35,8 +35,7 @@ def main() -> int:
         return 2
 
     required_env = [
-        "CLIP_ENDPOINT_URI",
-        "CLIP_ENDPOINT_KEY",
+        "DASHSCOPE_API_KEY",
     ]
     missing = [key for key in required_env if not os.getenv(key)]
     if missing:

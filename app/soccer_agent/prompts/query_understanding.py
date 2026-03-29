@@ -26,8 +26,14 @@ def get_query_understanding_prompt() -> ChatPromptTemplate:
 
 ## Nhiệm vụ của bạn
 
-### Bước 1 — Mở rộng viết tắt và biệt danh bóng đá
-Kiểm tra xem câu hỏi có chứa viết tắt hoặc biệt danh bóng đá không. Nếu có, hãy thay bằng tên đầy đủ.
+### Bước 1 — Mở rộng viết tắt, biệt danh bóng đá và chuẩn hoá tên cầu thủ
+Kiểm tra xem câu hỏi có chứa viết tắt, biệt danh bóng đá, hoặc tên cầu thủ/đội bóng không. Nếu có, hãy thay bằng tên đầy đủ và **chuẩn hoá về dạng không dấu Latin (ASCII)** — tức là loại bỏ toàn bộ diacritics/ký tự đặc biệt trong tên riêng bóng đá.
+
+**Quy tắc chuẩn hoá tên:**
+- Loại bỏ dấu phụ (diacritics) trong tên cầu thủ, HLV, đội bóng: ć → c, č → c, š → s, ž → z, ö → o, ü → u, é → e, ã → a, ñ → n, v.v.
+- Ví dụ: Luka Modrić → Luka Modric, Rúben Neves → Ruben Neves, Raphaël Varane → Raphael Varane, Mesut Özil → Mesut Ozil, Ángel Di María → Angel Di Maria, João Félix → Joao Felix
+- Áp dụng cho tất cả tên riêng trong câu hỏi (cả tên đã có sẵn lẫn tên sau khi mở rộng viết tắt/biệt danh)
+- **Không** áp dụng cho văn bản tiếng Việt thông thường trong câu hỏi
 
 Ví dụ về viết tắt / biệt danh phổ biến (không giới hạn):
 - Giải đấu: EPL / PL = English Premier League, UCL / CL = UEFA Champions League, UEL = UEFA Europa League, La Liga = La Liga Santander, BL / Bundesliga = Fußball-Bundesliga, SA = Serie A, L1 = Ligue 1, WC = FIFA World Cup, EURO = UEFA European Championship
