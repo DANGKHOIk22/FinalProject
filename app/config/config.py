@@ -32,6 +32,7 @@ LOG_LEVEL = 'INFO'
 # Session Memory
 SESSION_MEMORY_TOKEN_THRESHOLD = 12600  # len(text) // 4 ≈ số token
 SESSION_MEMORY_RECENT_KEEP = 5         # tin nhắn giữ verbatim sau khi vượt ngưỡng
+SESSION_MEMORY_REDIS_TTL = 86400       # TTL Redis key (giây) = 24 giờ
 
 
 
