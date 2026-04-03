@@ -42,7 +42,7 @@ class SegmentInput(BaseModel):
 # --- Segment Tool ---
 class SegmentTool(BaseTool):
     name: str = "segment"
-    description: str = "A tool that returns the segmented region, which improves entity_recognition accuracy."
+    description: str = "Segments an image into cropped regions, each containing a detected human face. Use this when the agent needs to distinguish multiple people in a single image by visual attributes (e.g., clothing, color, face), which helps overcome the entity recognition tool's limitation of detecting all faces without differentiation. After segmentation, each cropped image can be passed to the entity recognition tool for per-face identification or attribute-based comparison. Returns the file paths of the cropped images as artifacts."
     args_schema: Type[BaseModel] = SegmentInput # type: ignore
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     
@@ -299,7 +299,7 @@ class SegmentTool(BaseTool):
             segmented_paths = self._post_proccessing_segmented_entities(image_path=image_path, segmented_entities=segmented_entities)
             
             return (
-                f"Successfully segmented objects. The tool found {len(segmented_paths)} entities. "
+                f"Successfully segmented objects. The tool segmented the image into: {len(segmented_paths)} parts. "
                 f"Segmented image paths: {', '.join(segmented_paths)}",
                 segmented_paths,
             )
@@ -312,4 +312,4 @@ class SegmentTool(BaseTool):
                 run_tree.end(error=error_msg)
 
             # Return detailed error message to the Agent
-            return "An error occurred while segmenting the image. Try calling this tool again or stop the execution.", []
+            return "An error occurred while segmenting the image. Try rephrase the tool input or stop the execution. Error: {error_msg}", []

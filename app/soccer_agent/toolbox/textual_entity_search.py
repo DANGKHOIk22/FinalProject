@@ -37,7 +37,13 @@ class TextualEntitySearchInput(BaseModel):
 class TextualEntitySearchTool(BaseTool):
     name: str = "textual_entity_search"
     description: str = """
-    Given question about soccer-related entities (player, team, etc.), the tool retrieves the requiring entities of the question, and return its according WikiPage. The entity database contains the history and background knowledge for all the players, teams, venues, coaches and referees from games are from 2022 World Cup and 6 European major leagues (England Premier, Germany Bundesliga, Italy Serie-a, Spain Laliga, France Ligue-1 and European Champions League) during 2017-2024.
+    Look up soccer-related entities by name in the local database (players,
+    teams, venues, coaches, and referees). The dataset covers matches from
+    2017–2024, including the 2022 World Cup and six major European leagues
+    (Premier League, Bundesliga, Serie A, LaLiga, Ligue 1, and the Champions
+    League). Data is current through 2024 and may be outdated for events after
+    2024. Returns matched entity records and metadata; names cannot found are
+    reported separately.
     """
     args_schema: Type[BaseModel] = TextualEntitySearchInput # type: ignore
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
@@ -52,7 +58,7 @@ class TextualEntitySearchTool(BaseTool):
         try:
             if not entity_names:
                 logger.info("No entity names provided to textual_entity_search.")
-                return "This tool can't find any soccer-related entities in the provided input.", SearchingResult()
+                return "No entity names provided to the this tool.", SearchingResult()
 
             # Execution Agent supplies resolved names; wrap them as unknown type for DB lookup
             entities = SoccerEntities(unknown=entity_names)
@@ -88,7 +94,7 @@ class TextualEntitySearchTool(BaseTool):
                 )
             
             # Return detailed error message to the Agent
-            return f"An error occurred while executing the tool. Details: {str(e)}. Please retry the tool or stop the process.", SearchingResult()
+            return f"An error occurred while executing the tool. Details: {str(e)}. Please retry the tool with modified tool inputs (if it's neccessary) or stop the process.", SearchingResult()
 
         
     @staticmethod

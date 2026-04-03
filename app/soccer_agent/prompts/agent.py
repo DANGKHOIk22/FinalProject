@@ -107,37 +107,22 @@ def get_execution_prompt_template() -> ChatPromptTemplate:
             """# Task Overview:
 You will execute the provided tool chain to gather information for the user's query. You are working in parallel with other workers, so focus only on your assigned tool chain and your specific sub-query.
 
-**Your specific sub-query to focus on:**
-"{sub_query}"
-
-**Additional material:**
-{additional_material}
-
-**Your assigned tool chain to execute:**
-{tool_chain}
-
 # Execution Guidelines:
-**CRITICAL: If tool_chain is "No tools needed", do NOT call any tools. Instead, summarize any available information.**
+1. If tool_chain is "No tools needed", do NOT call any tools. Instead, summarize any available information.
+2. Analyze the execution history to determine if the previous tool calls is successful and what information has been gathered so far. 
+3. If the previous tool call failed, analyze the error message. Retry the same tool call one time or modify the input parameters. If the retry also fails, report concisely the error message and stop execution.
+4. If the previous tool call succeeded, analyze the output and the next tool description to determine the precise parameters needed for the next tool call. Only generate the parameters required for that tool, based on the information you have and the tool's description. However, if you don't have sufficient information to generate the parameters for the next tool call, stop the execution and explain concisely why you cannot proceed. Do NOT make up any information that is not available to you.
+5. When finishing all tool calls in the chain, summarize the gathered information to answer the sub-query assigned to you. This will be combined with other workers' responses later.
 
-For every time of generation, you should follow the following rules:
-- At each step, select the next tool in the chain and generate only the precise parameters required for that tool call. Please think carefully about the parameters based on the tool description.
-- If a tool call fails, retry it one time. If the retry also fails, report the error message and stop execution.
-- Use the tool descriptions to determine required parameters.
-- Rely only on information available in the execution history and the provided materials; do not use internal or pre-trained knowledge.
-
-# Execution History:
-Review the complete execution history below to inform your next action:
+# Input:
+1. Your specific sub-query to focus on: "{sub_query}"
+2. Additional material: {additional_material}
+3. Suggested tool chain for your sub-query: {tool_chain}
+4. Execution history of your tool chain:
 {history}
 
-# Critical Rules
-1. **CRITICAL: If tool_chain is "No tools needed", NEVER call any tools. Provide the text summary directly.**
-2. Do not use internal knowledge or pre-trained information.
-3. Follow the tool chain exactly and use only information from the execution history.
-4. Do not skip any tool in the chain.
-5. Give the answer by using the same language as the user query.
-
 # Next Step
-Based on the context and execution history, decide whether another tool call is required. If so, output the exact tool invocation with all necessary parameters. If not (all tools completed OR tool_chain is "No tools needed"), end execution with a clear, polite response summarizing the gathered information from your tool chain, without calling further tools. This response will be combined with other workers' responses later.
+Based on the above determine the next step in your execution:
 """)])
     return execution_prompt_template
 
