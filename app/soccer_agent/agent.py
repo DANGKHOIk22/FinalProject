@@ -816,7 +816,9 @@ class SoccerAgent:
                 logger.info(f"[QU] clarified='{qu_output.clarified_query}' is_ambiguous={qu_output.is_ambiguous}")
 
                 # Short-circuit: if query is ambiguous, ask for clarification immediately
-                if qu_output.is_ambiguous and qu_output.clarifying_questions:
+                # Skip if user attached images/videos — visual context resolves the ambiguity
+                has_media = bool(request.additional_material)
+                if qu_output.is_ambiguous and qu_output.clarifying_questions and not has_media:
                     questions_text = "\n".join(f"- {q}" for q in qu_output.clarifying_questions)
                     clarification_response = (
                         f"Câu hỏi của bạn chưa đủ rõ ràng để tôi trả lời chính xác. "
