@@ -238,7 +238,7 @@ class EntityRecognitionTool(BaseTool):
             ranked_candidates.sort(key=lambda x: x[1], reverse=True)
             
             if not ranked_candidates:
-                return None, "Can't find any matching entities in the database."
+                raise ValueError("Can't find any matching entities in the database.")
             
             if ranked_candidates[0]:
                 soccer_entities.append({
@@ -246,7 +246,8 @@ class EntityRecognitionTool(BaseTool):
                     "NAME": ranked_candidates[0][0]
                 })
                 logger.info(f"Face {idx+1}: Matched to {ranked_candidates[0]}")
-        
+        found_entity_names = [f"{e['NAME']} ({e['ENTITY_TYPE']})" for e in soccer_entities]
+        logger.info(f"Using voting and re-ranking, recognized: {', '.join(found_entity_names)}")
         return soccer_entities
     
     def _parse_entity_result(self, entity_data: dict) -> Optional[PlayerSchema | RefereeSchema | VenueSchema | TeamSchema]:
@@ -375,12 +376,12 @@ class EntityRecognitionTool(BaseTool):
             # Step 1: Extract entities from image
             for material_path in material:
                 if not os.path.isfile(material_path):
-                    raise FileNotFoundError(f"Material file not found: {material_path}")
+                    raise FileNotFoundError(f"Material file not found: {material_path}. Please ask the user check the file")
             entities = self._extract_entities_from_image(material[0]) #TODO: fix to support multiple images
             
             if not entities:
                 logger.info("No entities detected in image")
-                return "No soccer-related entities found in the image.", SearchingResult()
+                return "This tool can't detect any human faces for recognition. So you should ask user to rephare the description about the image  ", SearchingResult()
             
             logger.info(f"Extracted {len(entities)} entities from image")
             
@@ -393,9 +394,9 @@ class EntityRecognitionTool(BaseTool):
             
             parts = []
             if found_names:
-                parts.append(f"Found entities: {found_names}.")
+                parts.append(f"Found detail information of {len(found_names)} entities: {found_names}.")
             if missing_names:
-                parts.append(f"Missing entities: {missing_names}.")
+                parts.append(f"Not found information of {len(missing_names)} entities in the database: {missing_names}.")
              
             parts.append("The information for the found entities has been saved to temporary memory for use by other tools.")
             
@@ -413,7 +414,7 @@ class EntityRecognitionTool(BaseTool):
                     error=error_msg
                 )
 
-            return f"Error occurred while processing image: {str(e)}", SearchingResult()
+            return error_msg, SearchingResult()
     
     
     

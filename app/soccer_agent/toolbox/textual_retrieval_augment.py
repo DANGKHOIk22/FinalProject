@@ -22,8 +22,12 @@ class TextualRetrievalAugmentInput(BaseModel):
 class TextualRetrievalAugmentTool(BaseTool):
     name: str = "textual_retrieval_augment"
     description: str = """
-    Given a text query, the tool retrieves the relevant information from given soccer information or database page. 
-    It's always be used for background information of players, teams, coaches, referees, venues, etc. The data from previous tool call will be retrieved automatically.
+    Synthesize and summarize retrieved soccer-related information into a concise,
+    user-facing answer. Use this tool after `textual_entity_search` to process
+    long or detailed entity records (players, teams, coaches, referees,
+    venues, etc.). The tool automatically reads artifacts produced by prior
+    tool calls and generates a context-aware response that highlights the most
+    relevant facts and background. Returns the final answer as text.
     """
     args_schema:Type[BaseModel] = TextualRetrievalAugmentInput # type: ignore
     response_format: Literal['content', 'content_and_artifact'] = 'content_and_artifact'
@@ -40,8 +44,6 @@ class TextualRetrievalAugmentTool(BaseTool):
 
     def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, None]:
         """
-        Given a text query, the tool retrieves the relevant information from given soccer information or database page. 
-        It's always be used for background information of players, teams, coaches, referees, venues, etc. The data from previous tool call will be retrieved automatically.
         Args:
             query (str): Prompt query could be the original question, or the well defined question that can help retrieve the question.
             
@@ -67,7 +69,7 @@ class TextualRetrievalAugmentTool(BaseTool):
                 run_tree.end(
                     error="No artifact found in execution agent state for textual retrieval augment tool."
                 )
-            return "Could not retrieve any information from previous tool calls. Please ensure that the previous tools have been executed successfully or try calling the previous tools again.", None
+            return "Could not retrieve any information from previous tool calls. Please ensure that the previous tools have been executed successfully", None
         else: 
             logger.info(f"Artifact from execution agent state retrieved for textual retrieval augment tool.")
         
@@ -98,7 +100,7 @@ class TextualRetrievalAugmentTool(BaseTool):
                 )
 
             # Return detailed error message to the Agent and guide Agent to retry or stop
-            return "An error occurred while generating the answer based on the retrieved information. Try calling this tool again or stop the execution.", None
+            return "An error occurred while generating the answer based on the retrieved information. {str(e)}", None
     
     @staticmethod
     def _aggregate_searching_results(searching_result: SearchingResult) -> str:

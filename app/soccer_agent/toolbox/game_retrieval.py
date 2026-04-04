@@ -33,8 +33,11 @@ class ToolOutput(BaseModel):
 class GameInfoRetrievalTool(BaseTool):
     name: str = "game_info_retrieval"
     description: str = """
-    Retrieves pre-match info (referee, coach, attendance, formation) and final results/scores from the soccer match database JSON file.
-    Use this for static game information.
+    Retrieve structured match metadata and final results from the match database based on the identified match
+    (for example: referee, coaches, attendance, formation, venue, lineups,
+    and final score). Use this tool after game_search for questions that require static pre- or
+    post-match facts. The tool reads the match JSON and returns a concise,
+    structured answer based on the metadata.
     """
     args_schema: Type[BaseModel] = RetrievalInput # type: ignore
     
@@ -107,8 +110,10 @@ class GameInfoRetrievalTool(BaseTool):
 class GameHistoryRetrievalTool(BaseTool):
     name: str = "game_history_retrieval"
     description: str = """
-    Retrieves the textual live stream/commentary history of the whole game from the JSON file. Then, generates answers for user queries based on retrieved information.
-    Use this for questions about specific events, timestamps, plays, or game statistics that happened during the match.
+    Load the match event timeline or commentary for the identified match and generate answers grounded in
+    those events. Use this tool after `game_search` or 'commentary_generation' to answer questions about specific events, timestamps,
+    substitutions, goals, cards, and other in-game details. returns a context-aware
+    synthesized response.
     """
     args_schema: Type[BaseModel] = RetrievalInput # type: ignore
 
