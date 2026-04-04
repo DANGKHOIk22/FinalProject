@@ -76,7 +76,7 @@ class QueryUnderstandingPipeline:
         if not any([
             memory.scope,
             memory.conversation_state,
-            memory.shared_context,
+            memory.confirmed_entities,
             memory.open_discussion_threads,
         ]):
             return "Không có bộ nhớ phiên."
@@ -86,8 +86,8 @@ class QueryUnderstandingPipeline:
             parts.append(f"Phạm vi: {memory.scope}")
         if memory.conversation_state:
             parts.append(f"Trạng thái: {memory.conversation_state}")
-        if memory.shared_context:
-            parts.append("Thực thể đã xác nhận: " + "; ".join(memory.shared_context))
+        if memory.confirmed_entities:
+            parts.append("Thực thể đã xác nhận: " + "; ".join(memory.confirmed_entities))
         if memory.open_discussion_threads:
             parts.append("Chủ đề đang mở: " + "; ".join(memory.open_discussion_threads))
         return "\n".join(parts)
