@@ -21,8 +21,11 @@ from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
 from app.soccer_agent.prompts.agent import get_planning_prompt_template, get_execution_prompt_template,get_aggregator_prompt_template
 from app.config.config import (
-    DEFAULT_MODEL,GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
+    DEFAULT_MODEL, GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
+    SESSION_MEMORY_TOKEN_THRESHOLD, SESSION_MEMORY_RECENT_KEEP,
 )
+from app.soccer_agent.memory.session_memory import SessionMemoryManager, SessionMemory
+from app.soccer_agent.memory.query_understanding import QueryUnderstandingPipeline
 from app.config.settings import settings
 
 from app.soccer_agent.toolbox import (
@@ -38,6 +41,7 @@ from app.soccer_agent.toolbox import (
     commentary_generation,
 )
 from app.schema.chat import ChatRequest
+from app.cache.semantic_cache import semantic_cache
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -46,16 +50,15 @@ langfuse_client = get_client()
 # Structured output models for LLM responses
 class PlanningOutput(BaseModel):
     """Structured output for tool chain planning."""
-    tool_chains: Optional[List[List[str]]] = Field(default=None,description="List of independent tool chains to answer the query")
+    tool_chains: Optional[List[List[str]]] = Field(default=None, description="List of independent tool chains to answer the query")
     sub_queries: Optional[List[str]] = Field(default=None, description="List of specific decomposed sub-queries, each corresponding to a tool chain")
     need_call_tools: Optional[bool] = Field(default=True, description="Indicates whether tool calls are necessary")
-    claried_query: str = Field(default="", description="Clarified query after resolving pronouns and checking conversation history. If don't need, return the same query.")    
 
 # Define the state structure for the agent
 class AgentState(TypedDict):
     """Parent state structure for the planning agent."""
     user_query: str # The user's soccer-related question
-    claried_query: str # User query with pronouns resolved to specific entity names
+    claried_query: str # User query with pronouns/abbreviations resolved by QueryUnderstandingPipeline
     additional_material: Optional[List[str]] # Additional material (e.g, image/video related to the user question)
     tool_chains: List[List[str]] # The planned sequence of tools to execute.
     sub_queries: List[str] # The decomposed sub-queries for each worker.
@@ -113,7 +116,14 @@ class SoccerAgent:
         )
         self.planning_parser = PydanticOutputParser(pydantic_object=PlanningOutput)
 
-        
+        # Session memory + query understanding (use execution_llm: Flash Lite, fast)
+        self.session_memory_manager = SessionMemoryManager(
+            llm=self.execution_llm,
+            token_threshold=SESSION_MEMORY_TOKEN_THRESHOLD,
+            recent_messages_to_keep=SESSION_MEMORY_RECENT_KEEP,
+        )
+        self.query_understanding = QueryUnderstandingPipeline(llm=self.execution_llm)
+
         # Tool mapping dictionary using LangChain @tool decorated functions
         self.tool_registry: dict[str, BaseTool] = {
             "textual_entity_search": textual_entity_search(),
@@ -141,9 +151,22 @@ class SoccerAgent:
         """Build the LangGraph worker workflow."""
         workflow = StateGraph(WorkerState)
         tool_node = ToolNode(self.tools, messages_key="tool_node_messages")
+        
+        workflow.add_node("check_cache_node", self._check_cache_node)
         workflow.add_node("execution_node", self._execution_node)
         workflow.add_node("tool_node", tool_node)
-        workflow.set_entry_point("execution_node")
+        
+        workflow.set_entry_point("check_cache_node")
+        
+        workflow.add_conditional_edges(
+            "check_cache_node",
+            self.should_execute_worker,
+            {
+                "execute": "execution_node",
+                "end": END
+            }
+        )
+        
         workflow.add_conditional_edges(
             "execution_node",
             self.should_continue_call_tool,
@@ -233,7 +256,7 @@ class SoccerAgent:
                 "tool_node_messages": []
             }
     
-    def _tool_chain_planning(self, state: AgentState) -> AgentState:
+    async def _tool_chain_planning(self, state: AgentState) -> AgentState:
         """
         This node is responsible for planning the tool chain to answer the user's query.
         
@@ -262,7 +285,7 @@ class SoccerAgent:
                 planning_agent_prompt = planning_agent_prompt_template.invoke({
                     "toolbox_descriptions": tool_descriptions,
                     "format_instructions": format_instructions,
-                    "user_query": state["user_query"],
+                    "user_query": state.get("claried_query") or state["user_query"],
                     "additional_material": additional_material,
                     "conversation_history": conversation_history
                 })
@@ -274,7 +297,7 @@ class SoccerAgent:
             
             # Call the planning model to get the tool chain
             langfuse_handler = CallbackHandler()
-            response = self.planning_llm.invoke(
+            response = await self.planning_llm.ainvoke(
                 planning_agent_prompt,
                 config={
                     "callbacks": [langfuse_handler],
@@ -302,13 +325,10 @@ class SoccerAgent:
             logger.info("✅ TOOL CHAIN PLANNING STEP COMPLETED")
             logger.info("="*70)
 
-        claried_query = planning_output.claried_query or state["user_query"]
-        logger.info(f"Clarified query: {claried_query}")
-
         return {
             "user_query": state["user_query"],
-            "claried_query": claried_query,
-            "additional_material": state.get("additional_material", []),
+            "additional_material": sorted(state.get("additional_material") or []),
+            "claried_query": state.get("claried_query") or state["user_query"],
             "tool_chains": planning_output.tool_chains or [],
             "sub_queries": planning_output.sub_queries or [],
             "parallel_results": state.get("parallel_results", []),
@@ -344,11 +364,12 @@ class SoccerAgent:
                 "tool_results_history": [],
                 "tool_node_messages": [],
                 "last_tool_artifact": None,
+                "parallel_results": []
             }
             sends.append(Send("worker_graph", worker_state))
         return sends
     
-    def _execution_node(self, state: WorkerState) -> dict:
+    async def _execution_node(self, state: WorkerState) -> dict:
         """
         Iteratively execute the tool chain step by step using bind_tools with tool_choice.
         This allows the LLM to see the full tool schema and automatically generate correct parameters.
@@ -375,7 +396,27 @@ class SoccerAgent:
             tool_results_history.append(tool_result)
             last_artifact = tool_result.artifact if hasattr(tool_result, 'artifact') else None
             logger.info(f"Received tool result: {tool_result.content}")
-        
+
+        # Early exit: all planned tools have been executed — skip the termination LLM call
+        if tool_chain and len(tool_calls_history) >= len(tool_chain):
+            summary_parts = []
+            for i, tc in enumerate(tool_calls_history):
+                tool_name = tc.get("name", "unknown")
+                if i < len(tool_results_history):
+                    summary_parts.append(f"{tool_name}: {tool_results_history[i].content}")
+            result_text = "\n".join(summary_parts) if summary_parts else "All tools completed."
+            logger.info(f"✅ All {len(tool_chain)} tools executed — skipping termination LLM call")
+            logger.info("="*70)
+            return {
+                "additional_material": additional_material_list,
+                "tool_calls_history": tool_calls_history,
+                "tool_results_history": tool_results_history,
+                "tool_chain": tool_chain,
+                "tool_node_messages": [],
+                "last_tool_artifact": last_artifact,
+                "parallel_results": [result_text],
+            }
+
         # Format List[str] to string for prompt
         additional_material_str = ", ".join(additional_material_list) if additional_material_list else "None"
         
@@ -396,7 +437,7 @@ class SoccerAgent:
         response: AIMessage = None  # type: ignore
         try:
             # Invoke the model with the tool
-            response = self.execution_llm_with_tools.invoke(execution_prompt) # type: ignore
+            response = await self.execution_llm_with_tools.ainvoke(execution_prompt) # type: ignore
             logger.info(f"🤖 Response from execution agent: \n \t Response content: {response.text} \n \t Tool Calls: {response.tool_calls}")
             tool_node_messages = [response] # Add the message to tool_node_messages for tool_node if there is no tool call the should_or_continue node will end execution
             
@@ -434,10 +475,34 @@ class SoccerAgent:
             else:
                 result_text = "Worker stopped due to execution error."
             base_state["parallel_results"] = [result_text]
+            if sub_query:
+                semantic_cache.set(sub_query, result_text, additional_material_list)
 
         return base_state
+
+    def _check_cache_node(self, state: WorkerState) -> dict:
+        """Check semantic cache before executing worker."""
+        sub_query = state.get("sub_query")
+        if not sub_query:
+            return {}
+            
+        additional_material = state.get("additional_material", [])
+        cached_result = semantic_cache.check(sub_query, additional_material)
+        
+        if cached_result:
+            logger.info("⚡ Skipping worker execution due to cache hit (>0.9 similarity).")
+            return {
+                "parallel_results": [cached_result]
+            }
+        return {}
+
+    def should_execute_worker(self, state: WorkerState):
+        """If we already have parallel_results from cache hit, skipping worker execution."""
+        if state.get("parallel_results"):
+            return "end"
+        return "execute"
     
-    def _aggregator_node(self, state: AgentState) -> dict:
+    async def _aggregator_node(self, state: AgentState) -> dict:
         """Aggregate results from parallel executions and provide the final response."""
         with langfuse_client.start_as_current_observation(as_type="span", name="aggregator") as root_span:
             logger.info("="*70)
@@ -477,7 +542,7 @@ class SoccerAgent:
                 prep_span.update(output={"aggregator_prompt": aggregator_prompt})
                 
             langfuse_handler = CallbackHandler()
-            response = self.execution_llm.invoke(
+            response = await self.execution_llm.ainvoke(
                 aggregator_prompt,
                 config={
                     "callbacks": [langfuse_handler],
@@ -639,13 +704,36 @@ class SoccerAgent:
             except Exception:
                 pass
 
+    async def _background_save_memory(
+        self, session_id: str, user_query: str, output_with_tools: str
+    ) -> None:
+        """Save conversation memory in background with a dedicated DB connection."""
+        try:
+            mem, conn, pool = get_postgres_memory(session_id)
+            mem_obj = CustomSystemPromptMemory(
+                memory_key="history",
+                chat_memory=mem.chat_memory,
+                return_messages=True,
+                max_history=15,
+            )
+            await asyncio.to_thread(
+                mem_obj.save_context,
+                {"input": user_query},
+                {"output": output_with_tools},
+            )
+            if conn and pool:
+                conn.commit()
+                pool.putconn(conn)
+        except Exception as e:
+            logger.warning(f"[BackgroundSave] Failed for session {session_id}: {e}")
+
     async def run(self, request: ChatRequest) -> str:
         """
         Run the complete workflow: planning + execution.
-        
+
         Args:
             request: The ChatRequest object containing user_query and additional_material
-            
+
         Returns:
             Final response from the agent
         """
@@ -681,18 +769,70 @@ class SoccerAgent:
                             logging.warning(f"Failed to obtain memory for session {session_id}: {e}")
                             mem_span.update(output={"memory_loaded": False, "error": str(e)})
 
-                # Format conversation history
+                # Build history and run Query Understanding on all paths
                 history_text = ""
+                effective_memory = SessionMemory()
+                recent_msgs_for_qu = []
+
                 if chat_history:
-                    history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
+                    raw_history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
                     for msg in chat_history[-10:]:
                         if hasattr(msg, 'content'):
                             role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
-                            history_text += f"{role}: {msg.content}\n"
-                
+                            raw_history_text += f"{role}: {msg.content}\n"
+
+                    token_count = self.session_memory_manager.count_tokens(raw_history_text)
+
+                    if token_count > SESSION_MEMORY_TOKEN_THRESHOLD:
+                        # Path B: history exceeds threshold — use SessionMemory + recent slice
+                        old_msgs = chat_history[:-(SESSION_MEMORY_RECENT_KEEP-1)]
+                        recent_msgs_for_qu = chat_history[-SESSION_MEMORY_RECENT_KEEP:]
+
+                        cached_memory = await self.session_memory_manager.load_cached_memory(session_id)
+                        if cached_memory is None:
+                            if old_msgs:
+                                asyncio.create_task(
+                                    self.session_memory_manager.background_summarise(session_id, old_msgs)
+                                )
+                        else:
+                            effective_memory = cached_memory
+
+                        history_text = self.session_memory_manager.format_compressed_history(
+                            effective_memory, recent_msgs_for_qu
+                        )
+                        logger.info(f"[Path B] token_count={token_count}.")
+                    else:
+                        # Path A: full history fits — pass all as recent context
+                        recent_msgs_for_qu = chat_history
+                        history_text = raw_history_text
+                        logger.info(f"[Path A] token_count={token_count}.")
+
+                # Always run QueryUnderstanding — handles jargon, abbreviations, pronouns
+                qu_output = await self.query_understanding.run(
+                    user_query=request.user_query,
+                    session_memory=effective_memory,
+                    recent_messages=recent_msgs_for_qu,
+                )
+                logger.info(f"[QU] clarified='{qu_output.clarified_query}' is_ambiguous={qu_output.is_ambiguous}")
+
+                # Short-circuit: if query is ambiguous, ask for clarification immediately
+                # Skip if user attached images/videos — visual context resolves the ambiguity
+                has_media = bool(request.additional_material)
+                if qu_output.is_ambiguous and qu_output.clarifying_questions and not has_media:
+                    questions_text = "\n".join(f"- {q}" for q in qu_output.clarifying_questions)
+                    clarification_response = (
+                        f"Câu hỏi của bạn chưa đủ rõ ràng để tôi trả lời chính xác. "
+                        f"Bạn có thể làm rõ thêm không?\n{questions_text}"
+                    )
+                    logger.info("[QU] is_ambiguous=True — returning clarification request, skipping graph.")
+                    root_trace.update(output={"final_response": clarification_response, "is_ambiguous": True})
+                    return clarification_response
+
+                claried_query = qu_output.clarified_query
+
                 initial_state = {
                     "user_query": request.user_query,
-                    "claried_query": request.user_query,  # will be overwritten by planning node
+                    "claried_query": claried_query,
                     "additional_material": request.additional_material or [],
                     "tool_chains": [],
                     "sub_queries": [],
@@ -726,20 +866,23 @@ class SoccerAgent:
                 }
 
                 
-                if memory_object:
-                    try:
-                        final_response = result["final_response"]
-                        output_with_tools = self._build_tool_summary_for_memory(
-                            tool_calls_history=result.get("tool_calls_history", []),
-                            tool_results_history=result.get("tool_results_history", []),
-                            final_response=final_response
+                # Save conversation memory in background (non-blocking, uses its own DB connection)
+                try:
+                    output_with_tools = self._build_tool_summary_for_memory(
+                        tool_calls_history=result.get("tool_calls_history", []),
+                        tool_results_history=result.get("tool_results_history", []),
+                        final_response=result["final_response"],
+                    )
+                    asyncio.create_task(
+                        self._background_save_memory(session_id, request.user_query, output_with_tools)
+                    )
+                    # Incremental update of Redis SessionMemory if tool calls were made
+                    if result.get("tool_calls_history"):
+                        asyncio.create_task(
+                            self.session_memory_manager.background_update(session_id, output_with_tools)
                         )
-                        memory_object.save_context(
-                            inputs={"input": request.user_query},
-                            outputs={"output": output_with_tools}
-                        )
-                    except Exception as e:
-                        logging.warning(f"Failed to save memory for session {session_id}: {e}")
+                except Exception as e:
+                    logging.warning(f"Failed to prepare memory save for session {session_id}: {e}")
                 logger.info("Run completed successfully")
 
                 root_trace.update(output={"final_response": result["final_response"]})

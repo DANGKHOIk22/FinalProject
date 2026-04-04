@@ -20,6 +20,7 @@ from app.config.settings import settings
 from app.config.config import QDRANT_SEARCH_SCORE_THRESHOLD as THRESHOLD
 from app.schema.textual_entity_search import SearchingResult
 from app.schema.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
+from app.cache.standard_cache import standard_cache
 
 
 # Setup logger
@@ -80,6 +81,9 @@ class EntityRecognitionTool(BaseTool):
             self._qdrant_client = QdrantClient(
                 url=qdrant_url,
                 api_key=qdrant_api_key,
+                prefer_grpc=True,
+                check_compatibility=False,
+                timeout=20
             )
             logger.info("✅ Qdrant client initialized successfully")
         
@@ -279,6 +283,7 @@ class EntityRecognitionTool(BaseTool):
         logger.warning(f"Unknown entity type: {entity_type}")
         return None
     
+    @standard_cache.cache(ttl=60 * 60, validatedModel=SearchingResult)
     def _query_database(self, soccer_entities: List[Dict]) -> SearchingResult:
         """
         Query MongoDB database for detailed information about entities.
