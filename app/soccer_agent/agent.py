@@ -397,26 +397,6 @@ class SoccerAgent:
             last_artifact = tool_result.artifact if hasattr(tool_result, 'artifact') else None
             logger.info(f"Received tool result: {tool_result.content}")
 
-        # Early exit: all planned tools have been executed — skip the termination LLM call
-        if tool_chain and len(tool_calls_history) >= len(tool_chain):
-            summary_parts = []
-            for i, tc in enumerate(tool_calls_history):
-                tool_name = tc.get("name", "unknown")
-                if i < len(tool_results_history):
-                    summary_parts.append(f"{tool_name}: {tool_results_history[i].content}")
-            result_text = "\n".join(summary_parts) if summary_parts else "All tools completed."
-            logger.info(f"✅ All {len(tool_chain)} tools executed — skipping termination LLM call")
-            logger.info("="*70)
-            return {
-                "additional_material": additional_material_list,
-                "tool_calls_history": tool_calls_history,
-                "tool_results_history": tool_results_history,
-                "tool_chain": tool_chain,
-                "tool_node_messages": [],
-                "last_tool_artifact": last_artifact,
-                "parallel_results": [result_text],
-            }
-
         # Format List[str] to string for prompt
         additional_material_str = ", ".join(additional_material_list) if additional_material_list else "None"
         
