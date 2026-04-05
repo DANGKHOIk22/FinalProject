@@ -19,7 +19,12 @@ from langgraph.constants import Send
 
 from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
-from app.soccer_agent.prompts.agent import get_planning_prompt_template, get_execution_prompt_template,get_aggregator_prompt_template
+from app.soccer_agent.prompts.agent import (
+    get_planning_prompt_template,
+    get_execution_prompt_template,
+    get_aggregator_prompt_template,
+    get_guardrails_prompt_template,
+)
 from app.config.config import (
     DEFAULT_MODEL, GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
     SESSION_MEMORY_TOKEN_THRESHOLD, SESSION_MEMORY_RECENT_KEEP,
@@ -53,6 +58,12 @@ class PlanningOutput(BaseModel):
     tool_chains: Optional[List[List[str]]] = Field(default=None, description="List of independent tool chains to answer the query")
     sub_queries: Optional[List[str]] = Field(default=None, description="List of specific decomposed sub-queries, each corresponding to a tool chain")
     need_call_tools: Optional[bool] = Field(default=True, description="Indicates whether tool calls are necessary")
+
+
+class GuardrailsOutput(BaseModel):
+    """Structured output for input guardrails validation."""
+
+    block: bool = Field(description="Whether the user input should be blocked")
 
 # Define the state structure for the agent
 class AgentState(TypedDict):
@@ -114,7 +125,15 @@ class SoccerAgent:
             thinking_budget=4000,
             include_thoughts=True #type: ignore
         )
+        self.guardrails_llm = ChatGoogleGenerativeAI(
+            model="gemma-4-26b-a4b-it",
+            api_key=settings.GOOGLE_API_KEY,
+            temperature=0.0,
+            top_p=1.0,
+            max_output_tokens=512,
+        )
         self.planning_parser = PydanticOutputParser(pydantic_object=PlanningOutput)
+        self.guardrails_parser = PydanticOutputParser(pydantic_object=GuardrailsOutput)
 
         # Session memory + query understanding (use execution_llm: Flash Lite, fast)
         self.session_memory_manager = SessionMemoryManager(
@@ -368,6 +387,21 @@ class SoccerAgent:
             }
             sends.append(Send("worker_graph", worker_state))
         return sends
+
+    def _evaluate_guardrails(self, user_input: str) -> bool:
+        """Run guardrails model and return block decision."""
+        guard_prompt_template = get_guardrails_prompt_template()
+        prompt = guard_prompt_template.invoke({"user_input": user_input})
+
+        response = self.guardrails_llm.invoke(prompt)
+        response_text = response.text if hasattr(response, "text") else str(response)
+
+        try:
+            parsed: GuardrailsOutput = self.guardrails_parser.parse(response_text)
+            return parsed.block
+        except Exception:
+            # Fail-safe: do not block if parser fails.
+            return False
     
     async def _execution_node(self, state: WorkerState) -> dict:
         """
@@ -751,6 +785,15 @@ class SoccerAgent:
             
             try:
                 logger.info(f"Starting run for query: {request.user_query[:100]}...")
+
+                # Guardrails must run first: before memory load and query understanding.
+                blocked = self._evaluate_guardrails(request.user_query)
+                if blocked:
+                    blocked_response = " Câu hỏi của bạn không liên quan đến bóng đá, tôi không thể trả lời. Vui lòng hỏi tôi những câu hỏi liên quan đến bóng đá nhé."
+                    logger.info("Guardrails blocked the request before memory/query-understanding.")
+                    root_trace.update(output={"final_response": blocked_response, "blocked": True})
+                    return blocked_response
+                logger.info("Guardrails passed. Continuing to memory/query-understanding.")
                 
                 # Load conversation history
                 with root_trace.start_as_current_observation(as_type="span", name="load_memory") as mem_span:
