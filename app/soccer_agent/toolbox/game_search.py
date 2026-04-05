@@ -1,13 +1,14 @@
 import os
 import logging
 import pandas as pd
-from typing import Type, Optional, Literal, Tuple
+from typing import Type, Optional, Literal, Tuple, List, Dict
 from pydantic import BaseModel, Field, PrivateAttr
 from langchain.tools import BaseTool
 from app.soccer_agent.factory.llm_provider import get_llm
 from typing import Any
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.output_parsers import PydanticOutputParser
+from app.cache.standard_cache import standard_cache
 
 # Import config và prompts từ project của bạn
 from app.config.config import PROJECT_PATH, GEMINI_2_0_FLASH_LITE
@@ -82,21 +83,28 @@ class GameSearchTool(BaseTool):
         chain = prompt | self._llm | self._parser
         return chain.invoke({"question": query, "format_instructions": format_instructions})
 
-    def _retrieve_candidates(self, info: MatchInfo):
-        """Bước 2: Lọc dữ liệu Pandas."""
+    @standard_cache.cache(ttl=60 * 60)
+    def _retrieve_candidate_paths(self, info: MatchInfo) -> Dict[str, Optional[List[str]]]:
+        """Bước 2a: Lọc dữ liệu và trả về danh sách file_path để cache."""
         if self.df.empty:
-            return None, None
+            return {"initial_paths": None, "team_paths": None}
 
         df = self.df.copy()
         conditions = []
 
         # Lọc Metadata
-        if info.league != "unknown": conditions.append(df["league"] == info.league)
-        if info.season != "unknown": conditions.append(df["season"] == info.season)
-        if info.year != "unknown": conditions.append(df["year"] == int(info.year))
-        if info.month != "unknown": conditions.append(df["month"] == int(info.month.lstrip('0')))
-        if info.day != "unknown": conditions.append(df["day"] == int(info.day.lstrip('0')))
-        if info.time != "unknown": conditions.append(df["time"] == info.time)
+        if info.league != "unknown":
+            conditions.append(df["league"] == info.league)
+        if info.season != "unknown":
+            conditions.append(df["season"] == info.season)
+        if info.year != "unknown":
+            conditions.append(df["year"] == int(info.year))
+        if info.month != "unknown":
+            conditions.append(df["month"] == int(info.month.lstrip('0')))
+        if info.day != "unknown":
+            conditions.append(df["day"] == int(info.day.lstrip('0')))
+        if info.time != "unknown":
+            conditions.append(df["time"] == info.time)
 
         if conditions:
             combined_condition = pd.concat(conditions, axis=1).all(axis=1)
@@ -104,13 +112,14 @@ class GameSearchTool(BaseTool):
         else:
             initial_filtered_df = df
 
-        if initial_filtered_df.empty:
-            return initial_filtered_df, None
+        initial_paths = initial_filtered_df["file_path"].tolist()
+        if not initial_paths:
+            return {"initial_paths": [], "team_paths": None}
 
         # Lọc Team
         final_filtered_df = initial_filtered_df
         team_values = [t for t in [info.team1, info.team2] if t != "unknown"]
-        
+
         if team_values:
             team_conditions = []
             t1 = info.team1.replace(" ", "") if info.team1 != "unknown" else ""
@@ -139,7 +148,32 @@ class GameSearchTool(BaseTool):
                 final_filtered_df = initial_filtered_df[final_mask]
 
         if len(final_filtered_df) > 10:
-            final_filtered_df = None 
+            team_paths = None
+        else:
+            team_paths = final_filtered_df["file_path"].tolist()
+
+        return {"initial_paths": initial_paths, "team_paths": team_paths}
+    
+    def _retrieve_candidates(self, info: MatchInfo):
+        """Bước 2: Lọc dữ liệu Pandas."""
+        if self.df.empty:
+            return None, None
+
+        candidate_paths = self._retrieve_candidate_paths(info)
+        initial_paths = candidate_paths.get("initial_paths")
+        team_paths = candidate_paths.get("team_paths")
+
+        if initial_paths is None:
+            return None, None
+
+        initial_filtered_df = self.df[self.df["file_path"].isin(initial_paths)]
+        if initial_filtered_df.empty:
+            return initial_filtered_df, None
+
+        if team_paths is None:
+            final_filtered_df = None
+        else:
+            final_filtered_df = initial_filtered_df[initial_filtered_df["file_path"].isin(team_paths)]
 
         return initial_filtered_df, final_filtered_df
 
