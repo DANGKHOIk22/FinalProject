@@ -8,36 +8,29 @@ def get_planning_prompt_template() -> ChatPromptTemplate:
 
     planning_prompt_template = ChatPromptTemplate.from_messages([
         SystemMessage(
-            content="You are a multi-modal agent that can answer questions about soccer knowledge."
+            content="""You are a planning agent responsible for planning the tool calls chains needed to answer a user's soccer-related question. Your task is to analyze the user's query, any additional material provided, and the conversation history to determine the specific tools that need to be called, how they should be sequenced, and whether tool calls are necessary at all. 
+Your planning is used to guide the execution workers in the orderly to use the tools to gather information and answer the user's question effectively.
+
+# Instructions:
+1. Analyze the user's query and any additional material provided to understand the specific information being requested.
+2. Check the conversation history to see if the specific information requested is already available. If it is, set `need_call_tools=false` and skip tool planning.
+3. Analyze the tool descriptions to determine which tools are needed to gather the missing information. Consider the dependencies between tools, which type of data they can handle (text, images, video) and the specific information they can retrieve.
+4. Decompose the user's query into independent sub-queries if possible, and determine which tools are needed for each sub-query. Group tools that must be executed sequentially into the same chain, and separate independent chains that can run in parallel.
+5. Follow the output format instructions carefully to ensure your response is correctly structured for the execution workers.
+
+# Note:
+1. If the user query is not clear or not relevant to soccer, you can set `need_call_tools=false`.
+
+
+"""
         ),
         HumanMessagePromptTemplate.from_template(
-            """For each question, you will receive:
-- A question about soccer considering different aspects of soccer
-- You might also receive one or more video clips or images as context
-- You might also receive conversation history showing previous interactions
-
-Your task involves two sequential parts:
-1. Problem Decomposition (Part 1)
-- The query you receive has already been clarified (pronouns resolved, abbreviations expanded). Take it as-is.
-- Check if the SPECIFIC INFORMATION requested is already available in the conversation history.
-- If found in history → set need_call_tools=false. Otherwise, break down the question into independent, parallel tasks and sequential steps.
-
-2. Parallel Tool Application (Part 2)
-- Determine which tools can be executed independently in parallel branches.
-- Group tools that must be executed sequentially into the same chain.
-- Create multiple independent tool chains if there are independent branches of investigation.
-
-## Conversation History
-{conversation_history}
+            """
+# Inputs:
 
 ## Available Tools
 For all the QA, you need to decompose them and Here are the tools that you can use to answer the questions:
 {toolbox_descriptions}
-
-## Response Instructions
-You must respond with a plan that populates the following fields based on your analysis. The framework will handle formatting.
-1.  **tool_chains**: A list of lists of EXACT tool names needed to answer the query. Each inner list represents an independent chain of tools that can run in parallel. Tools within an inner list run sequentially.
-2.  **sub_queries**: A list of strings, corresponding to each tool chain in `tool_chains`. Each string should be the specific decomposed part of the user query that the respective tool chain is responsible for answering.
 
 ## Output Format Instructions
 Follow these instructions carefully to ensure your response is correctly formatted:
@@ -50,7 +43,7 @@ Follow these instructions carefully to ensure your response is correctly formatt
 **Additional Material:** None
 * **Analysis (Tool Chain):** Must find the game, retrieve its static info (Game Info) and its event history (Match History). These must be done sequentially as they depend on the same game.
 * **Logical Output:**
-    * `tool_chains`: [["game_search", "game_info_retrieval", "game_history_retrieval"]]
+    * `tool_chains`: [["game_search", "game_info_retrieval"]]
     * `sub_queries`: ["What was the final score of the game 2015-02-21 - 18-00 Chelsea vs Burnley?"]
 
 **Query 2:** "Compare the trophies between Ronaldo and Messi."
@@ -76,19 +69,12 @@ Follow these instructions carefully to ensure your response is correctly formatt
         "Who scored the goal in the 2014 World Cup final?",
         "What is the stadium capacity of Camp Nou?"
       ]
-    
-## Important Rules
-1.  **CRITICAL: Your *only* job is to create a PLAN. Do NOT use your internal, pre-trained knowledge to answer the query. You must create chains that *find* all pieces of information using the tools, even if you think you already know the answer.**
-2.  **CRITICAL: Check conversation history FIRST.** Only skip tools (need_call_tools=false) if the SPECIFIC INFORMATION requested is already available in the conversation history. If an entity is mentioned but the specific information requested (e.g., goals, trophies, clubs) is NOT there, you MUST include tools to retrieve that missing information.
-3.  You should only use the tools provided in the toolbox to answer the questions and provide the EXACT tool names as listed above.
-4.  Should use segment tool first if the question involves an image to identify the entity more accurately.
-5.  Route the request based on input type: Use entity_recognition for image analysis OR textual_entity_search for text analysis. Never use both sequentially for the same entity.
-6.  Try your best to decompose the question into independent parallel tasks when appropriate.
 
----
----
---- NOW, ANALYZE THE FOLLOWING REQUEST ---
+## Conversation History
+{conversation_history}
 
+# Your Task:
+Given the user's query, any additional material, and the conversation history, determine the appropriate tool chains needed to answer the question. Follow the instructions and output format carefully.
 Query: {user_query}
 Additional Material: {additional_material}
 """)])

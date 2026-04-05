@@ -50,8 +50,8 @@ langfuse_client = get_client()
 # Structured output models for LLM responses
 class PlanningOutput(BaseModel):
     """Structured output for tool chain planning."""
-    tool_chains: Optional[List[List[str]]] = Field(default=None, description="List of independent tool chains to answer the query")
-    sub_queries: Optional[List[str]] = Field(default=None, description="List of specific decomposed sub-queries, each corresponding to a tool chain")
+    tool_chains: Optional[List[List[str]]] = Field(default=None, description="A list of lists of EXACT tool names needed to answer the query. Each inner list represents an independent chain of tools that can run in parallel. Tools within an inner list run sequentially.")
+    sub_queries: Optional[List[str]] = Field(default=None, description="A list of strings, corresponding to each tool chain in `tool_chains`. Each string should be the specific decomposed part of the user query that the respective tool chain is responsible for answering.")
     need_call_tools: Optional[bool] = Field(default=True, description="Indicates whether tool calls are necessary")
 
 # Define the state structure for the agent
@@ -131,7 +131,7 @@ class SoccerAgent:
             "game_search": game_search(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
-            # "entity_recognition": entity_recognition(),
+            "entity_recognition": entity_recognition(),
             "choice_selection": choice_selection(),
             "segment": segment(),
             # "frame_selection": frame_selection(),
