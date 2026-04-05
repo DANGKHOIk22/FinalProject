@@ -4,6 +4,7 @@ import logging
 import base64
 import pymongo
 import numpy as np
+import cv2
 from collections import defaultdict
 import requests
 
@@ -122,7 +123,7 @@ class EntityRecognitionTool(BaseTool):
             raise ConnectionError(f"Failed to connect to InsightFace endpoint: {response.status_code} - {response.text}")
 
     
-    def _create_payload(self, image_path: str, max_faces: int = 5, confidence_threshold: float = 0.85) -> Dict[str, Any]:
+    def _create_payload(self, image_path: str, max_faces: int = 5, confidence_threshold: float = 0.60) -> Dict[str, Any]:
         """
         Create payload for InsightFace endpoint.
         
@@ -135,19 +136,58 @@ class EntityRecognitionTool(BaseTool):
         :return: JSON payload for the request
         :rtype: Dict
         """
-
-        with open(image_path, "rb") as image_file:
-            image_data = image_file.read()
+        # Validate file exists and is readable
+        if not os.path.isfile(image_path):
+            error_msg = f"Image file not found: {image_path}"
+            logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
         
-
-        image_base64 = base64.b64encode(image_data).decode('utf-8')
+        try:
+            # Read image file
+            with open(image_path, "rb") as image_file:
+                image_data = image_file.read()
+            
+            file_size_kb = len(image_data) / 1024
+            logger.info(f"📸 Image loaded: {os.path.basename(image_path)} ({file_size_kb:.2f} KB)")
+            
+            # Validate image data is not empty
+            if not image_data:
+                error_msg = f"Image file is empty: {image_path}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            # Validate image format by attempting to decode it locally
+            # This ensures the image is valid before sending to endpoint
+            temp_img = cv2.imdecode(np.frombuffer(image_data, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if temp_img is None:
+                error_msg = f"Invalid or corrupted image file: {image_path}. Could not decode image."
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            img_height, img_width = temp_img.shape[:2]
+            logger.info(f"✅ Image validated - Format: valid, Size: {img_width}x{img_height}")
+            
+            # Encode to base64
+            image_base64 = base64.b64encode(image_data).decode('utf-8')
+            logger.info(f"📦 Base64 encoded - Payload size: {len(image_base64) / 1024:.2f} KB")
+        
+        except Exception as e:
+            error_msg = f"Failed to process image file {image_path}: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        # Validate confidence threshold
+        if not (0.0 < confidence_threshold < 1.0):
+            logger.warning(f"Invalid confidence_threshold {confidence_threshold}; using 0.6")
+            confidence_threshold = 0.60
         
         payload = {
             "image": image_base64,
             "max_faces": max_faces,
             "confidence_threshold": confidence_threshold
         }
-
+        
+        logger.info(f"🔍 Payload created - max_faces: {max_faces}, confidence_threshold: {confidence_threshold}")
         return payload
     
     @staticmethod    
@@ -169,7 +209,7 @@ class EntityRecognitionTool(BaseTool):
         assert self._qdrant_client is not None, "Qdrant client is not initialized"
         
         # Create payload for InsightFace endpoint
-        payload = self._create_payload(image_path=image_path, max_faces=5, confidence_threshold=0.80)
+        payload = self._create_payload(image_path=image_path, max_faces=5, confidence_threshold=0.60)
 
         try:
         # Call to InsightFace endpoint

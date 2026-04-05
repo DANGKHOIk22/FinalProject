@@ -8,7 +8,17 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 def _ensure_repo_on_syspath() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    # Find repo root by locating pyproject.toml
+    current = Path(__file__).resolve().parent
+    while current != current.parent:  # Stop at filesystem root
+        if (current / "pyproject.toml").exists() or (current / "app").exists():
+            if str(current) not in sys.path:
+                sys.path.insert(0, str(current))
+            return
+        current = current.parent
+    
+    # Fallback: use parents[2] (two levels up from test file)
+    repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
@@ -52,8 +62,8 @@ def main() -> int:
         return 2
 
     # Import after sys.path fix
-    from app.config import settings
-    from app.toolbox.entity_recognition import EntityRecognitionTool
+    from app.config.settings import settings
+    from app.soccer_agent.toolbox.entity_recognition import EntityRecognitionTool
 
     required_env = [
         "MONGO_SRV",
@@ -62,8 +72,8 @@ def main() -> int:
         "QDRANT_URL",
         "QDRANT_API_KEY",
         "QDRANT_COLLECTION_NAME",
-        "DEEPFACE_ENDPOINT_URI",
-        "DEEPFACE_ENDPOINT_KEY",
+        "INSIGHTFACE_ENDPOINT_URI",
+        "INSIGHTFACE_ENDPOINT_KEY",
     ]
     missing = [k for k in required_env if not os.getenv(k)]
     if missing:

@@ -29,7 +29,7 @@ def init():
     global app
     model_path = Path(os.getenv("AZUREML_MODEL_DIR", "")) / ".insightface"
     app = FaceAnalysis(name="buffalo_l", root=str(model_path), providers=["CPUExecutionProvider"])
-    app.prepare(ctx_id=0)
+    app.prepare(ctx_id=0, det_thresh=0.5, det_size=(640, 640))
     logger.info(f"InsightFace model path: {model_path}")
     logger.info("Init complete")
 
@@ -88,6 +88,43 @@ def run(raw_data):
             raise ValueError('Field "image" does not contain a valid decodable image')
         return image_bgr
     
+    def _pad_image(image: np.ndarray, dest_size: tuple = (640, 640)) -> np.ndarray:
+        """
+        Pad the image to the destination size if it's smaller.
+        Centers the original image in the padded output with black borders.
+        
+        :param image: Input BGR image as numpy array
+        :param dest_size: Target size as (height, width)
+        :return: Padded image with dest_size dimensions
+        """
+        dest_height, dest_width = dest_size
+        height, width = image.shape[:2]
+        
+        # Calculate padding needed
+        pad_height = dest_height - height if height < dest_height else 0
+        pad_width = dest_width - width if width < dest_width else 0
+        
+        if pad_height == 0 and pad_width == 0:
+            return image
+        
+        # Center the image by distributing padding evenly
+        top = pad_height // 2
+        bottom = pad_height - top
+        left = pad_width // 2
+        right = pad_width - left
+        
+        logger.info(f"Padding image: original {width}x{height}, padding top={top} bottom={bottom} left={left} right={right}")
+        
+        image_padded = cv2.copyMakeBorder(
+            image, top, bottom, left, right,
+            cv2.BORDER_CONSTANT, value=[0, 0, 0]
+        )
+        
+        logger.info(f"Original image dimensions: {width}x{height}")
+        logger.info(f"Padded image dimensions: {image_padded.shape[1]}x{image_padded.shape[0]}")
+        
+        return image_padded
+    
     def _extract_options(payload: Dict[str, Any]) -> Dict[str, Any]:
         options = {}
         # Extract "max_faces"
@@ -108,6 +145,7 @@ def run(raw_data):
             if 0.0 < confidence_threshold and confidence_threshold < 1.0:
                 options["confidence_threshold"] = confidence_threshold
 
+        logger.info(f"📋 Options - max_faces: {options['max_faces']}, confidence_threshold: {options['confidence_threshold']:.3f}")
         return options
 
     def _face_to_dict(face: Any) -> Dict[str, Any]:
@@ -141,6 +179,7 @@ def run(raw_data):
         payload = _parse_payload(raw_data)
         image_b64 = _extract_base64_image(payload)
         image_file = _base64_to_filelike(image_b64)
+        image_file = _pad_image(image_file, dest_size=(640, 640))
         options = _extract_options(payload)
 
         faces = app.get(image_file)
