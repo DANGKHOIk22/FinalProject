@@ -1,7 +1,7 @@
 """
-Deploy DeepFace Model to Azure Machine Learning Online Endpoint
+Deploy InsightFace Model to Azure Machine Learning Online Endpoint
 
-This script deploys (or updates) a Managed Online Endpoint in Azure ML for DeepFace scoring.
+This script deploys (or updates) a Managed Online Endpoint in Azure ML for InsightFace scoring.
 It is idempotent: it checks whether assets already exist (model/environment/endpoint/deployment)
 and only creates them when missing.
 
@@ -18,13 +18,13 @@ Prerequisites:
 Usage:
     python deploy.py --env-folder /path/to/env --scoring-folder /path/to/scoring
     
-    Or with optional model weights:
-    python deploy.py --env-folder /path/to/env --scoring-folder /path/to/scoring \\
-                     --model-weights /path/to/weights.h5
-
     Or with custom endpoint/model names:
     python deploy.py --env-folder /path/to/env --scoring-folder /path/to/scoring \\
                      --endpoint-name my-endpoint --model-name my-model
+
+    Or with custom instance configuration:
+    python deploy.py --env-folder /path/to/env --scoring-folder /path/to/scoring \\
+                     --instance-type Standard_D4s_v3 --instance-count 2
 """
 
 import os
@@ -32,6 +32,7 @@ import sys
 import argparse
 import logging
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv, find_dotenv, set_key
@@ -64,15 +65,15 @@ logging.getLogger("azure.identity").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
-class AzureMLDeepFaceDeployment:
-    """Handles deployment of DeepFace model to Azure ML."""
+class AzureMLInsightFaceDeployment:
+    """Handles deployment of InsightFace model to Azure ML."""
     
     # Default configuration
-    DEFAULT_ENDPOINT_NAME = "deepface-endpoint"
-    DEFAULT_MODEL_NAME = "deepface-model"
+    DEFAULT_ENDPOINT_NAME = "insightface-endpoint"
+    DEFAULT_MODEL_NAME = "insightface-model"
     DEFAULT_MODEL_VERSION = "1"
-    DEFAULT_ENV_NAME = "deepface-online-endpoint-environment"
-    DEFAULT_ENV_VERSION = "1"
+    DEFAULT_ENV_NAME = "insightface-online-endpoint-environment"
+    DEFAULT_ENV_VERSION = "2"
     DEFAULT_DEPLOYMENT_NAME = "blue"
     DEFAULT_INSTANCE_TYPE = "Standard_F4s_v2"
     DEFAULT_INSTANCE_COUNT = 1
@@ -89,27 +90,27 @@ class AzureMLDeepFaceDeployment:
         deployment_name: Optional[str] = None,
         instance_type: Optional[str] = None,
         instance_count: Optional[int] = None,
-        model_weights_path: Optional[str] = None,
+        model_path: Optional[str] = None,
     ):
         """
-        Initialize DeepFace deployment handler.
+        Initialize InsightFace deployment handler.
         
         Args:
             env_folder: Path to the environment folder containing conda.yaml
             scoring_folder: Path to the scoring script folder
-            endpoint_name: Azure ML endpoint name (default: deep-face-endpoint-v2)
-            model_name: Model registry name (default: deepface-models)
+            endpoint_name: Azure ML endpoint name (default: insightface-endpoint)
+            model_name: Model registry name (default: insightface-model)
             model_version: Model version (default: 1)
-            env_name: Environment name (default: deepface-online-endpoint-environment)
+            env_name: Environment name (default: insightface-online-endpoint-environment)
             env_version: Environment version (default: 1)
             deployment_name: Deployment name (default: blue)
             instance_type: Compute instance type (default: Standard_F4s_v2)
             instance_count: Number of instances (default: 1)
-            model_weights_path: Optional path to model weights file
+            model_path: Optional path to model directory
         """
         self.env_folder = Path(env_folder).resolve()
         self.scoring_folder = Path(scoring_folder).resolve()
-        self.model_weights_path = Path(model_weights_path) if model_weights_path else None
+        self.model_path = Path(model_path) if model_path else None
         
         # Configuration
         self.endpoint_name = endpoint_name or self.DEFAULT_ENDPOINT_NAME
@@ -141,51 +142,14 @@ class AzureMLDeepFaceDeployment:
         if not score_file.exists():
             raise FileNotFoundError(f"score.py not found in: {self.scoring_folder}")
         
-        if self.model_weights_path and not self.model_weights_path.exists():
-            raise FileNotFoundError(f"Model weights file not found: {self.model_weights_path}")
+        if self.model_path and not self.model_path.exists():
+            raise FileNotFoundError(f"Model directory not found: {self.model_path}")
         
         logger.info("All required paths validated successfully")
     
-    def _download_deepface_model(self) -> Path:
-        """
-        Download DeepFace model weights if they don't exist locally.
-        Downloads facenet512 and retinaface models from GitHub releases.
-        
-        Returns:
-            Path to the downloaded model directory
-        """
-        # Create cache directory
-        cache_dir = Path.home() / ".deepface" / "weights"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"Using DeepFace cache directory: {cache_dir}")
-        
-        # Model URLs from GitHub
-        models = {
-            "facenet512_weights.h5": "https://github.com/serengil/deepface_models/releases/download/v1.0/facenet512_weights.h5",
-            "retinaface.h5": "https://github.com/serengil/deepface_models/releases/download/v1.0/retinaface.h5",
-        }
-        
-        # Download models if they don't exist
-        for model_name, model_url in models.items():
-            model_path = cache_dir / model_name
-            
-            if model_path.exists():
-                logger.info(f"Model exists: {model_name}")
-                continue
-            
-            logger.info(f"Downloading {model_name} from {model_url}")
-            try:
-                urllib.request.urlretrieve(model_url, str(model_path))
-                logger.info(f"Successfully downloaded: {model_name}")
-            except Exception as e:
-                logger.error(f"Failed to download {model_name}: {str(e)}")
-                raise
-        
-        return cache_dir.parent  # Return .deepface parent directory    
     def _authenticate(self) -> None:
         """Authenticate with Azure ML workspace."""
-        load_dotenv(override=True)
+        load_dotenv()
         
         # Get credentials
         tenant_id = os.getenv("AZURE_TENANT_ID")
@@ -228,6 +192,62 @@ class AzureMLDeepFaceDeployment:
         
         logger.info(f"Authenticated to workspace: {workspace_name}")
     
+    def _download_insightface_model(self) -> Path:
+        """
+        Download InsightFace buffalo_l model if it doesn't exist locally.
+        Downloads the model zip from GitHub releases and extracts it.
+        
+        Returns:
+            Path to the extracted model directory (.insightface)
+        """
+        # Create cache directory
+        cache_dir = Path.cwd() / "temporary" / "cache" / ".insightface" / "models"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        model_dir = cache_dir / "buffalo_l"
+        
+        # Check if model already exists
+        if model_dir.exists() and any(model_dir.iterdir()):
+            logger.info(f"Model already exists: {model_dir}")
+            return Path.cwd() / "temporary" / "cache" / ".insightface"
+        
+        logger.info(f"Using InsightFace cache directory: {cache_dir}")
+        
+        # Model URL from GitHub
+        url_to_download = "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
+        zip_path = model_dir / "buffalo_l.zip"
+        
+        # Create model directory
+        model_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Download the zip file
+        logger.info(f"Downloading buffalo_l model from {url_to_download}")
+        try:
+            urllib.request.urlretrieve(url_to_download, str(zip_path))
+            logger.info(f"Successfully downloaded to: {zip_path}")
+        except Exception as e:
+            logger.error(f"Failed to download model: {str(e)}")
+            raise
+        
+        # Extract the zip file
+        logger.info(f"Extracting model to: {model_dir}")
+        try:
+            with zipfile.ZipFile(str(zip_path), 'r') as zip_ref:
+                zip_ref.extractall(str(model_dir))
+            logger.info(f"Successfully extracted model")
+        except Exception as e:
+            logger.error(f"Failed to extract model: {str(e)}")
+            raise
+        
+        # Remove the zip file after extraction
+        try:
+            zip_path.unlink()
+            logger.info(f"Cleaned up zip file: {zip_path}")
+        except Exception as e:
+            logger.warning(f"Failed to remove zip file: {str(e)}")
+        
+        return Path.cwd() / "temporary" / "cache" / ".insightface"
+    
     def _try_get_model(self) -> Optional[Model]:
         """Try to get existing model from registry."""
         try:
@@ -267,7 +287,7 @@ class AzureMLDeepFaceDeployment:
     
     def ensure_model(self, skip_if_exists: bool = True) -> Model:
         """
-        Register or get the DeepFace model in Azure ML.
+        Register or get the InsightFace model in Azure ML.
         
         Args:
             skip_if_exists: If True, skip creation if model already exists
@@ -284,30 +304,28 @@ class AzureMLDeepFaceDeployment:
         logger.info(f"Creating model: {self.model_name}:{self.model_version}")
         
         # Determine model path
-        if self.model_weights_path:
-            # Use provided model weights path
-            model_path = str(self.model_weights_path.parent)
+        if self.model_path:
+            model_path = str(self.model_path)
             logger.info(f"Using provided model path: {model_path}")
         else:
-            # Download default DeepFace models if not provided
-            logger.info("No model weights path provided. Downloading default DeepFace models...")
-            model_dir = self._download_deepface_model()
-            model_path = str(model_dir)
+            # Download InsightFace model if not provided
+            logger.info("No model path provided. Downloading InsightFace buffalo_l model...")
+            model_path = self._download_insightface_model()
         
         model_asset = Model(
             name=self.model_name,
             version=self.model_version,
             path=model_path,
-            description="DeepFace model weights (facenet512 + retinaface)",
+            description="InsightFace model for face recognition and analysis (buffalo_l)",
         )
         
-        created = self.ml_client.models.create_or_update(model_asset) # type: ignore
+        created = self.ml_client.models.create_or_update(model_asset)
         logger.info(f"Created model: {created.name}:{created.version}")
         return created
     
     def ensure_environment(self, skip_if_exists: bool = True) -> Environment:
         """
-        Create or get the environment for DeepFace.
+        Create or get the environment for InsightFace.
         
         Args:
             skip_if_exists: If True, skip creation if environment already exists
@@ -328,7 +346,7 @@ class AzureMLDeepFaceDeployment:
         env = Environment(
             name=self.env_name,
             version=self.env_version,
-            description="Environment for DeepFace online endpoint",
+            description="Environment for InsightFace online endpoint",
             conda_file=str(conda_file),
             image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest",
         )
@@ -357,11 +375,11 @@ class AzureMLDeepFaceDeployment:
         
         endpoint = ManagedOnlineEndpoint(
             name=self.endpoint_name,
-            description="DeepFace scoring endpoint",
+            description="InsightFace scoring endpoint",
             auth_mode="key",
         )
         
-        poller = self.ml_client.online_endpoints.begin_create_or_update(endpoint) # type: ignore
+        poller = self.ml_client.online_endpoints.begin_create_or_update(endpoint)
         
         if isinstance(poller, LROPoller):
             result = poller.result()
@@ -419,7 +437,7 @@ class AzureMLDeepFaceDeployment:
             app_insights_enabled=True,
         )
         
-        poller = self.ml_client.online_deployments.begin_create_or_update(deployment) # type: ignore
+        poller = self.ml_client.online_deployments.begin_create_or_update(deployment)
         
         if isinstance(poller, LROPoller):
             logger.info(f"Waiting for deployment '{self.deployment_name}' to complete...")
@@ -438,9 +456,9 @@ class AzureMLDeepFaceDeployment:
         """
         deployment_name = deployment_name or self.deployment_name
         
-        endpoint = self.ml_client.online_endpoints.get(name=self.endpoint_name) # type: ignore
+        endpoint = self.ml_client.online_endpoints.get(name=self.endpoint_name)
         endpoint.traffic = {deployment_name: 100}
-        self.ml_client.online_endpoints.begin_create_or_update(endpoint).result() # type: ignore
+        self.ml_client.online_endpoints.begin_create_or_update(endpoint).result()
         
         logger.info(f"Traffic for {self.endpoint_name} set to: {endpoint.traffic}")
     
@@ -451,8 +469,8 @@ class AzureMLDeepFaceDeployment:
         Returns:
             Tuple of (scoring_uri, api_key)
         """
-        endpoint = self.ml_client.online_endpoints.get(name=self.endpoint_name) # type: ignore
-        keys = self.ml_client.online_endpoints.get_keys(name=self.endpoint_name) # type: ignore
+        endpoint = self.ml_client.online_endpoints.get(name=self.endpoint_name)
+        keys = self.ml_client.online_endpoints.get_keys(name=self.endpoint_name)
         
         return endpoint.scoring_uri, keys.primary_key
     
@@ -471,8 +489,8 @@ class AzureMLDeepFaceDeployment:
         if not env_file:
             env_file = ".env"
         
-        set_key(env_file, "DEEPFACE_ENDPOINT_URI", scoring_uri)
-        set_key(env_file, "DEEPFACE_ENDPOINT_KEY", api_key)
+        set_key(env_file, "INSIGHTFACE_ENDPOINT_URI", scoring_uri)
+        set_key(env_file, "INSIGHTFACE_ENDPOINT_KEY", api_key)
         
         logger.info(f"Saved credentials to {env_file}")
         logger.info(f"Endpoint URI: {scoring_uri}")
@@ -485,7 +503,7 @@ class AzureMLDeepFaceDeployment:
             save_credentials: If True, save endpoint credentials to .env file
         """
         logger.info("=" * 60)
-        logger.info("Starting DeepFace Model Deployment")
+        logger.info("Starting InsightFace Model Deployment")
         logger.info("=" * 60)
         
         try:
@@ -532,20 +550,20 @@ class AzureMLDeepFaceDeployment:
 def main():
     """Main entry point for the deployment script."""
     parser = argparse.ArgumentParser(
-        description="Deploy DeepFace model to Azure Machine Learning Online Endpoint",
+        description="Deploy InsightFace model to Azure Machine Learning Online Endpoint",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Basic deployment
   python deploy.py --env-folder ./Environment --scoring-folder ./ScoringScript
   
-  # With custom model weights
+  # With custom endpoint name
   python deploy.py --env-folder ./Environment --scoring-folder ./ScoringScript \\
-                   --model-weights ./weights/deepface.h5
+                   --endpoint-name my-insightface-endpoint
   
   # With custom names
   python deploy.py --env-folder ./Environment --scoring-folder ./ScoringScript \\
-                   --endpoint-name my-deepface-endpoint --model-name my-deepface
+                   --endpoint-name my-endpoint --model-name my-insightface
   
   # Custom instance type
   python deploy.py --env-folder ./Environment --scoring-folder ./ScoringScript \\
@@ -564,50 +582,50 @@ Examples:
         help="Path to scoring script folder containing score.py"
     )
     parser.add_argument(
-        "--model-weights",
+        "--model-path",
         default=None,
-        help="Optional path to model weights file"
+        help="Optional path to model directory"
     )
     parser.add_argument(
         "--endpoint-name",
         default=None,
-        help=f"Azure ML endpoint name (default: {AzureMLDeepFaceDeployment.DEFAULT_ENDPOINT_NAME})"
+        help=f"Azure ML endpoint name (default: {AzureMLInsightFaceDeployment.DEFAULT_ENDPOINT_NAME})"
     )
     parser.add_argument(
         "--model-name",
         default=None,
-        help=f"Model registry name (default: {AzureMLDeepFaceDeployment.DEFAULT_MODEL_NAME})"
+        help=f"Model registry name (default: {AzureMLInsightFaceDeployment.DEFAULT_MODEL_NAME})"
     )
     parser.add_argument(
         "--model-version",
         default=None,
-        help=f"Model version (default: {AzureMLDeepFaceDeployment.DEFAULT_MODEL_VERSION})"
+        help=f"Model version (default: {AzureMLInsightFaceDeployment.DEFAULT_MODEL_VERSION})"
     )
     parser.add_argument(
         "--env-name",
         default=None,
-        help=f"Environment name (default: {AzureMLDeepFaceDeployment.DEFAULT_ENV_NAME})"
+        help=f"Environment name (default: {AzureMLInsightFaceDeployment.DEFAULT_ENV_NAME})"
     )
     parser.add_argument(
         "--env-version",
         default=None,
-        help=f"Environment version (default: {AzureMLDeepFaceDeployment.DEFAULT_ENV_VERSION})"
+        help=f"Environment version (default: {AzureMLInsightFaceDeployment.DEFAULT_ENV_VERSION})"
     )
     parser.add_argument(
         "--deployment-name",
         default=None,
-        help=f"Deployment name (default: {AzureMLDeepFaceDeployment.DEFAULT_DEPLOYMENT_NAME})"
+        help=f"Deployment name (default: {AzureMLInsightFaceDeployment.DEFAULT_DEPLOYMENT_NAME})"
     )
     parser.add_argument(
         "--instance-type",
         default=None,
-        help=f"Compute instance type (default: {AzureMLDeepFaceDeployment.DEFAULT_INSTANCE_TYPE})"
+        help=f"Compute instance type (default: {AzureMLInsightFaceDeployment.DEFAULT_INSTANCE_TYPE})"
     )
     parser.add_argument(
         "--instance-count",
         type=int,
         default=None,
-        help=f"Number of instances (default: {AzureMLDeepFaceDeployment.DEFAULT_INSTANCE_COUNT})"
+        help=f"Number of instances (default: {AzureMLInsightFaceDeployment.DEFAULT_INSTANCE_COUNT})"
     )
     parser.add_argument(
         "--no-save-credentials",
@@ -618,7 +636,7 @@ Examples:
     args = parser.parse_args()
     
     try:
-        deployer = AzureMLDeepFaceDeployment(
+        deployer = AzureMLInsightFaceDeployment(
             env_folder=args.env_folder,
             scoring_folder=args.scoring_folder,
             endpoint_name=args.endpoint_name,
@@ -629,7 +647,7 @@ Examples:
             deployment_name=args.deployment_name,
             instance_type=args.instance_type,
             instance_count=args.instance_count,
-            model_weights_path=args.model_weights,
+            model_path=args.model_path,
         )
         
         deployer.deploy(save_credentials=not args.no_save_credentials)

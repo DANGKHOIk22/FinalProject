@@ -30,6 +30,8 @@ class Settings:
     # Endpoint Configuration
     DEEPFACE_ENDPOINT_URI: Optional[str] = os.getenv('DEEPFACE_ENDPOINT_URI') 
     DEEPFACE_ENDPOINT_KEY: Optional[str] = os.getenv('DEEPFACE_ENDPOINT_KEY')
+    INSIGHTFACE_ENDPOINT_URI: Optional[str] = os.getenv('INSIGHTFACE_ENDPOINT_URI')
+    INSIGHTFACE_ENDPOINT_KEY: Optional[str] = os.getenv('INSIGHTFACE_ENDPOINT_KEY')
     GROUNDINGDINO_ENDPOINT_URI: Optional[str] = os.getenv('GROUNDINGDINO_ENDPOINT_URI')
     GROUNDINGDINO_ENDPOINT_KEY: Optional[str] = os.getenv('GROUNDINGDINO_ENDPOINT_KEY')
     CLIP_ENDPOINT_URI: Optional[str] = os.getenv('CLIP_ENDPOINT_URI')
@@ -64,6 +66,10 @@ class Settings:
             raise ValueError("DEEPFACE_ENDPOINT_URI is required but not set")
         if not cls.DEEPFACE_ENDPOINT_KEY:
             raise ValueError("DEEPFACE_ENDPOINT_KEY is required but not set")
+        if not cls.INSIGHTFACE_ENDPOINT_URI:
+            raise ValueError("INSIGHTFACE_ENDPOINT_URI is required but not set")
+        if not cls.INSIGHTFACE_ENDPOINT_KEY:
+            raise ValueError("INSIGHTFACE_ENDPOINT_KEY is required but not set")
         if not cls.GROUNDINGDINO_ENDPOINT_URI:
             raise ValueError("GROUNDINGDINO_ENDPOINT_URI is required but not set")
         if not cls.GROUNDINGDINO_ENDPOINT_KEY:
