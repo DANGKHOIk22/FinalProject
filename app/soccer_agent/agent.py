@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field
 from langfuse import get_client, observe
 from langfuse.langchain import CallbackHandler
 
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import PydanticOutputParser
+from app.soccer_agent.factory.llm_provider import get_llm
 from langchain_core.messages import ToolMessage, ToolCall, AIMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import StateGraph, END
@@ -21,12 +21,11 @@ from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
 from app.soccer_agent.prompts.agent import get_planning_prompt_template, get_execution_prompt_template,get_aggregator_prompt_template
 from app.config.config import (
-    DEFAULT_MODEL, GEMINI_2_5_FLASH, GEMINI_2_5_FLASH_LITE, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS,
+    DEFAULT_MODEL,
     SESSION_MEMORY_TOKEN_THRESHOLD, SESSION_MEMORY_RECENT_KEEP,
 )
 from app.soccer_agent.memory.session_memory import SessionMemoryManager, SessionMemory
 from app.soccer_agent.memory.query_understanding import QueryUnderstandingPipeline
-from app.config.settings import settings
 
 from app.soccer_agent.toolbox import (
     textual_entity_search, 
@@ -96,24 +95,8 @@ class SoccerAgent:
         Args:
             model_name: The LLM model to use (default from config)
         """
-        self.planning_llm = ChatGoogleGenerativeAI(
-            model=GEMINI_2_5_FLASH, 
-            api_key=settings.GOOGLE_API_KEY,
-            temperature=MODEL_TEMPERATURE, 
-            top_p=MODEL_TOP_P,
-            max_output_tokens=MAX_COMPLETION_TOKENS,
-            thinking_budget=3000,
-            include_thoughts=True #type: ignore
-        )
-        self.execution_llm = ChatGoogleGenerativeAI(
-            model=GEMINI_2_5_FLASH_LITE,
-            api_key=settings.GOOGLE_API_KEY,
-            temperature=MODEL_TEMPERATURE,
-            top_p=MODEL_TOP_P,
-            max_output_tokens=MAX_COMPLETION_TOKENS,
-            thinking_budget=4000,
-            include_thoughts=True #type: ignore
-        )
+        self.planning_llm = get_llm("planning")
+        self.execution_llm = get_llm("execution")
         self.planning_parser = PydanticOutputParser(pydantic_object=PlanningOutput)
 
         # Session memory + query understanding (use execution_llm: Flash Lite, fast)
