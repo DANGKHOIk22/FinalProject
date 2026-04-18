@@ -42,4 +42,5 @@ dependencies = [
     "dashscope>=1.25.15",
     "langchain-openai>=1.1.11",
     "langchain-redis>=0.2.5",
+    "langchain-litellm>=0.6.1",
 ]
