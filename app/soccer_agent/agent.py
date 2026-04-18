@@ -50,8 +50,8 @@ langfuse_client = get_client()
 # Structured output models for LLM responses
 class PlanningOutput(BaseModel):
     """Structured output for tool chain planning."""
-    tool_chains: Optional[List[List[str]]] = Field(default=None, description="List of independent tool chains to answer the query")
-    sub_queries: Optional[List[str]] = Field(default=None, description="List of specific decomposed sub-queries, each corresponding to a tool chain")
+    tool_chains: Optional[List[List[str]]] = Field(default=None, description="A list of lists of EXACT tool names needed to answer the query. Each inner list represents an independent chain of tools that can run in parallel. Tools within an inner list run sequentially.")
+    sub_queries: Optional[List[str]] = Field(default=None, description="A list of strings, corresponding to each tool chain in `tool_chains`. Each string should be the specific decomposed part of the user query that the respective tool chain is responsible for answering.")
     need_call_tools: Optional[bool] = Field(default=True, description="Indicates whether tool calls are necessary")
 
 # Define the state structure for the agent
@@ -131,7 +131,7 @@ class SoccerAgent:
             "game_search": game_search(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
-            # "entity_recognition": entity_recognition(),
+            "entity_recognition": entity_recognition(),
             "choice_selection": choice_selection(),
             "segment": segment(),
             # "frame_selection": frame_selection(),
@@ -396,26 +396,6 @@ class SoccerAgent:
             tool_results_history.append(tool_result)
             last_artifact = tool_result.artifact if hasattr(tool_result, 'artifact') else None
             logger.info(f"Received tool result: {tool_result.content}")
-
-        # Early exit: all planned tools have been executed — skip the termination LLM call
-        if tool_chain and len(tool_calls_history) >= len(tool_chain):
-            summary_parts = []
-            for i, tc in enumerate(tool_calls_history):
-                tool_name = tc.get("name", "unknown")
-                if i < len(tool_results_history):
-                    summary_parts.append(f"{tool_name}: {tool_results_history[i].content}")
-            result_text = "\n".join(summary_parts) if summary_parts else "All tools completed."
-            logger.info(f"✅ All {len(tool_chain)} tools executed — skipping termination LLM call")
-            logger.info("="*70)
-            return {
-                "additional_material": additional_material_list,
-                "tool_calls_history": tool_calls_history,
-                "tool_results_history": tool_results_history,
-                "tool_chain": tool_chain,
-                "tool_node_messages": [],
-                "last_tool_artifact": last_artifact,
-                "parallel_results": [result_text],
-            }
 
         # Format List[str] to string for prompt
         additional_material_str = ", ".join(additional_material_list) if additional_material_list else "None"
