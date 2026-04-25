@@ -1,39 +1,33 @@
-from typing import Optional
-from langchain_google_genai import ChatGoogleGenerativeAI
-from app.config.config import DEFAULT_MODEL, MODEL_TEMPERATURE, MODEL_TOP_P, MAX_COMPLETION_TOKENS
-from app.config.settings import settings
+from pathlib import Path
+import yaml
+from langchain_litellm import ChatLiteLLMRouter
+from litellm import Router
 
-def get_llm(
-    model: str = DEFAULT_MODEL,
-    temperature: float = MODEL_TEMPERATURE,
-    top_p: float = MODEL_TOP_P,
-    max_tokens: int = MAX_COMPLETION_TOKENS,
-    api_key: Optional[str] = None,
-    **kwargs
-) -> ChatGoogleGenerativeAI:
+_CONFIG_PATH = Path(__file__).parent / "llm_config.yaml"
+
+# Shared across all callers — models are stateless so this is safe.
+_router: Router | None = None
+
+
+def _get_router() -> Router:
+    global _router
+    if _router is None:
+        config = yaml.safe_load(_CONFIG_PATH.read_text())
+        router_settings = config.get("router_settings", {})
+        _router = Router(
+            model_list=config["model_list"],
+            fallbacks=router_settings.get("fallbacks", []),
+        )
+    return _router
+
+
+def get_llm(role: str = "tool") -> ChatLiteLLMRouter:
+    """Return a ChatLiteLLMRouter for the given role.
+
+    Valid roles are defined in llm_config.yaml:
+      planning   – Gemini 2.5 Flash, thinking_budget=3000
+      execution  – Gemini 2.5 Flash Lite, thinking_budget=4000
+      aggregator – Gemini 2.5 Flash, no thinking
+      tool       – Gemini 2.5 Flash Lite, shared by tools / guardrails / query-understanding
     """
-    Factory function to create a ChatGoogleGenerativeAI instance.
-    
-    Args:
-        model: The Google GenAI model to use (default from config)
-        temperature: Temperature for generation
-        top_p: Top P sampling parameter
-        max_tokens: Maximum output tokens
-        api_key: Optional explicit API key. If not provided, it uses settings.GOOGLE_API_KEY.
-        **kwargs: Additional parameters passed to ChatGoogleGenerativeAI
-        
-    Returns:
-        ChatGoogleGenerativeAI instance
-    """
-    key = api_key or settings.GOOGLE_API_KEY
-    if not key:
-        raise ValueError("GOOGLE_API_KEY must be provided or configured in settings.")
-        
-    return ChatGoogleGenerativeAI(
-        model=model,
-        temperature=temperature,
-        top_p=top_p,
-        max_output_tokens=max_tokens,
-        api_key=key,
-        **kwargs
-    )
+    return ChatLiteLLMRouter(router=_get_router(), model_name=role,num_retries=0)

@@ -13,5 +13,4 @@ class UserOut(BaseModel):
     id: int
     full_name: str
     phone_number: str
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}

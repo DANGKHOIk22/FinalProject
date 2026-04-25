@@ -11,8 +11,7 @@ from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain.tools import InjectedState, BaseTool
 from langsmith import get_current_run_tree
 
-from app.config.settings import Settings
-from app.config.config import PROJECT_PATH, GEMINI_2_0_FLASH_LITE, GEMINI_2_5_FLASH_LITE
+from app.config.config import PROJECT_PATH
 from app.soccer_agent.prompts.toolbox.game_retrieval import get_game_info_retrieval_prompt_template, get_game_history_retrieval_prompt_template
 
 logger = logging.getLogger(__name__)
@@ -47,10 +46,7 @@ class GameInfoRetrievalTool(BaseTool):
     def __init__(self):
         super().__init__()
 
-        self._llm = get_llm(
-            temperature=0,
-            model=GEMINI_2_0_FLASH_LITE,
-        )
+        self._llm = get_llm("tool")
 
     def _get_match_info_json(self, json_file_path: str) -> str:
         """Đọc file JSON và loại bỏ phần annotations để lấy metadata."""
@@ -124,10 +120,7 @@ class GameHistoryRetrievalTool(BaseTool):
     def __init__(self):
         super().__init__()
 
-        self._llm = get_llm(
-            temperature=0,
-            model = GEMINI_2_5_FLASH_LITE
-        )
+        self._llm = get_llm("tool")
 
     def _transform_match_history_artifact_to_str(self, match_history_artifact: Union[str, List[Annotation]]) -> str:
         """
