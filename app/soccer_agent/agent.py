@@ -26,6 +26,8 @@ from app.config.config import (
 )
 from app.soccer_agent.memory.session_memory import SessionMemoryManager, SessionMemory
 from app.soccer_agent.memory.query_understanding import QueryUnderstandingPipeline
+from app.soccer_agent.case_bank.retriever import CaseBankRetriever
+from app.soccer_agent.case_bank.cache import case_bank_cache
 
 from app.soccer_agent.toolbox import (
     textual_entity_search, 
@@ -68,6 +70,7 @@ class AgentState(TypedDict):
     last_tool_artifact: Optional[Any] # To store the tool's artifact output from the last tool call
     need_call_tools: Optional[bool] # Flag to indicate if more tools need to be called
     conversation_history: Optional[str] # Optional conversation history for context
+    retrieved_cases: Optional[str] # Few-shot planning examples from case bank
     final_response: str # Final aggregated response
 
 class WorkerState(TypedDict):
@@ -88,16 +91,19 @@ class SoccerAgent:
     This agent analyzes questions about soccer and determines the appropriate
     tool chain needed to answer them.
     """
-    def __init__(self, model_name: str = DEFAULT_MODEL):
+    def __init__(self, model_name: str = DEFAULT_MODEL, checkpointer=None):
         """
         Initialize the Soccer Planning Agent.
-        
+
         Args:
             model_name: The LLM model to use (default from config)
+            checkpointer: Optional LangGraph checkpointer for state persistence
         """
         self.planning_llm = get_llm("planning")
         self.execution_llm = get_llm("execution")
         self.planning_parser = PydanticOutputParser(pydantic_object=PlanningOutput)
+        self.checkpointer = checkpointer
+        self.case_bank_retriever = CaseBankRetriever()
 
         # Session memory + query understanding (use execution_llm: Flash Lite, fast)
         self.session_memory_manager = SessionMemoryManager(
@@ -163,27 +169,43 @@ class SoccerAgent:
         
     def _build_graph(self) -> CompiledStateGraph:
         """Build the LangGraph workflow."""
-        # Create the graph
         workflow = StateGraph(AgentState)
-        
+
         # Add nodes
+        workflow.add_node("retrieve_cases_node", self._retrieve_cases_node)
         workflow.add_node("tool_chain_planning", self._tool_chain_planning)
         workflow.add_node("worker_graph", self._worker_node)
         workflow.add_node("aggregator_node", self._aggregator_node)
 
-        # Define the flow
-        workflow.set_entry_point("tool_chain_planning")
-        
+        # Define the flow: retrieve_cases → planning → workers → aggregator
+        workflow.set_entry_point("retrieve_cases_node")
+        workflow.add_edge("retrieve_cases_node", "tool_chain_planning")
+
         workflow.add_conditional_edges(
-            "tool_chain_planning", 
-            self._trigger_workers, 
+            "tool_chain_planning",
+            self._trigger_workers,
             ["worker_graph", "aggregator_node"]
         )
         workflow.add_edge("worker_graph", "aggregator_node")
         workflow.add_edge("aggregator_node", END)
-        
-        return workflow.compile()
-    
+
+        return workflow.compile(checkpointer=self.checkpointer)
+
+    async def _retrieve_cases_node(self, state: AgentState) -> dict:
+        """Retrieve few-shot planning examples from case bank (with Redis cache)."""
+        query = state.get("claried_query") or state["user_query"]
+        has_media = bool(state.get("additional_material"))
+
+        cached = case_bank_cache.get(query, has_media)
+        if cached:
+            logger.info("CaseBankCache: hit")
+            return {"retrieved_cases": cached}
+
+        examples = await self.case_bank_retriever.retrieve(query, has_media)
+        if examples:
+            case_bank_cache.set(query, has_media, examples)
+        return {"retrieved_cases": examples or None}
+
     @observe(name="worker_node", as_type="span", capture_input=True)
     async def _worker_node(self, state: WorkerState) -> dict:
         """
@@ -270,7 +292,8 @@ class SoccerAgent:
                     "format_instructions": format_instructions,
                     "user_query": state.get("claried_query") or state["user_query"],
                     "additional_material": additional_material,
-                    "conversation_history": conversation_history
+                    "conversation_history": conversation_history,
+                    "retrieved_cases": state.get("retrieved_cases") or "",
                 })
                 
                 prompt_span.update(

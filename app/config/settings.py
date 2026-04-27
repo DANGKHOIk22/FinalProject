@@ -22,6 +22,7 @@ class Settings:
     QDRANT_URL: Optional[str] = os.getenv('QDRANT_URL')
     QDRANT_API_KEY: Optional[str] = os.getenv('QDRANT_API_KEY')
     QDRANT_COLLECTION_NAME: Optional[str] = os.getenv('QDRANT_COLLECTION_NAME')
+    QDRANT_CASE_BANK_COLLECTION_NAME: str = os.getenv('QDRANT_CASE_BANK_COLLECTION_NAME', 'planning_case_bank')
 
     # Postgres Configuration
     POSTGRES_DATABASE_URL: Optional[str] = os.getenv('POSTGRES_DATABASE_URL')

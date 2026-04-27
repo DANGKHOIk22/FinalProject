@@ -6,13 +6,15 @@ This is a **Soccer Agent** application - an intelligent AI-powered chatbot that 
 
 ### Core Technology Stack
 - **Framework**: FastAPI (Python 3.11)
-- **AI/LLM**: Google Gemini 2.5 Flash, LangChain, LangGraph
+- **AI/LLM**: Google Gemini 2.0/2.5 Flash & Flash Lite, LangChain, LangGraph
 - **Databases**: 
-  - PostgreSQL (conversation history)
-  - MongoDB (entity information)
-  - Qdrant (vector embeddings)
+  - PostgreSQL (raw conversation history)
+  - MongoDB (soccer entity information)
+  - Qdrant (vector embeddings for RAG)
+  - Redis (session memory caching and semantic cache)
 - **Video/Image Processing**: OpenCV, FFmpeg
 - **Computer Vision Models**: DeepFace, CLIP, GroundingDINO (deployed to Azure endpoints)
+- **Observability**: Langfuse (tracing, monitoring, evaluation)
 
 ## Project Structure
 
@@ -22,8 +24,11 @@ FinalProject/
 │   ├── api/                    # FastAPI routes
 │   │   ├── chat.py            # Main chat endpoint
 │   │   └── user.py            # User management
+│   ├── cache/                 # Caching logic
+│   │   ├── semantic_cache.py  # Semantic similarity cache (Redis + Embeddings)
+│   │   └── standard_cache.py  # Basic Redis wrapper
 │   ├── config/                # Configuration management
-│   │   ├── config.py          # App-wide constants
+│   │   ├── config.py          # App-wide constants (Models, Thresholds)
 │   │   └── settings.py        # Environment variables loader
 │   ├── database/              # Database models and connections
 │   │   ├── db.py              # PostgreSQL connection
@@ -37,6 +42,9 @@ FinalProject/
 │       ├── agent.py           # Main SoccerAgent class (LangGraph)
 │       ├── factory/           # Agent factory patterns
 │       ├── memory/            # Conversation & system memory
+│       │   ├── chat_history.py # PostgreSQL integration
+│       │   ├── session_memory.py # History summarization & Redis cache
+│       │   └── query_understanding.py # Pronoun resolution pipeline
 │       ├── prompts/           # LLM prompts
 │       └── toolbox/           # Agent tools
 ├── scripts/
@@ -57,18 +65,21 @@ The **SoccerAgent** implements a parallel multi-worker architecture using LangGr
 - **WorkerState**: Individual worker state for parallel tool execution
 
 #### Agent Flow
-1. **Planning Node** (`_tool_chain_planning`): Analyzes user query, resolves pronouns → `claried_query`, decomposes into sub-queries, plans tool chains
-2. **Worker Dispatch** (`_trigger_workers`): Routes sub-queries to parallel workers; uses `claried_query` as fallback when no sub_queries
-3. **Execution Workers** (`_execution_node`): Each executes a tool chain independently
-4. **Aggregator Node** (`_aggregator_node`): Combines parallel results into final response; uses `claried_query` as effective user query
+1. **Query Understanding** (`QueryUnderstandingPipeline`): Resolves pronouns/abbreviations and handles domain jargon. Detects ambiguity and can short-circuit to ask clarifying questions.
+2. **Planning Node** (`_tool_chain_planning`): Analyzes `claried_query`, checks history, plans parallel tool chains (`PlanningOutput`).
+3. **Cache Node** (`_check_cache_node`): Checks Semantic Cache for similar previous queries to bypass execution.
+4. **Worker Dispatch** (`_trigger_workers`): Dispatches sub-queries to parallel workers via `Send` commands; uses `claried_query` as fallback.
+5. **Execution Workers** (`_execution_node`): Each executes a tool chain independently; supports Thinking models with a thinking budget.
+6. **Aggregator Node** (`_aggregator_node`): Synthesizes parallel results into a final definitive response; uses `claried_query` as effective user query.
 
 #### Key Methods
-- `run(request: ChatRequest)` - Main entry point for processing user queries
-- `_tool_chain_planning()` - Query decomposition, pronoun resolution, and tool chain planning
-- `_worker_node()` / `_execution_node()` - Individual tool chain execution
-- `_aggregator_node()` - Result aggregation
-- `_trigger_workers()` - Dispatches to workers or direct response
-- `_build_tool_summary_for_memory()` - Formats tool call details (name, args, response, artifact) for saving into conversation memory
+- `run(request: ChatRequest)` - Main entry point. Handles memory loading, query clarification, graph execution, and background memory saving.
+- `_tool_chain_planning()` - Query decomposition, pronoun resolution, and tool chain planning.
+- `_worker_node()` / `_execution_node()` - Individual tool chain execution.
+- `_aggregator_node()` - Result aggregation.
+- `_trigger_workers()` - Dispatches to workers or direct response.
+- `_build_tool_summary_for_memory()` - Formats tool details for saving into conversation memory.
+- `_background_save_memory()` - Asynchronously saves results to PostgreSQL and updates Session Memory.
 
 ### 2. Toolbox (`app/soccer_agent/toolbox/`)
 
@@ -92,9 +103,14 @@ Available tools for the agent:
 
 ### 3. Memory System (`app/soccer_agent/memory/`)
 
-- **PostgreSQL Memory**: Stores conversation history with `langchain-postgres`
-- **System Prompt Memory** (`CustomSystemPromptMemory`): Manages conversation context and clarifications; trims to last `max_history=15` messages
-- **Tool-enriched history**: Each saved turn includes tool call details (tool name, input args, response content, artifact if any) formatted via `_build_tool_summary_for_memory()`, followed by the final response. This lets future turns see what tools were used and what they returned.
+- **PostgreSQL Context**: Stores raw message history via `langchain-postgres`.
+- **Query Understanding** (`query_understanding.py`): A single-pass Flash Lite call that resolves "it", "they", "that team" to specific entities.
+- **Session Memory** (`session_memory.py`):
+    - **Path A**: If history < threshold, uses raw text context.
+    - **Path B**: If history > threshold, loads a structured summary from Redis.
+    - **Background Tasks**: Triggers summarization of old messages and incremental updates of "tool findings" to keep history compact.
+- **System Prompt Memory** (`CustomSystemPromptMemory`): Manages conversation context and clarifications; trims to last `max_history=15` messages.
+- **Tool-enriched history**: Each turn stores: tool usage summary (step details) + final response. This lets future turns see what tools were used.
 
 ### 4. API Endpoints (`app/api/`)
 
@@ -148,6 +164,9 @@ CLIP_ENDPOINT_URI=https://...
 CLIP_ENDPOINT_KEY=...
 CLIP_GROUNDINGDINO_ENDPOINT_URI=https://...
 CLIP_GROUNDINGDINO_ENDPOINT_KEY=...
+
+# Redis Configuration
+REDIS_URL=redis://localhost:6379/0
 
 # Optional
 DEEPFACE_HOME=./temporary/cache
@@ -219,12 +238,12 @@ pytest unit_test/tools/test_entity_recognition.py
 Models are configured in `app/config/config.py`:
 
 ```python
-DEFAULT_MODEL = "gemini-2.0-flash-exp"
-GEMINI_2_5_FLASH = "gemini-2.0-flash-exp"
-GEMINI_2_5_FLASH_LITE = "gemini-2.0-flash-lite"
-MODEL_TEMPERATURE = 0.7
+GEMINI_2_5_FLASH = "gemini-2.5-flash"
+GEMINI_2_5_FLASH_LITE = "gemini-2.5-flash-lite"
+DEFAULT_MODEL = GEMINI_2_5_FLASH
+MODEL_TEMPERATURE = 0.2
 MODEL_TOP_P = 0.95
-MAX_COMPLETION_TOKENS = 8192
+MAX_COMPLETION_TOKENS = 8000
 ```
 
 ## Logging & Monitoring
@@ -298,9 +317,15 @@ print(result["agent_response"])
 
 4. **Memory Management**: Conversation history saved to PostgreSQL via `CustomSystemPromptMemory`. Each turn stores: tool usage summary (name + args + response + artifact per step) + final response as a single assistant message.
 
-5. **Pronoun Resolution (`claried_query`)**: The planning node resolves pronouns in the user query by checking conversation history. The resolved query is stored in `AgentState.claried_query` and used by workers (as sub_query fallback) and the aggregator (as the effective user query). The original `user_query` is preserved for traceability.
+5. **Pronoun Resolution (`claried_query`)**: Managed by `QueryUnderstandingPipeline` before graph entry. It resolves pronouns/abbreviations using recent context and Session Memory. The resolved query is used by workers and the aggregator.
 
-6. **Error Handling**: Most errors are caught and logged. Check `logger.error()` calls for debugging. Worker timeouts are set to 120 seconds.
+6. **Thinking Models**: The agent utilizes Gemini 2.0/2.5 Thinking models with specific `thinking_budget` (3000-4000) for complex reasoning during planning and execution.
+
+7. **Semantic Cache**: Queries with >0.9 similarity bypass workers via Redis-backed semantic cache.
+
+8. **Incremental Memory**: After turns with tools, key facts are distilled into `SessionMemory.tool_findings` in the background.
+
+9. **Error Handling**: Most errors are caught and logged. Check `logger.error()` calls for debugging. Worker timeouts are set to 120 seconds.
 
 7. **Configuration Priority**: Environment variables > `settings.py` > `config.py` defaults
 
@@ -313,6 +338,45 @@ For questions about this codebase, review:
 
 ---
 
-**Last Updated**: 2026-03-28
-**Python Version**: 3.11
+**Last Updated**: 2026-04-05
+**Python Version**: 3.11+
 **Framework Version**: FastAPI 0.118.2, LangGraph (latest)
+
+<!-- code-review-graph MCP tools -->
+## MCP Tools: code-review-graph
+
+**IMPORTANT: This project has a knowledge graph. ALWAYS use the
+code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
+the codebase.** The graph is faster, cheaper (fewer tokens), and gives
+you structural context (callers, dependents, test coverage) that file
+scanning cannot.
+
+### When to use graph tools FIRST
+
+- **Exploring code**: `semantic_search_nodes` or `query_graph` instead of Grep
+- **Understanding impact**: `get_impact_radius` instead of manually tracing imports
+- **Code review**: `detect_changes` + `get_review_context` instead of reading entire files
+- **Finding relationships**: `query_graph` with callers_of/callees_of/imports_of/tests_for
+- **Architecture questions**: `get_architecture_overview` + `list_communities`
+
+Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
+
+### Key Tools
+
+| Tool | Use when |
+|------|----------|
+| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
+| `get_review_context` | Need source snippets for review — token-efficient |
+| `get_impact_radius` | Understanding blast radius of a change |
+| `get_affected_flows` | Finding which execution paths are impacted |
+| `query_graph` | Tracing callers, callees, imports, tests, dependencies |
+| `semantic_search_nodes` | Finding functions/classes by name or keyword |
+| `get_architecture_overview` | Understanding high-level codebase structure |
+| `refactor_tool` | Planning renames, finding dead code |
+
+### Workflow
+
+1. The graph auto-updates on file changes (via hooks).
+2. Use `detect_changes` for code review.
+3. Use `get_affected_flows` to understand impact.
+4. Use `query_graph` pattern="tests_for" to check coverage.

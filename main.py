@@ -19,6 +19,7 @@ from app.database.db import engine
 
 # Import SoccerAgent (but don't initialize yet)
 from app.soccer_agent.agent import SoccerAgent
+from app.soccer_agent.memory.checkpointer import init_checkpointer, close_checkpointer
 
 # Chỉ import router chat và user
 from app.api.chat import router as chat_router
@@ -87,10 +88,19 @@ async def lifespan(app: FastAPI):
             postgres_connected = False
             logger.error(f"❌ Postgres connection failed: {e}")
 
+        # Initialize LangGraph checkpointer (async Postgres pool)
+        checkpointer = None
+        if postgres_connected:
+            try:
+                checkpointer = await init_checkpointer()
+                logger.info("✅ LangGraph checkpointer initialized")
+            except Exception as e:
+                logger.error(f"❌ Checkpointer init failed: {e}")
+
         # Initialize SoccerAgent AFTER all models and databases are loaded
         if settings.DASHSCOPE_API_KEY:
             logger.info("Initializing SoccerAgent...")
-            agent_service = SoccerAgent()
+            agent_service = SoccerAgent(checkpointer=checkpointer)
             logger.info("✅ SoccerAgent initialized successfully")
         else:
             logger.warning("⚠️ DASHSCOPE_API_KEY not set, skipping SoccerAgent initialization")
@@ -118,6 +128,9 @@ async def lifespan(app: FastAPI):
         qdrant_client.close()
         logger.info("Qdrant connection closed")
     
+    # Close checkpointer pool
+    await close_checkpointer()
+
     # Clear agent service
     agent_service = None
     

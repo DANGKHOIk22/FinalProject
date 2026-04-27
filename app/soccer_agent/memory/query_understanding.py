@@ -78,6 +78,7 @@ class QueryUnderstandingPipeline:
             memory.conversation_state,
             memory.confirmed_entities,
             memory.open_discussion_threads,
+            memory.tool_findings,
         ]):
             return "Không có bộ nhớ phiên."
 
@@ -90,6 +91,11 @@ class QueryUnderstandingPipeline:
             parts.append("Thực thể đã xác nhận: " + "; ".join(memory.confirmed_entities))
         if memory.open_discussion_threads:
             parts.append("Chủ đề đang mở: " + "; ".join(memory.open_discussion_threads))
+        if memory.tool_findings:
+            parts.append("Kết quả tìm kiếm gần đây:")
+            for f in memory.tool_findings[-5:]:
+                facts_preview = "; ".join(f.key_facts[:2])
+                parts.append(f"  [{f.tool_name}] {f.input_summary}: {facts_preview}")
         return "\n".join(parts)
 
     @staticmethod

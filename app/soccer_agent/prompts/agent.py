@@ -39,6 +39,9 @@ Follow these instructions carefully to ensure your response is correctly formatt
 ## Examples
 * **Purpose:** These examples teach you *how to reason* to determine the correct `tool_chains`. Focus on the logic, not the format.
 
+{retrieved_cases}
+
+
 **Query 1:** "What was the final score of the game 2015-02-21 - 18-00 Chelsea vs Burnley?"
 **Additional Material:** None
 * **Analysis (Tool Chain):** Must find the game, retrieve its static info (Game Info) and its event history (Match History). These must be done sequentially as they depend on the same game.
