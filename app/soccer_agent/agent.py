@@ -1,10 +1,7 @@
 import logging
 import uuid
 import asyncio
-from dotenv import load_dotenv
-from typing import TypedDict, List, Optional, Callable, Annotated, Any
-import operator
-from pydantic import BaseModel, Field
+from typing import List
 from langfuse import get_client, observe
 from langfuse.langchain import CallbackHandler
 
@@ -12,8 +9,9 @@ from langchain_core.output_parsers import PydanticOutputParser
 from app.soccer_agent.factory.llm_provider import get_llm
 from langchain_core.messages import ToolMessage, ToolCall, AIMessage
 from langchain_core.tools import BaseTool
+from langchain_core.callbacks.manager import adispatch_custom_event
 from langgraph.graph import StateGraph, END
-from langgraph.graph.state import CompiledStateGraph
+from langgraph.graph.state import CompiledStateGraph, RunnableConfig
 from langgraph.prebuilt import ToolNode
 from langgraph.constants import Send
 from langgraph.checkpoint.memory import MemorySaver
@@ -81,7 +79,7 @@ class SoccerAgent:
             "textual_retrieval_augment": textual_retrieval_augment(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
-            "entity_recognition": entity_recognition(),
+            #"entity_recognition": entity_recognition(),
             "choice_selection": choice_selection(),
             "segment": segment(),
             "frame_selection": frame_selection(),
@@ -171,30 +169,35 @@ class SoccerAgent:
         return {"retrieved_cases": examples or None}
 
     @observe(name="worker_node", as_type="span", capture_input=True)
-    async def _worker_node(self, state: AgentState, config: dict) -> dict:
+    async def _worker_node(self, state: WorkerState, config: RunnableConfig) -> dict:
         """
         Wrapper for worker_graph with proper timeout and Langfuse tracing.
         
         Key: Callback cleanup happens in the task's context (where it started),
         timeout wrapper only manages task lifecycle - avoiding OpenTelemetry context errors.
         """
+        #
         try:
             async def worker_execution():
-                # Initialize handler inside the task's context
+                # Append langfuse callback to the worker graph invocation config to capture all tool calls and results in the worker graph
                 langfuse_handler = CallbackHandler()
-                
+                callbacks = config.get("callbacks", [])
+                if not isinstance(callbacks, list):
+                    if callbacks is not None:
+                        callbacks = [callbacks]
+                    else:
+                        callbacks = []
+                callbacks.append(CallbackHandler())
+
+                # Add metadata for better traceability in Langfuse
+                metadata = config.get("metadata", {})
+                metadata.update({
+                    "sub_query": state.get("sub_query", "")[:100],
+                    "tool_chain": ", ".join(state.get("tool_chain", [])),
+                    "worker_id": id(state)
+                })
                 return await asyncio.wait_for(
-                    self.worker_graph.ainvoke(
-                        state,
-                        config={
-                            "callbacks": [langfuse_handler],
-                            "metadata": {
-                                "sub_query": state.get("sub_query", "")[:100],
-                                "tool_chain": ", ".join(state.get("tool_chain", [])),
-                                "worker_id": id(state)
-                            }
-                        }
-                    ),
+                    self.worker_graph.ainvoke(state, config=config),
                     timeout=120.0
                 )
         
@@ -321,7 +324,7 @@ class SoccerAgent:
             "claried_query": claried_query
         }
 
-    async def _tool_chain_planning(self, state: AgentState):
+    async def _tool_chain_planning(self, state: AgentState, config: RunnableConfig) -> dict:
         """
         This node is responsible for planning the tool chain to answer the user's query.
         
@@ -334,6 +337,17 @@ class SoccerAgent:
         messages = state.get("messages", [])
         user_query = messages[-1].content if messages else ""
 
+        # Emit a tool call event to show the planning step in the UI
+        await adispatch_custom_event(
+            "manually_emit_tool_call",  # An AG-UI event to trigger tool call visualization without an actual tool execution
+            data={
+                "id": str(uuid.uuid4()),
+                "name": "tool_chain_planning",
+                "args": {}
+            },
+            config=config
+        )
+        
         with langfuse_client.start_as_current_observation(as_type="span", name="tool_chain_planning") as root_span:
             logger.info("="*70)
             logger.info("🧠 Starting TOOL CHAIN PLANNING STEP")
@@ -399,7 +413,7 @@ class SoccerAgent:
             "conversation_history": state.get("conversation_history", ""),
         }
         
-    def _trigger_workers(self, state: AgentState):
+    def _trigger_workers(self, state: AgentState, config: RunnableConfig):
         """Map worker executions for each parallel tool chain."""
         planning_output = state.get("planning_output")
         tool_chains = planning_output.tool_chains if planning_output else []
@@ -429,7 +443,7 @@ class SoccerAgent:
             sends.append(Send("worker_graph", worker_state))
         return sends
     
-    async def _aggregator_node(self, state: AgentState) -> dict:
+    async def _aggregator_node(self, state: AgentState, config: RunnableConfig) -> dict:
         """Aggregate results from parallel executions and provide the final response."""
         messages = state.get("messages", [])
         user_query = messages[-1].content if messages else ""
@@ -489,7 +503,7 @@ class SoccerAgent:
             "messages": [response], # Final response from aggregator
         }
     
-    async def _execution_node(self, state: WorkerState) -> dict:
+    async def _execution_node(self, state: WorkerState, config: RunnableConfig) -> dict:
         """
         Iteratively execute the tool chain step by step using bind_tools with tool_choice.
         This allows the LLM to see the full tool schema and automatically generate correct parameters.
@@ -537,7 +551,7 @@ class SoccerAgent:
         response: AIMessage = None  # type: ignore
         try:
             # Invoke the model with the tool
-            response = await self.execution_llm_with_tools.ainvoke(execution_prompt) # type: ignore
+            response = await self.execution_llm_with_tools.ainvoke(execution_prompt, config=config) # type: ignore
             logger.info(f"🤖 Response from execution agent: \n \t Response content: {response.text} \n \t Tool Calls: {response.tool_calls}")
             
             if response.tool_calls:
