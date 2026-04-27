@@ -16,6 +16,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.constants import Send
+from langgraph.checkpoint.memory import MemorySaver
 
 from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
@@ -40,48 +41,13 @@ from app.soccer_agent.toolbox import (
     frame_selection,
     commentary_generation,
 )
+from app.schema.soccer_agent.state import PlanningOutput, AgentState, WorkerState
 from app.schema.chat import ChatRequest
 from app.cache.semantic_cache import semantic_cache
 
 # Configure logging
 logger = logging.getLogger(__name__)
 langfuse_client = get_client()
-
-# Structured output models for LLM responses
-class PlanningOutput(BaseModel):
-    """Structured output for tool chain planning."""
-    tool_chains: Optional[List[List[str]]] = Field(default=None, description="A list of lists of EXACT tool names needed to answer the query. Each inner list represents an independent chain of tools that can run in parallel. Tools within an inner list run sequentially.")
-    sub_queries: Optional[List[str]] = Field(default=None, description="A list of strings, corresponding to each tool chain in `tool_chains`. Each string should be the specific decomposed part of the user query that the respective tool chain is responsible for answering.")
-    need_call_tools: Optional[bool] = Field(default=True, description="Indicates whether tool calls are necessary")
-
-# Define the state structure for the agent
-class AgentState(TypedDict):
-    """Parent state structure for the planning agent."""
-    user_query: str # The user's soccer-related question
-    claried_query: str # User query with pronouns/abbreviations resolved by QueryUnderstandingPipeline
-    additional_material: Optional[List[str]] # Additional material (e.g, image/video related to the user question)
-    tool_chains: List[List[str]] # The planned sequence of tools to execute.
-    sub_queries: List[str] # The decomposed sub-queries for each worker.
-    parallel_results: Annotated[List[str], operator.add] # Aggregated parallel results
-    tool_calls_history: Annotated[List[ToolCall], operator.add] # History of tool calls
-    tool_results_history: Annotated[List[ToolMessage], operator.add] # History of tool results
-    tool_node_messages: Annotated[List, operator.add] # Messages exchanged
-    last_tool_artifact: Optional[Any] # To store the tool's artifact output from the last tool call
-    need_call_tools: Optional[bool] # Flag to indicate if more tools need to be called
-    conversation_history: Optional[str] # Optional conversation history for context
-    retrieved_cases: Optional[str] # Few-shot planning examples from case bank
-    final_response: str # Final aggregated response
-
-class WorkerState(TypedDict):
-    """State for individual tool chain execution workers."""
-    sub_query: str
-    additional_material: Optional[List[str]]
-    tool_chain: List[str]
-    tool_calls_history: List[ToolCall]
-    tool_results_history: List[ToolMessage]
-    tool_node_messages: List
-    parallel_results: List[str]
-    last_tool_artifact: Optional[Any]
 
 class SoccerAgent:
     """
@@ -131,7 +97,6 @@ class SoccerAgent:
         
         self.worker_graph = self._build_worker_graph()
         self.graph = self._build_graph()
-        logger.info(f"SoccerAgent initialized with model: {model_name}")
         logger.info(f"Loaded {len(self.tools)} LangChain tools")
         
     def _build_worker_graph(self) -> CompiledStateGraph:
@@ -259,7 +224,7 @@ class SoccerAgent:
                 "tool_node_messages": []
             }
     
-    async def _tool_chain_planning(self, state: AgentState) -> AgentState:
+    async def _tool_chain_planning(self, state: AgentState):
         """
         This node is responsible for planning the tool chain to answer the user's query.
         
@@ -736,83 +701,83 @@ class SoccerAgent:
             try:
                 logger.info(f"Starting run for query: {request.user_query[:100]}...")
                 
-                # Load conversation history
-                with root_trace.start_as_current_observation(as_type="span", name="load_memory") as mem_span:
-                    chat_history = None
-                    if session_id:
-                        try:
-                            memory_object, connection, pool = await self.get_memory(session_id=session_id)
-                            try:
-                                history = memory_object.load_memory_variables({})
-                                chat_history = history.get("history")
-                                mem_span.update(output={"memory_loaded": True, "history_length": len(chat_history) if chat_history else 0})
-                            except Exception as e:
-                                logging.warning(f"Memory load failed for session {session_id}: {e}")
-                                mem_span.update(output={"memory_loaded": False, "error": str(e)})
-                        except Exception as e:
-                            logging.warning(f"Failed to obtain memory for session {session_id}: {e}")
-                            mem_span.update(output={"memory_loaded": False, "error": str(e)})
+                # # Load conversation history
+                # with root_trace.start_as_current_observation(as_type="span", name="load_memory") as mem_span:
+                #     chat_history = None
+                #     if session_id:
+                #         try:
+                #             memory_object, connection, pool = await self.get_memory(session_id=session_id)
+                #             try:
+                #                 history = memory_object.load_memory_variables({})
+                #                 chat_history = history.get("history")
+                #                 mem_span.update(output={"memory_loaded": True, "history_length": len(chat_history) if chat_history else 0})
+                #             except Exception as e:
+                #                 logging.warning(f"Memory load failed for session {session_id}: {e}")
+                #                 mem_span.update(output={"memory_loaded": False, "error": str(e)})
+                #         except Exception as e:
+                #             logging.warning(f"Failed to obtain memory for session {session_id}: {e}")
+                #             mem_span.update(output={"memory_loaded": False, "error": str(e)})
 
-                # Build history and run Query Understanding on all paths
-                history_text = ""
-                effective_memory = SessionMemory()
-                recent_msgs_for_qu = []
+                # # Build history and run Query Understanding on all paths
+                # history_text = ""
+                # effective_memory = SessionMemory()
+                # recent_msgs_for_qu = []
 
-                if chat_history:
-                    raw_history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
-                    for msg in chat_history[-10:]:
-                        if hasattr(msg, 'content'):
-                            role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
-                            raw_history_text += f"{role}: {msg.content}\n"
+                # if chat_history:
+                #     raw_history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
+                #     for msg in chat_history[-10:]:
+                #         if hasattr(msg, 'content'):
+                #             role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
+                #             raw_history_text += f"{role}: {msg.content}\n"
 
-                    token_count = self.session_memory_manager.count_tokens(raw_history_text)
+                #     token_count = self.session_memory_manager.count_tokens(raw_history_text)
 
-                    if token_count > SESSION_MEMORY_TOKEN_THRESHOLD:
-                        # Path B: history exceeds threshold — use SessionMemory + recent slice
-                        old_msgs = chat_history[:-(SESSION_MEMORY_RECENT_KEEP-1)]
-                        recent_msgs_for_qu = chat_history[-SESSION_MEMORY_RECENT_KEEP:]
+                #     if token_count > SESSION_MEMORY_TOKEN_THRESHOLD:
+                #         # Path B: history exceeds threshold — use SessionMemory + recent slice
+                #         old_msgs = chat_history[:-(SESSION_MEMORY_RECENT_KEEP-1)]
+                #         recent_msgs_for_qu = chat_history[-SESSION_MEMORY_RECENT_KEEP:]
 
-                        cached_memory = await self.session_memory_manager.load_cached_memory(session_id)
-                        if cached_memory is None:
-                            if old_msgs:
-                                asyncio.create_task(
-                                    self.session_memory_manager.background_summarise(session_id, old_msgs)
-                                )
-                        else:
-                            effective_memory = cached_memory
+                #         cached_memory = await self.session_memory_manager.load_cached_memory(session_id)
+                #         if cached_memory is None:
+                #             if old_msgs:
+                #                 asyncio.create_task(
+                #                     self.session_memory_manager.background_summarise(session_id, old_msgs)
+                #                 )
+                #         else:
+                #             effective_memory = cached_memory
 
-                        history_text = self.session_memory_manager.format_compressed_history(
-                            effective_memory, recent_msgs_for_qu
-                        )
-                        logger.info(f"[Path B] token_count={token_count}.")
-                    else:
-                        # Path A: full history fits — pass all as recent context
-                        recent_msgs_for_qu = chat_history
-                        history_text = raw_history_text
-                        logger.info(f"[Path A] token_count={token_count}.")
+                #         history_text = self.session_memory_manager.format_compressed_history(
+                #             effective_memory, recent_msgs_for_qu
+                #         )
+                #         logger.info(f"[Path B] token_count={token_count}.")
+                #     else:
+                #         # Path A: full history fits — pass all as recent context
+                #         recent_msgs_for_qu = chat_history
+                #         history_text = raw_history_text
+                #         logger.info(f"[Path A] token_count={token_count}.")
 
-                # Always run QueryUnderstanding — handles jargon, abbreviations, pronouns
-                qu_output = await self.query_understanding.run(
-                    user_query=request.user_query,
-                    session_memory=effective_memory,
-                    recent_messages=recent_msgs_for_qu,
-                )
-                logger.info(f"[QU] clarified='{qu_output.clarified_query}' is_ambiguous={qu_output.is_ambiguous}")
+                # # Always run QueryUnderstanding — handles jargon, abbreviations, pronouns
+                # qu_output = await self.query_understanding.run(
+                #     user_query=request.user_query,
+                #     session_memory=effective_memory,
+                #     recent_messages=recent_msgs_for_qu,
+                # )
+                # logger.info(f"[QU] clarified='{qu_output.clarified_query}' is_ambiguous={qu_output.is_ambiguous}")
 
-                # Short-circuit: if query is ambiguous, ask for clarification immediately
-                # Skip if user attached images/videos — visual context resolves the ambiguity
-                has_media = bool(request.additional_material)
-                if qu_output.is_ambiguous and qu_output.clarifying_questions and not has_media:
-                    questions_text = "\n".join(f"- {q}" for q in qu_output.clarifying_questions)
-                    clarification_response = (
-                        f"Câu hỏi của bạn chưa đủ rõ ràng để tôi trả lời chính xác. "
-                        f"Bạn có thể làm rõ thêm không?\n{questions_text}"
-                    )
-                    logger.info("[QU] is_ambiguous=True — returning clarification request, skipping graph.")
-                    root_trace.update(output={"final_response": clarification_response, "is_ambiguous": True})
-                    return clarification_response
+                # # Short-circuit: if query is ambiguous, ask for clarification immediately
+                # # Skip if user attached images/videos — visual context resolves the ambiguity
+                # has_media = bool(request.additional_material)
+                # if qu_output.is_ambiguous and qu_output.clarifying_questions and not has_media:
+                #     questions_text = "\n".join(f"- {q}" for q in qu_output.clarifying_questions)
+                #     clarification_response = (
+                #         f"Câu hỏi của bạn chưa đủ rõ ràng để tôi trả lời chính xác. "
+                #         f"Bạn có thể làm rõ thêm không?\n{questions_text}"
+                #     )
+                #     logger.info("[QU] is_ambiguous=True — returning clarification request, skipping graph.")
+                #     root_trace.update(output={"final_response": clarification_response, "is_ambiguous": True})
+                #     return clarification_response
 
-                claried_query = qu_output.clarified_query
+                # claried_query = qu_output.clarified_query
 
                 initial_state = {
                     "user_query": request.user_query,

@@ -4,6 +4,8 @@ import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from ag_ui_langgraph import add_langgraph_fastapi_endpoint
+from copilotkit import LangGraphAGUIAgent
 from langfuse import get_client
 
 import pymongo
@@ -102,6 +104,16 @@ async def lifespan(app: FastAPI):
             logger.info("Initializing SoccerAgent...")
             agent_service = SoccerAgent(checkpointer=checkpointer)
             logger.info("✅ SoccerAgent initialized successfully")
+
+            # Create LangGraph Endpoint for Copilotkit Integration
+            add_langgraph_fastapi_endpoint(
+                app=app,
+                agent=LangGraphAGUIAgent(
+                    name="SoccerAgent",
+                    graph=agent_service.graph
+                ),
+                path="/soccer_agent/copilotkit"
+            ) 
         else:
             logger.warning("⚠️ DASHSCOPE_API_KEY not set, skipping SoccerAgent initialization")
             agent_service = None
@@ -167,6 +179,7 @@ app.add_middleware(
 app.include_router(chat_router, tags=["Soccer Chat Agent"])
 app.include_router(user_router, prefix="/user", tags=["User"])
 
+
 # --- 5. Helper Functions để truy cập preloaded models ---
 def get_mongo_client():
     """Get the preloaded MongoDB client."""
@@ -191,6 +204,7 @@ def root():
 
 # --- 7. Chạy server ---
 if __name__ == "__main__":
+
     uvicorn.run(
         "main:app", 
         host="0.0.0.0", 
