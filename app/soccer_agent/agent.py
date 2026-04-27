@@ -21,10 +21,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
 from app.soccer_agent.prompts.agent import get_planning_prompt_template, get_execution_prompt_template,get_aggregator_prompt_template
-from app.config.config import (
-    DEFAULT_MODEL,
-    SESSION_MEMORY_TOKEN_THRESHOLD, SESSION_MEMORY_RECENT_KEEP,
-)
+from app.config.config import (SESSION_MEMORY_TOKEN_THRESHOLD, SESSION_MEMORY_RECENT_KEEP)
 from app.soccer_agent.memory.session_memory import SessionMemoryManager, SessionMemory
 from app.soccer_agent.memory.query_understanding import QueryUnderstandingPipeline
 from app.soccer_agent.case_bank.retriever import CaseBankRetriever
@@ -102,7 +99,7 @@ class SoccerAgent:
     def _build_worker_graph(self) -> CompiledStateGraph:
         """Build the LangGraph worker workflow."""
         workflow = StateGraph(WorkerState)
-        tool_node = ToolNode(self.tools, messages_key="tool_node_messages")
+        tool_node = ToolNode(self.tools)
         
         workflow.add_node("check_cache_node", self._check_cache_node)
         workflow.add_node("execution_node", self._execution_node)
@@ -135,15 +132,19 @@ class SoccerAgent:
         workflow = StateGraph(AgentState)
 
         # Add nodes
+        workflow.add_node("get_conversation_history", self._get_conversational_history)
+        workflow.add_node("understand_user_message", self._understand_user_message)
         workflow.add_node("retrieve_cases_node", self._retrieve_cases_node)
         workflow.add_node("tool_chain_planning", self._tool_chain_planning)
         workflow.add_node("worker_graph", self._worker_node)
         workflow.add_node("aggregator_node", self._aggregator_node)
 
-        # Define the flow: retrieve_cases → planning → workers → aggregator
-        workflow.set_entry_point("retrieve_cases_node")
+        # Define the flow:
+        # Define the flow
+        workflow.set_entry_point("get_conversation_history")        
+        workflow.add_edge("get_conversation_history", "understand_user_message")
+        workflow.add_edge("understand_user_message", "retrieve_cases_node")
         workflow.add_edge("retrieve_cases_node", "tool_chain_planning")
-
         workflow.add_conditional_edges(
             "tool_chain_planning",
             self._trigger_workers,
@@ -170,7 +171,7 @@ class SoccerAgent:
         return {"retrieved_cases": examples or None}
 
     @observe(name="worker_node", as_type="span", capture_input=True)
-    async def _worker_node(self, state: WorkerState) -> dict:
+    async def _worker_node(self, state: AgentState, config: dict) -> dict:
         """
         Wrapper for worker_graph with proper timeout and Langfuse tracing.
         
@@ -200,10 +201,9 @@ class SoccerAgent:
             result = await worker_execution()
             
             return {
-                "parallel_results": result.get("parallel_results", []),
+                "parallel_results": result.get("worker_result", []),
                 "tool_calls_history": result.get("tool_calls_history", []),
                 "tool_results_history": result.get("tool_results_history", []),
-                "tool_node_messages": result.get("tool_node_messages", [])
             }
         except asyncio.TimeoutError:
             error_msg = f"[Timeout] Worker for sub-query '{state.get('sub_query', 'unknown')}' exceeded 120 seconds."
@@ -211,8 +211,7 @@ class SoccerAgent:
             return {
                 "parallel_results": [error_msg],
                 "tool_calls_history": [],
-                "tool_results_history": [],
-                "tool_node_messages": []
+                "tool_results_history": []
             }
         except Exception as e:
             error_msg = f"[Error] Worker for sub-query '{state.get('sub_query', 'unknown')}' failed with error: {str(e)}"
@@ -221,9 +220,107 @@ class SoccerAgent:
                 "parallel_results": [error_msg],
                 "tool_calls_history": [],
                 "tool_results_history": [],
-                "tool_node_messages": []
             }
-    
+    async def _get_conversational_history(self, state: AgentState):
+        """
+        This node retrieves the conversation history from the storage and updates the state.
+        """
+        messages = state.get("messages", [])
+        user_query = messages[-1].content if messages else ""
+        # Load conversation history
+        # with root_trace.start_as_current_observation(as_type="span", name="load_memory") as mem_span:
+        #     chat_history = None
+        #     if session_id:
+        #         try:
+        #             memory_object, connection, pool = await self.get_memory(session_id=session_id)
+        #             try:
+        #                 history = memory_object.load_memory_variables({})
+        #                 chat_history = history.get("history")
+        #                 mem_span.update(output={"memory_loaded": True, "history_length": len(chat_history) if chat_history else 0})
+        #             except Exception as e:
+        #                 logging.warning(f"Memory load failed for session {session_id}: {e}")
+        #                 mem_span.update(output={"memory_loaded": False, "error": str(e)})
+        #         except Exception as e:
+        #             logging.warning(f"Failed to obtain memory for session {session_id}: {e}")
+        #             mem_span.update(output={"memory_loaded": False, "error": str(e)})
+
+        # # Build history and run Query Understanding on all paths
+        # history_text = ""
+        # effective_memory = SessionMemory()
+        # recent_msgs_for_qu = []
+
+        # if chat_history:
+        #     raw_history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
+        #     for msg in chat_history[-10:]:
+        #         if hasattr(msg, 'content'):
+        #             role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
+        #             raw_history_text += f"{role}: {msg.content}\n"
+
+        #     token_count = self.session_memory_manager.count_tokens(raw_history_text)
+
+        #     if token_count > SESSION_MEMORY_TOKEN_THRESHOLD:
+        #         # Path B: history exceeds threshold — use SessionMemory + recent slice
+        #         old_msgs = chat_history[:-(SESSION_MEMORY_RECENT_KEEP-1)]
+        #         recent_msgs_for_qu = chat_history[-SESSION_MEMORY_RECENT_KEEP:]
+
+        #         cached_memory = await self.session_memory_manager.load_cached_memory(session_id)
+        #         if cached_memory is None:
+        #             if old_msgs:
+        #                 asyncio.create_task(
+        #                     self.session_memory_manager.background_summarise(session_id, old_msgs)
+        #                 )
+        #         else:
+        #             effective_memory = cached_memory
+
+        #         history_text = self.session_memory_manager.format_compressed_history(
+        #             effective_memory, recent_msgs_for_qu
+        #         )
+        #         logger.info(f"[Path B] token_count={token_count}.")
+        #     else:
+        #         # Path A: full history fits — pass all as recent context
+        #         recent_msgs_for_qu = chat_history
+        #         history_text = raw_history_text
+        #         logger.info(f"[Path A] token_count={token_count}.")
+        history_text = ""
+        # It load messages from DB then add them to "messages" array.
+        return {
+            "messages": state.get("messages", []), # Copilotkit will append new user messages to "messages", so we need to update the state
+            "conversation_history": history_text,
+        }
+
+    async def _understand_user_message(self, state: AgentState):
+        """
+        This node is responsible for understanding the user message based on the conversation history. If the message is ambiguous, it will ask for clarification.
+        """
+        messages = state.get("messages", [])
+        user_query = messages[-1].content if messages else ""
+        # Always run QueryUnderstanding — handles jargon, abbreviations, pronouns
+        # qu_output = await self.query_understanding.run(
+        #     user_query=request.user_query,
+        #     session_memory=effective_memory,
+        #     recent_messages=recent_msgs_for_qu,
+        # )
+        # logger.info(f"[QU] clarified='{qu_output.clarified_query}' is_ambiguous={qu_output.is_ambiguous}")
+
+        # # Short-circuit: if query is ambiguous, ask for clarification immediately
+        # # Skip if user attached images/videos — visual context resolves the ambiguity
+        # has_media = bool(request.additional_material)
+        # if qu_output.is_ambiguous and qu_output.clarifying_questions and not has_media:
+        #     questions_text = "\n".join(f"- {q}" for q in qu_output.clarifying_questions)
+        #     clarification_response = (
+        #         f"Câu hỏi của bạn chưa đủ rõ ràng để tôi trả lời chính xác. "
+        #         f"Bạn có thể làm rõ thêm không?\n{questions_text}"
+        #     )
+        #     logger.info("[QU] is_ambiguous=True — returning clarification request, skipping graph.")
+        #     root_trace.update(output={"final_response": clarification_response, "is_ambiguous": True})
+        #     return clarification_response
+
+        # claried_query = qu_output.clarified_query
+        claried_query = ""
+        return {
+            "claried_query": claried_query
+        }
+
     async def _tool_chain_planning(self, state: AgentState):
         """
         This node is responsible for planning the tool chain to answer the user's query.
@@ -234,7 +331,9 @@ class SoccerAgent:
         Returns:
             Updated state with parsed tool_chain
         """
-        
+        messages = state.get("messages", [])
+        user_query = messages[-1].content if messages else ""
+
         with langfuse_client.start_as_current_observation(as_type="span", name="tool_chain_planning") as root_span:
             logger.info("="*70)
             logger.info("🧠 Starting TOOL CHAIN PLANNING STEP")
@@ -253,7 +352,7 @@ class SoccerAgent:
                 planning_agent_prompt = planning_agent_prompt_template.invoke({
                     "toolbox_descriptions": tool_descriptions,
                     "format_instructions": format_instructions,
-                    "user_query": state.get("claried_query") or state["user_query"],
+                    "user_query": state.get("claried_query") or user_query,
                     "additional_material": additional_material,
                     "conversation_history": conversation_history,
                     "retrieved_cases": state.get("retrieved_cases") or "",
@@ -261,7 +360,7 @@ class SoccerAgent:
                 
                 prompt_span.update(
                     output={"planning_prompt": planning_agent_prompt},
-                    metadata={"user_query": state["user_query"][:100]}
+                    metadata={"user_query": user_query[:100]}
                 )
             
             # Call the planning model to get the tool chain
@@ -271,7 +370,7 @@ class SoccerAgent:
                 config={
                     "callbacks": [langfuse_handler],
                     "metadata": {
-                        "user_query": state["user_query"][:100],
+                        "user_query": user_query[:100],
                         "model_step": "planning"
                     }
                 }
@@ -295,164 +394,45 @@ class SoccerAgent:
             logger.info("="*70)
 
         return {
-            "user_query": state["user_query"],
             "additional_material": sorted(state.get("additional_material") or []),
-            "claried_query": state.get("claried_query") or state["user_query"],
-            "tool_chains": planning_output.tool_chains or [],
-            "sub_queries": planning_output.sub_queries or [],
-            "parallel_results": state.get("parallel_results", []),
-            "tool_calls_history": state.get("tool_calls_history", []),
-            "tool_results_history": state.get("tool_results_history", []),
-            "tool_node_messages": state.get("tool_node_messages", []),
-            "last_tool_artifact": state.get("last_tool_artifact"),
-            "need_call_tools": planning_output.need_call_tools,
+            "planning_output": planning_output,
             "conversation_history": state.get("conversation_history", ""),
-            "final_response": state.get("final_response", "")
         }
         
     def _trigger_workers(self, state: AgentState):
         """Map worker executions for each parallel tool chain."""
-        tool_chains = state.get("tool_chains", [])
-        sub_queries = state.get("sub_queries") or []
-        need_call_tools = state.get("need_call_tools", True)
+        planning_output = state.get("planning_output")
+        tool_chains = planning_output.tool_chains if planning_output else []
+        sub_queries = planning_output.sub_queries if planning_output else []
+        need_call_tools = planning_output.need_call_tools if planning_output else True
+        messages = state.get("messages", [])
+        claried_query = state.get("claried_query") or messages[-1].content if messages else ""
         
         # Short-circuit to aggregator if planner says no tools needed, or no chains provided
         if not need_call_tools or not tool_chains:
             logger.info(f"⏭️ Skipping workers (need_call_tools={need_call_tools}, tool_chains={tool_chains}). Going straight to aggregator.")
             return "aggregator_node"
             
-        claried_query = state.get("claried_query") or state["user_query"]
         sends = []
         for idx, chain in enumerate(tool_chains):
             sub_query = sub_queries[idx] if idx < len(sub_queries) else claried_query
             worker_state = {
+                "messages": [], # Start with empty messages for the worker;
                 "sub_query": sub_query,
                 "additional_material": state.get("additional_material", []),
                 "tool_chain": chain,
                 "tool_calls_history": [],
                 "tool_results_history": [],
-                "tool_node_messages": [],
                 "last_tool_artifact": None,
                 "parallel_results": []
             }
             sends.append(Send("worker_graph", worker_state))
         return sends
     
-    async def _execution_node(self, state: WorkerState) -> dict:
-        """
-        Iteratively execute the tool chain step by step using bind_tools with tool_choice.
-        This allows the LLM to see the full tool schema and automatically generate correct parameters.
-        
-        Args:
-            state: Current worker state with tool_chain
-            
-        Returns:
-            Updated worker dict
-        """
-        sub_query = state.get("sub_query")
-        additional_material_list = state.get("additional_material", [])
-        tool_chain = state["tool_chain"]
-        tool_calls_history = state.get("tool_calls_history", [])
-        tool_results_history = state.get("tool_results_history", [])
-        tool_node_messages = state.get("tool_node_messages", [])
-
-        logger.info(f"🔧 Running TOOL EXECUTION STEP: Step {len(tool_calls_history)}")
-        
-         # If the previous step is from the tool_node, add the tool execution result to history and add the artifact to state
-        last_artifact = state.get("last_tool_artifact")
-        if tool_node_messages:
-            tool_result: ToolMessage = tool_node_messages[-1] # Each time only one tool is called, so the last message is the result of the current tool
-            tool_results_history.append(tool_result)
-            last_artifact = tool_result.artifact if hasattr(tool_result, 'artifact') else None
-            logger.info(f"Received tool result: {tool_result.content}")
-
-        # Format List[str] to string for prompt
-        additional_material_str = ", ".join(additional_material_list) if additional_material_list else "None"
-        
-        # Build execution history string and prompt
-        history_str = self._build_history_string(tool_calls_history, tool_results_history)
-        execution_prompt_template = get_execution_prompt_template()
-        execution_prompt = execution_prompt_template.invoke({
-            "sub_query": sub_query,
-            "additional_material": additional_material_str,
-            "tool_chain": " -> ".join(tool_chain) if tool_chain else "No tools needed",
-            "history": history_str,
-            
-        })
-        logger.info(f"Tool chain to execute: {' -> '.join(tool_chain) if tool_chain else 'No tools needed'}")
-
-
-        # 🔴 Fix: initialize to None so it's always bound, even if invoke() throws
-        response: AIMessage = None  # type: ignore
-        try:
-            # Invoke the model with the tool
-            response = await self.execution_llm_with_tools.ainvoke(execution_prompt) # type: ignore
-            logger.info(f"🤖 Response from execution agent: \n \t Response content: {response.text} \n \t Tool Calls: {response.tool_calls}")
-            tool_node_messages = [response] # Add the message to tool_node_messages for tool_node if there is no tool call the should_or_continue node will end execution
-            
-            if response.tool_calls:
-                # Extract the tool call and add to tool calls history
-                tool_call: ToolCall = response.tool_calls[0]
-                tool_calls_history.append(tool_call)
-                logger.info(f"Added ToolCall to history. Executed total: {len(tool_calls_history)}")
-            else:
-                logger.info("No tool call made by the execution agent. Ending execution.")
-    
-        except Exception as e:
-            error_msg = f"Error in tool execution agent: {str(e)}"
-            logger.error(error_msg)
-            logger.info("Stopping execution due to error.")
-            response = AIMessage(content="The execution has been stopped due to an error. Please try again later.")
-            tool_node_messages = [response] 
-        
-        # Update state
-        base_state = {
-            "additional_material": additional_material_list,
-            "tool_calls_history": tool_calls_history,
-            "tool_results_history": tool_results_history,
-            "tool_chain": tool_chain,
-            "tool_node_messages": tool_node_messages,
-            "last_tool_artifact": last_artifact
-        }
-        
-        # 🔴 Fix: use getattr to safely check response.tool_calls (response may be None after an exception)
-        if not getattr(response, 'tool_calls', None):
-            logger.info("✅ TOOL EXECUTION STEP COMPLETED FOR CHAIN")
-            logger.info("="*70)
-            if response is not None:
-                result_text = getattr(response, 'text', None) or response.content
-            else:
-                result_text = "Worker stopped due to execution error."
-            base_state["parallel_results"] = [result_text]
-            if sub_query:
-                semantic_cache.set(sub_query, result_text, additional_material_list)
-
-        return base_state
-
-    def _check_cache_node(self, state: WorkerState) -> dict:
-        """Check semantic cache before executing worker."""
-        sub_query = state.get("sub_query")
-        if not sub_query:
-            return {}
-            
-        additional_material = state.get("additional_material", [])
-        cached_result = semantic_cache.check(sub_query, additional_material)
-        
-        if cached_result:
-            logger.info("⚡ Skipping worker execution due to cache hit (>0.9 similarity).")
-            return {
-                "parallel_results": [cached_result]
-            }
-        return {}
-
-    def should_execute_worker(self, state: WorkerState):
-        """If we already have parallel_results from cache hit, skipping worker execution."""
-        if state.get("parallel_results"):
-            return "end"
-        return "execute"
-    
     async def _aggregator_node(self, state: AgentState) -> dict:
         """Aggregate results from parallel executions and provide the final response."""
+        messages = state.get("messages", [])
+        user_query = messages[-1].content if messages else ""
         with langfuse_client.start_as_current_observation(as_type="span", name="aggregator") as root_span:
             logger.info("="*70)
             logger.info("🧠 Starting AGGREGATOR STEP")
@@ -483,7 +463,7 @@ class SoccerAgent:
             
                 aggregator_prompt_template = get_aggregator_prompt_template()
                 aggregator_prompt = aggregator_prompt_template.invoke({
-                    "user_query": state.get("claried_query") or state["user_query"],
+                    "user_query": state.get("claried_query") or user_query,
                     "additional_material": additional_material,
                     "conversation_history": conversation_history,
                     "worker_results": worker_results_str
@@ -496,17 +476,127 @@ class SoccerAgent:
                 config={
                     "callbacks": [langfuse_handler],
                     "metadata": {
-                        "user_query": state["user_query"][:100],
+                        "user_query": user_query[:100],
                         "num_worker_results": len(results),
                         "model_step": "aggregation"
                     }
                 }
             )
-            final_text = response.text if hasattr(response, 'text') else str(response)
             logger.info("✅ AGGREGATOR STEP COMPLETED")
             logger.info("="*70)
             
-            return {"final_response": final_text}
+        return {
+            "messages": [response], # Final response from aggregator
+        }
+    
+    async def _execution_node(self, state: WorkerState) -> dict:
+        """
+        Iteratively execute the tool chain step by step using bind_tools with tool_choice.
+        This allows the LLM to see the full tool schema and automatically generate correct parameters.
+        
+        Args:
+            state: Current worker state with tool_chain
+            
+        Returns:
+            Updated worker dict
+        """
+        sub_query = state.get("sub_query")
+        additional_material_list = state.get("additional_material", [])
+        tool_chain = state["tool_chain"]
+        tool_calls_history = state.get("tool_calls_history", [])
+        tool_results_history = state.get("tool_results_history", [])
+        messages = state.get("messages", [])
+
+        logger.info(f"🔧 Running TOOL EXECUTION STEP: Step {len(tool_calls_history)}")
+        
+         # If the previous step is from the tool_node, add the tool execution result to history and add the artifact to state
+        last_artifact = state.get("last_tool_artifact")
+        if messages:
+            tool_result: ToolMessage = messages[-1] # Each time only one tool is called, so the last message is the result of the current tool
+            tool_results_history.append(tool_result)
+            last_artifact = tool_result.artifact if hasattr(tool_result, 'artifact') else None
+            logger.info(f"Received tool result: {tool_result.content}")
+
+        # Format List[str] to string for prompt
+        additional_material_str = ", ".join(additional_material_list) if additional_material_list else "None"
+        
+        # Build execution history string and prompt
+        history_str = self._build_history_string(tool_calls_history, tool_results_history)
+        execution_prompt_template = get_execution_prompt_template()
+        execution_prompt = execution_prompt_template.invoke({
+            "sub_query": sub_query,
+            "additional_material": additional_material_str,
+            "tool_chain": " -> ".join(tool_chain) if tool_chain else "No tools needed",
+            "history": history_str,
+            
+        })
+        logger.info(f"Tool chain to execute: {' -> '.join(tool_chain) if tool_chain else 'No tools needed'}")
+
+
+        # 🔴 Fix: initialize to None so it's always bound, even if invoke() throws
+        response: AIMessage = None  # type: ignore
+        try:
+            # Invoke the model with the tool
+            response = await self.execution_llm_with_tools.ainvoke(execution_prompt) # type: ignore
+            logger.info(f"🤖 Response from execution agent: \n \t Response content: {response.text} \n \t Tool Calls: {response.tool_calls}")
+            
+            if response.tool_calls:
+                # Extract the tool call and add to tool calls history
+                tool_call: ToolCall = response.tool_calls[0]
+                tool_calls_history.append(tool_call)
+                logger.info(f"Added ToolCall to history. Executed total: {len(tool_calls_history)}")
+            else:
+                logger.info("No tool call made by the execution agent. Ending execution.")
+    
+        except Exception as e:
+            error_msg = f"Error in tool execution agent: {str(e)}"
+            logger.error(error_msg)
+            logger.info("Stopping execution due to error.")
+            response = AIMessage(content="The execution has been stopped due to an error. Please try again later.")
+        
+        # If no tool call was made, the execution is completed for this chain. Save the final response and cache it.
+        worker_result = None
+        if not getattr(response, 'tool_calls', None):
+            logger.info("✅ TOOL EXECUTION STEP COMPLETED FOR CHAIN")
+            logger.info("="*70)
+            if response is not None:
+                worker_result = getattr(response, 'text', None) or response.content
+            else:
+                worker_result = "Worker stopped due to execution error."
+            if sub_query:
+                semantic_cache.set(sub_query, worker_result, additional_material_list)
+
+        return {
+            "messages": [response], # Add the message to messages for tool_node if there is no tool call the should_or_continue node will end execution
+            "additional_material": additional_material_list,
+            "tool_calls_history": tool_calls_history,
+            "tool_results_history": tool_results_history,
+            "tool_chain": tool_chain,
+            "last_tool_artifact": last_artifact,
+            "worker_result": [worker_result] if worker_result else []
+        }
+
+    def _check_cache_node(self, state: WorkerState) -> dict:
+        """Check semantic cache before executing worker."""
+        sub_query = state.get("sub_query")
+        if not sub_query:
+            return {}
+            
+        additional_material = state.get("additional_material", [])
+        cached_result = semantic_cache.check(sub_query, additional_material)
+        
+        if cached_result:
+            logger.info("⚡ Skipping worker execution due to cache hit (>0.9 similarity).")
+            return {
+                "worker_result": [cached_result]
+            }
+        return {}
+
+    def should_execute_worker(self, state: WorkerState):
+        """If we already have worker_result from cache hit, skipping worker execution."""
+        if state.get("worker_result"):
+            return "end"
+        return "execute"
     
     def should_continue_call_tool(self, state: WorkerState):
         """
@@ -518,12 +608,12 @@ class SoccerAgent:
         Returns:
             str: "continue" to keep calling tools, "end" to stop execution.
         """
-        tool_node_messages = state.get("tool_node_messages")
-        last_message = tool_node_messages[-1] if len(tool_node_messages) > 0 else None
-        if not last_message or not last_message.tool_calls:
-            return "end"
+        messages = state.get("messages", [])
+        last_message = messages[-1] if len(messages) > 0 else None
+        if last_message and isinstance(last_message, AIMessage) and last_message.tool_calls:
+            return "continue"    
         else:
-            return "continue"
+            return "end"
     
     def _build_tool_summary_for_memory(
         self,
@@ -700,7 +790,7 @@ class SoccerAgent:
             
             try:
                 logger.info(f"Starting run for query: {request.user_query[:100]}...")
-                
+                # TODO: implement a manual invoke
                 # # Load conversation history
                 # with root_trace.start_as_current_observation(as_type="span", name="load_memory") as mem_span:
                 #     chat_history = None
@@ -787,7 +877,6 @@ class SoccerAgent:
                     "sub_queries": [],
                     "tool_calls_history": [],
                     "tool_results_history": [],
-                    "tool_node_messages": [],
                     "last_tool_artifact": None,
                     "conversation_history": history_text,
                     "parallel_results": [],
@@ -799,43 +888,35 @@ class SoccerAgent:
                 with root_trace.start_as_current_observation(as_type="span", name="execute_langgraph") as graph_span:
                     graph_span.update(input={"initial_state": {k: (v if k != "additional_material" else "List[str]") for k, v in initial_state.items()}})
                     final_state = await self.graph.ainvoke(initial_state)
+                    last_message = final_state.get("messages", [])[-1] if final_state.get("messages") else None
                     graph_span.update(
                         output={
-                            "final_response": final_state.get("final_response", "No response generated"),
+                            "final_response": last_message.text if last_message else "No response generated",
                         }
                     )
                     logger.info("Graph execution completed")
-
-                result = {
-                    "user_query": request.user_query,
-                    "tool_chains": final_state.get("tool_chains", []),
-                    "tool_calls_history": final_state.get("tool_calls_history", []),
-                    "tool_results_history": final_state.get("tool_results_history", []),
-                    "final_response": final_state.get("final_response", "No response generated")
-                }
-
                 
-                # Save conversation memory in background (non-blocking, uses its own DB connection)
-                try:
-                    output_with_tools = self._build_tool_summary_for_memory(
-                        tool_calls_history=result.get("tool_calls_history", []),
-                        tool_results_history=result.get("tool_results_history", []),
-                        final_response=result["final_response"],
-                    )
-                    asyncio.create_task(
-                        self._background_save_memory(session_id, request.user_query, output_with_tools)
-                    )
-                    # Incremental update of Redis SessionMemory if tool calls were made
-                    if result.get("tool_calls_history"):
-                        asyncio.create_task(
-                            self.session_memory_manager.background_update(session_id, output_with_tools)
-                        )
-                except Exception as e:
-                    logging.warning(f"Failed to prepare memory save for session {session_id}: {e}")
-                logger.info("Run completed successfully")
+                # # Save conversation memory in background (non-blocking, uses its own DB connection)
+                # try:
+                #     output_with_tools = self._build_tool_summary_for_memory(
+                #         tool_calls_history=final_state.get("tool_calls_history", []),
+                #         tool_results_history=final_state.get("tool_results_history", []),
+                #         final_response=last_message.text if last_message else "No response generated",
+                #     )
+                #     asyncio.create_task(
+                #         self._background_save_memory(session_id, request.user_query, output_with_tools)
+                #     )
+                #     # Incremental update of Redis SessionMemory if tool calls were made
+                #     if final_state.get("tool_calls_history"):
+                #         asyncio.create_task(
+                #             self.session_memory_manager.background_update(session_id, output_with_tools)
+                #         )
+                # except Exception as e:
+                #     logging.warning(f"Failed to prepare memory save for session {session_id}: {e}")
+                # logger.info("Run completed successfully")
 
                 root_trace.update(output={"final_response": result["final_response"]})
-                return result["final_response"]
+                return last_message.text if last_message else "No response generated"
 
             except Exception as e:
                 logging.error(f"Error in agent execution: {e}", exc_info=True)

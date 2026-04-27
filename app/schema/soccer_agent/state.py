@@ -13,28 +13,21 @@ class PlanningOutput(BaseModel):
 
 # Define the state structure for the agent
 class AgentState(CopilotKitState):
-    """Parent state structure for the planning agent."""
-    user_query: str # The user's soccer-related question
+    """Parent state structure for the planning agent. It is derived from CopilotKitState, which provides 'messages' list to store the conversation history"""
     claried_query: str # User query with pronouns/abbreviations resolved by QueryUnderstandingPipeline
     additional_material: Optional[List[str]] # Additional material (e.g, image/video related to the user question)
-    tool_chains: List[List[str]] # The planned sequence of tools to execute.
-    sub_queries: List[str] # The decomposed sub-queries for each worker.
+    planning_output: Optional[PlanningOutput] # The output from the planning step, which includes tool chains and sub-queries
     parallel_results: Annotated[List[str], operator.add] # Aggregated parallel results
     tool_calls_history: Annotated[List[ToolCall], operator.add] # History of tool calls
     tool_results_history: Annotated[List[ToolMessage], operator.add] # History of tool results
-    tool_node_messages: Annotated[List, operator.add] # Messages exchanged
-    last_tool_artifact: Optional[Any] # To store the tool's artifact output from the last tool call
-    need_call_tools: Optional[bool] # Flag to indicate if more tools need to be called
     conversation_history: Optional[str] # Optional conversation history for context
-    final_response: str # Final aggregated response
 
-class WorkerState(TypedDict):
-    """State for individual tool chain execution workers."""
+class WorkerState(CopilotKitState):
+    """State for individual tool chain execution workers. It is derived from CopilotKitState, which provides 'messages' list to store the conversation history"""
     sub_query: str
     additional_material: Optional[List[str]]
     tool_chain: List[str]
     tool_calls_history: List[ToolCall]
     tool_results_history: List[ToolMessage]
-    tool_node_messages: List
-    parallel_results: List[str]
+    worker_result: List[str] # To store the final result of the worker's execution, which will be aggregated into the parent agent's state
     last_tool_artifact: Optional[Any]
