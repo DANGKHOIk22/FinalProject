@@ -235,52 +235,52 @@ class SessionMemoryManager:
 
     # ── History formatting ────────────────────────────────────────────────────
 
-    def format_compressed_history(self, memory: SessionMemory, recent: List[BaseMessage]) -> str:
+    def build_context_messages(
+        self, memory: SessionMemory, recent: List[BaseMessage]
+    ) -> List[BaseMessage]:
         """
-        Format a SessionMemory + recent verbatim messages into the
-        conversation_history string passed to planning and aggregator prompts.
+        Build a list of BaseMessage objects representing compressed history.
+
+        Path B (history exceeds token threshold): returns a SystemMessage
+        containing the SessionMemory summary, followed by the verbatim recent
+        messages. The LLM receives these directly — no string interpolation needed.
         """
-        parts = ["\n\n### TÓM TẮT LỊCH SỬ HỘI THOẠI (Session Memory):"]
+        from langchain_core.messages import SystemMessage as SM
+
+        parts = ["### TÓM TẮT LỊCH SỬ HỘI THOẠI (Session Memory):"]
 
         if memory.scope:
             parts.append(f"Phạm vi thảo luận: {memory.scope}")
         if memory.conversation_state:
             parts.append(f"Trạng thái hội thoại: {memory.conversation_state}")
-
         if memory.confirmed_entities:
             parts.append("Thực thể đã xác nhận:")
             for entity in memory.confirmed_entities:
                 parts.append(f"  - {entity}")
-
         if memory.tool_findings:
             parts.append("Kết quả từ các tool đã gọi:")
             for finding in memory.tool_findings:
                 parts.append(f"  [{finding.tool_name}] Input: {finding.input_summary}")
                 for fact in finding.key_facts:
                     parts.append(f"    • {fact}")
-
         if memory.user_context.preferences:
             parts.append("Sở thích người dùng:")
             for pref in memory.user_context.preferences:
                 parts.append(f"  - {pref}")
-
         if memory.user_context.goals:
             parts.append("Mục tiêu người dùng:")
             for goal in memory.user_context.goals:
                 parts.append(f"  - {goal}")
-
         if memory.open_discussion_threads:
             parts.append("Chủ đề đang thảo luận:")
             for thread in memory.open_discussion_threads:
                 parts.append(f"  - {thread}")
 
-        if recent:
-            parts.append("\n### TIN NHẮN GẦN ĐÂY:")
-            for msg in recent:
-                role = "User" if isinstance(msg, HumanMessage) else "Assistant"
-                parts.append(f"{role}: {msg.content}")
-
-        return "\n".join(parts)
+        result: List[BaseMessage] = []
+        if len(parts) > 1:  # has actual content beyond the header
+            result.append(SM(content="\n".join(parts)))
+        result.extend(recent)
+        return result
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
