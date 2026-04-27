@@ -18,7 +18,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
-from app.soccer_agent.prompts.agent import get_planning_prompt_template, get_execution_prompt_template,get_aggregator_prompt_template
+from app.soccer_agent.prompts.agent import get_execution_system_prompt, get_planning_prompt_template,get_aggregator_prompt_template
 from app.config.config import (SESSION_MEMORY_TOKEN_THRESHOLD, SESSION_MEMORY_RECENT_KEEP)
 from app.soccer_agent.memory.session_memory import SessionMemoryManager, SessionMemory
 from app.soccer_agent.memory.query_understanding import QueryUnderstandingPipeline
@@ -79,7 +79,7 @@ class SoccerAgent:
             "textual_retrieval_augment": textual_retrieval_augment(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
-            #"entity_recognition": entity_recognition(),
+            "entity_recognition": entity_recognition(),
             "choice_selection": choice_selection(),
             "segment": segment(),
             "frame_selection": frame_selection(),
@@ -525,43 +525,32 @@ class SoccerAgent:
         
          # If the previous step is from the tool_node, add the tool execution result to history and add the artifact to state
         last_artifact = state.get("last_tool_artifact")
-        if messages:
-            tool_result: ToolMessage = messages[-1] # Each time only one tool is called, so the last message is the result of the current tool
-            tool_results_history.append(tool_result)
+        if messages and isinstance(messages[-1], ToolMessage):
+            tool_result: ToolMessage = messages[-1]
             last_artifact = tool_result.artifact if hasattr(tool_result, 'artifact') else None
             logger.info(f"Received tool result: {tool_result.content}")
 
-        # Format List[str] to string for prompt
+        # Create prompt for execution agent
         additional_material_str = ", ".join(additional_material_list) if additional_material_list else "None"
+        system_prompt = get_execution_system_prompt()
+        if not messages:
+            execution_prompt_template = get_execution_prompt_template()
+            execution_prompt = execution_prompt_template.invoke({
+                "sub_query": sub_query,
+                "additional_material": additional_material_str,
+                "tool_chain": " -> ".join(tool_chain) if tool_chain else "No tools needed",
+            })
+            messages = [execution_prompt]
         
-        # Build execution history string and prompt
-        history_str = self._build_history_string(tool_calls_history, tool_results_history)
-        execution_prompt_template = get_execution_prompt_template()
-        execution_prompt = execution_prompt_template.invoke({
-            "sub_query": sub_query,
-            "additional_material": additional_material_str,
-            "tool_chain": " -> ".join(tool_chain) if tool_chain else "No tools needed",
-            "history": history_str,
-            
-        })
         logger.info(f"Tool chain to execute: {' -> '.join(tool_chain) if tool_chain else 'No tools needed'}")
 
 
-        # 🔴 Fix: initialize to None so it's always bound, even if invoke() throws
+        # Invoke the execution LLM
         response: AIMessage = None  # type: ignore
         try:
             # Invoke the model with the tool
-            response = await self.execution_llm_with_tools.ainvoke(execution_prompt, config=config) # type: ignore
+            response = await self.execution_llm_with_tools.ainvoke([system_prompt] + messages, config=config) # type: ignore
             logger.info(f"🤖 Response from execution agent: \n \t Response content: {response.text} \n \t Tool Calls: {response.tool_calls}")
-            
-            if response.tool_calls:
-                # Extract the tool call and add to tool calls history
-                tool_call: ToolCall = response.tool_calls[0]
-                tool_calls_history.append(tool_call)
-                logger.info(f"Added ToolCall to history. Executed total: {len(tool_calls_history)}")
-            else:
-                logger.info("No tool call made by the execution agent. Ending execution.")
-    
         except Exception as e:
             error_msg = f"Error in tool execution agent: {str(e)}"
             logger.error(error_msg)
@@ -573,15 +562,26 @@ class SoccerAgent:
         if not getattr(response, 'tool_calls', None):
             logger.info("✅ TOOL EXECUTION STEP COMPLETED FOR CHAIN")
             logger.info("="*70)
+
+            # Cache the result for this sub-query + additional material combination
             if response is not None:
                 worker_result = getattr(response, 'text', None) or response.content
             else:
                 worker_result = "Worker stopped due to execution error."
+
             if sub_query:
                 semantic_cache.set(sub_query, worker_result, additional_material_list)
 
+            # Build the tool call history and tool result history for compatibility with main graph workflow. 
+            # TODO: Remove this if the main graph doesn't need the tool call/result history after the execution step
+            for message in messages:
+                if isinstance(message, AIMessage) and message.tool_calls:
+                    tool_calls_history.append(message.tool_calls[0])  # Assuming one tool call per message for simplicity; adjust if multiple calls are possible
+                if isinstance(message, ToolMessage):
+                    tool_results_history.append(message)
+
         return {
-            "messages": [response], # Add the message to messages for tool_node if there is no tool call the should_or_continue node will end execution
+            "messages": messages + [response] if state.get("messages") is None else [response], # Add the execution agent's response to messages history for the next step's context; if messages is None, initialize with HumanMessage + execution response
             "additional_material": additional_material_list,
             "tool_calls_history": tool_calls_history,
             "tool_results_history": tool_results_history,
@@ -661,38 +661,6 @@ class SoccerAgent:
         parts.append(f"\n[Final Response]\n{final_response}")
         return "\n".join(parts)
 
-    def _build_history_string(self, tool_calls_history: List[ToolCall], tool_results_history: List[ToolMessage]) -> str:
-        """
-        Build the execution history string for the prompt.
-        
-        Args:
-            tool_calls_history: List of tool calls
-            tool_results_history: List of tool results
-            
-        Returns:
-            str: Formatted history string
-        """
-        if not tool_calls_history and not tool_results_history:
-            return "No execution history yet. This is the first step."
-        
-        history_parts = []
-
-        # Integrate tool calls and results in order
-        for i in range(len(tool_calls_history)):
-            # Add tool call
-            tool_call = tool_calls_history[i]
-            tool_name = tool_call.get('name', 'unknown')
-            args_items = tool_call.get('args', {})
-            args_str = ", ".join(f"{arg}={value}" for arg, value in args_items.items())
-            history_parts.append(f"<CALL_TOOL><TOOL_NAME>{tool_name}</TOOL_NAME><TOOL_ARGS>{args_str}</TOOL_ARGS></CALL_TOOL>")
-            
-            # Add corresponding tool result if available
-            if i < len(tool_results_history):
-                tool_result = tool_results_history[i]
-                history_parts.append(f"<TOOL_RESULT>{tool_result.content}</TOOL_RESULT>")
-        
-        return "\n".join(history_parts)
-    
     async def get_memory(self, session_id: str):
         """
         Get conversation memory for the given session.
