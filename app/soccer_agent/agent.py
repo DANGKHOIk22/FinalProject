@@ -543,10 +543,11 @@ class SoccerAgent:
         
          # If the previous step is from the tool_node, add the tool execution result to history and add the artifact to state
         last_artifact = state.get("last_tool_artifact")
+        last_tool_message = ToolMessage()
         if messages and isinstance(messages[-1], ToolMessage):
-            tool_result: ToolMessage = messages[-1]
-            last_artifact = tool_result.artifact if hasattr(tool_result, 'artifact') else None
-            logger.info(f"Received tool result: {tool_result.content}")
+            last_tool_message = messages[-1]
+            last_artifact = last_tool_message.artifact if hasattr(last_tool_message, 'artifact') else None
+            logger.info(f"Received tool result: {last_tool_message.content}")
 
         # Create prompt for execution agent
         additional_material_str = ", ".join(additional_material_list) if additional_material_list else "None"
@@ -577,16 +578,20 @@ class SoccerAgent:
         
         # If no tool call was made, the execution is completed for this chain. Save the final response and cache it.
         worker_result = None
-        if not getattr(response, 'tool_calls', None):
+        if not response.tool_calls:
             logger.info("✅ TOOL EXECUTION STEP COMPLETED FOR CHAIN")
             logger.info("="*70)
 
-            # Cache the result for this sub-query + additional material combination
-            if response is not None:
-                worker_result = getattr(response, 'text', None) or response.content
+            # If the last tool message is from augmentation tool, return the result from the tool instead of the execution agent's response,.
+            # Note: this step must be after the execution response to ensure there is no error from the tool.
+            if last_tool_message and (last_tool_message.name == "textual_retrieval_augment" or last_tool_message.name == "game_history_retrieval" or last_tool_message.name == "game_info_retrieval"):
+                worker_result = last_tool_message.content
+            elif response.text:
+                worker_result = response.text
             else:
                 worker_result = "Worker stopped due to execution error."
 
+            # Cache the result for this sub-query + additional material combination
             if sub_query:
                 semantic_cache.set(sub_query, worker_result, additional_material_list)
 

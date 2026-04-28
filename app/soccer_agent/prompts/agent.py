@@ -99,7 +99,8 @@ You will execute the provided tool chain to gather information for the user's qu
 5. When finishing all tool calls in the chain, summarize the gathered information to answer the sub-query assigned to you. This will be combined with other workers' responses later.
 
 # Important Notes:
-Think step by step and be precise to ensure the correct execution.
+1. If the previous tool call is from "textual_retrieval_augment" or "game_info_retrieval", or "game_history_retrieval" tool, and it provides useful information, you should return nothing.
+2. Think step by step and be precise to ensure the correct execution.
 """)
 
 def get_execution_human_prompt() -> HumanMessagePromptTemplate:
