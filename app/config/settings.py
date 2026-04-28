@@ -14,6 +14,7 @@ class Settings:
     # MongoDB Configuration
     MONGO_SRV: Optional[str] = os.getenv('MONGO_SRV')
     SOCCER_DB_NAME: str = os.getenv('SOCCER_DB_NAME', 'SoccerWikiDemo')
+    GAME_COLLECTION_NAME: str = os.getenv('GAME_COLLECTION_NAME', 'games')
     GOOGLE_API_KEY: Optional[str] = os.getenv('GOOGLE_API_KEY')
     DASHSCOPE_API_KEY: Optional[str] = os.getenv('DASHSCOPE_API_KEY')
     SOCCER_COLLECTION_NAME: str = os.getenv('SOCCER_COLLECTION_NAME', 'EntityInformation')

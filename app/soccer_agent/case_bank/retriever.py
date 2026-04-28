@@ -66,7 +66,7 @@ class CaseBankRetriever:
             )
             return response.points
         except Exception as e:
-            logger.error(f"CaseBankRetriever search error (label={label}): {e}")
+            logger.error(f"CaseBankRetriever search error (label={label}): {e}", exc_info=True)
             return []
 
     def _format_examples(self, grouped: dict) -> str:
