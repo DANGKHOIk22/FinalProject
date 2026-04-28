@@ -81,7 +81,6 @@ class TextualRetrievalAugmentTool(BaseTool):
         # Get answer
         try: 
             final_answer = await retrieval_augment_chain.ainvoke(inputs)
-            logger.info(f"Raw textual retrieval augment answer: {final_answer}")
             return str(final_answer.text), None
         except Exception as e:
             error_msg = f"Error in textual_retrieval_augment tool: {str(e)}"

@@ -389,16 +389,21 @@ class SoccerAgent:
             
             # Call the planning model to get the tool chain
             langfuse_handler = CallbackHandler()
-            response = await self.planning_llm.ainvoke(
-                planning_agent_prompt,
-                config={
-                    "callbacks": [langfuse_handler],
-                    "metadata": {
-                        "user_query": user_query[:100],
-                        "model_step": "planning"
-                    }
-                }
-            )
+            callbacks = config.get("callbacks", [])
+            if not isinstance(callbacks, list):
+                if callbacks is not None:
+                    callbacks = [callbacks]
+                else:
+                    callbacks = []
+            callbacks.append(langfuse_handler)
+
+            # Add metadata for better traceability in Langfuse
+            metadata = config.get("metadata", {})
+            metadata.update({
+                "user_query": user_query[:100],
+                "model_step": "planning"
+            })
+            response = await self.planning_llm.ainvoke(planning_agent_prompt, config=config)
             response_text = response.text if hasattr(response, 'text') else str(response)
                 
             planning_output: PlanningOutput = self.planning_parser.parse(response_text)
