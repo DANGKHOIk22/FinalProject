@@ -20,8 +20,7 @@ Your planning is used to guide the execution workers in the orderly to use the t
 
 # Note:
 1. If the user query is not clear or not relevant to soccer, you can set `need_call_tools=false`.
-
-
+2. Always think step by step and be precise in your analysis to determine the correct tool chains. The execution workers will rely on your planning to call the tools in the right order and with the right parameters, so accuracy is crucial.
 """
         ),
         HumanMessagePromptTemplate.from_template(
@@ -98,6 +97,9 @@ You will execute the provided tool chain to gather information for the user's qu
 3. If the previous tool call failed, analyze the error message. Retry the same tool call one time or modify the input parameters. If the retry also fails, report concisely the error message and stop execution.
 4. If the previous tool call succeeded, analyze the output and the next tool description to determine the precise parameters needed for the next tool call. Only generate the parameters required for that tool, based on the information you have and the tool's description. However, if you don't have sufficient information to generate the parameters for the next tool call, stop the execution and explain concisely why you cannot proceed. Do NOT make up any information that is not available to you.
 5. When finishing all tool calls in the chain, summarize the gathered information to answer the sub-query assigned to you. This will be combined with other workers' responses later.
+
+# Important Notes:
+Think step by step and be precise to ensure the correct execution.
 """)
 
 def get_execution_human_prompt() -> HumanMessagePromptTemplate:
@@ -143,7 +145,7 @@ Below are the summarized findings from each parallel worker that investigated th
 1. Integrate all findings to fully address all parts of the user's query.
 2. If the workers encountered errors or could not find the information, state what is known.
 3. Base your final response ONLY on the provided worker findings and conversation history, without making up facts.
-4. Provide a coherent, polite, natural language response.
+4. Think step by step and be precise to ensure the correct synthesis.
 
 Generate the final answer below:
 """)])
