@@ -18,7 +18,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
-from app.soccer_agent.prompts.agent import get_execution_system_prompt, get_planning_prompt_template,get_aggregator_prompt_template
+from app.soccer_agent.prompts.agent import get_execution_human_prompt, get_execution_system_prompt, get_planning_prompt_template,get_aggregator_prompt_template
 from app.config.config import (SESSION_MEMORY_TOKEN_THRESHOLD, SESSION_MEMORY_RECENT_KEEP)
 from app.soccer_agent.memory.session_memory import SessionMemoryManager, SessionMemory
 from app.soccer_agent.memory.query_understanding import QueryUnderstandingPipeline
@@ -61,6 +61,7 @@ class SoccerAgent:
         """
         self.planning_llm = get_llm("planning")
         self.execution_llm = get_llm("execution")
+        self.aggregator_llm = get_llm("aggregator")
         self.planning_parser = PydanticOutputParser(pydantic_object=PlanningOutput)
         self.checkpointer = checkpointer
         self.case_bank_retriever = CaseBankRetriever()
@@ -79,7 +80,7 @@ class SoccerAgent:
             "textual_retrieval_augment": textual_retrieval_augment(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
-            "entity_recognition": entity_recognition(),
+            #"entity_recognition": entity_recognition(),
             "choice_selection": choice_selection(),
             "segment": segment(),
             "frame_selection": frame_selection(),
@@ -187,7 +188,7 @@ class SoccerAgent:
                         callbacks = [callbacks]
                     else:
                         callbacks = []
-                callbacks.append(CallbackHandler())
+                callbacks.append(langfuse_handler)
 
                 # Add metadata for better traceability in Langfuse
                 metadata = config.get("metadata", {})
@@ -483,18 +484,26 @@ class SoccerAgent:
                     "worker_results": worker_results_str
                 })
                 prep_span.update(output={"aggregator_prompt": aggregator_prompt})
-                
+
+            # Append langfuse callback to the aggregator model
             langfuse_handler = CallbackHandler()
-            response = await self.execution_llm.ainvoke(
+            callbacks = config.get("callbacks", [])
+            if not isinstance(callbacks, list):
+                if callbacks is not None:
+                    callbacks = [callbacks]
+                else:
+                    callbacks = []
+            callbacks.append(langfuse_handler)
+            metadata = config.get("metadata", {})
+            metadata.update({
+                "user_query": user_query[:100],
+                "num_worker_results": len(results),
+                "model_step": "aggregation",
+            })
+
+            response = await self.aggregator_llm.ainvoke(
                 aggregator_prompt,
-                config={
-                    "callbacks": [langfuse_handler],
-                    "metadata": {
-                        "user_query": user_query[:100],
-                        "num_worker_results": len(results),
-                        "model_step": "aggregation"
-                    }
-                }
+                config=config
             )
             logger.info("✅ AGGREGATOR STEP COMPLETED")
             logger.info("="*70)
@@ -534,12 +543,12 @@ class SoccerAgent:
         additional_material_str = ", ".join(additional_material_list) if additional_material_list else "None"
         system_prompt = get_execution_system_prompt()
         if not messages:
-            execution_prompt_template = get_execution_prompt_template()
-            execution_prompt = execution_prompt_template.invoke({
-                "sub_query": sub_query,
-                "additional_material": additional_material_str,
-                "tool_chain": " -> ".join(tool_chain) if tool_chain else "No tools needed",
-            })
+            execution_prompt_template = get_execution_human_prompt()
+            execution_prompt = execution_prompt_template.format(
+                sub_query=sub_query,
+                additional_material=additional_material_str,
+                tool_chain=" -> ".join(tool_chain) if tool_chain else "No tools needed"
+            )
             messages = [execution_prompt]
         
         logger.info(f"Tool chain to execute: {' -> '.join(tool_chain) if tool_chain else 'No tools needed'}")
@@ -581,7 +590,7 @@ class SoccerAgent:
                     tool_results_history.append(message)
 
         return {
-            "messages": messages + [response] if state.get("messages") is None else [response], # Add the execution agent's response to messages history for the next step's context; if messages is None, initialize with HumanMessage + execution response
+            "messages": messages + [response] if not state.get("messages") else [response], # Add the execution agent's response to messages history for the next step's context; if messages is None, initialize with HumanMessage + execution response
             "additional_material": additional_material_list,
             "tool_calls_history": tool_calls_history,
             "tool_results_history": tool_results_history,

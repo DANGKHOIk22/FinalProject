@@ -84,15 +84,12 @@ Additional Material: {additional_material}
     return planning_prompt_template
 
 
-def get_execution_prompt_template() -> ChatPromptTemplate:
-    """Create the execution prompt template for a single execution worker."""
-
-    execution_prompt_template = ChatPromptTemplate.from_messages([
-        SystemMessage(
-            content="You are the execution worker responsible for calling tools in support of the Soccer Question Answering Agent."
-        ),
-        HumanMessagePromptTemplate.from_template(
-            """# Task Overview:
+# Create system and user messages for the execution worker
+def get_execution_system_prompt() -> SystemMessage:
+    """Create the system prompt for the execution worker."""
+    return SystemMessage(
+        content="""You are the execution worker responsible for calling tools in support of the Soccer Question Answering Agent.
+# Task Overview:
 You will execute the provided tool chain to gather information for the user's query. You are working in parallel with other workers, so focus only on your assigned tool chain and your specific sub-query.
 
 # Execution Guidelines:
@@ -101,19 +98,23 @@ You will execute the provided tool chain to gather information for the user's qu
 3. If the previous tool call failed, analyze the error message. Retry the same tool call one time or modify the input parameters. If the retry also fails, report concisely the error message and stop execution.
 4. If the previous tool call succeeded, analyze the output and the next tool description to determine the precise parameters needed for the next tool call. Only generate the parameters required for that tool, based on the information you have and the tool's description. However, if you don't have sufficient information to generate the parameters for the next tool call, stop the execution and explain concisely why you cannot proceed. Do NOT make up any information that is not available to you.
 5. When finishing all tool calls in the chain, summarize the gathered information to answer the sub-query assigned to you. This will be combined with other workers' responses later.
+""")
 
+def get_execution_human_prompt() -> HumanMessagePromptTemplate:
+    """Create the human prompt for the execution worker."""
+    return HumanMessagePromptTemplate.from_template(
+        """
 # Input:
-1. Your specific sub-query to focus on: "{sub_query}"
+1. Your specific sub-query to focus on: '{sub_query}'
 2. Additional material: {additional_material}
-3. Suggested tool chain for your sub-query: {tool_chain}
-4. Execution history of your tool chain:
-{history}
+3. Suggested tool chain for your sub-query: '{tool_chain}'
 
 # Next Step
 Based on the above determine the next step in your execution:
-""")])
-    return execution_prompt_template
+""")
 
+
+# Create the prompt template for the aggregator worker that synthesizes the outputs from parallel workers
 def get_aggregator_prompt_template() -> ChatPromptTemplate:
     """Create the aggregator prompt template that synthesized worker outputs."""
     
