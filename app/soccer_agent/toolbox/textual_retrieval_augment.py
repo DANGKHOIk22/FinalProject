@@ -34,7 +34,7 @@ class TextualRetrievalAugmentTool(BaseTool):
 
     def __init__(self):
         super().__init__()
-        self._llm = get_llm("tool")
+        self._llm = get_llm("retrieval-augment")
 
     def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, None]:
         """

@@ -6,10 +6,12 @@ model_list:
       api_key: os.environ/GOOGLE_API_KEY
       temperature: 0.2
       top_p: 0.95
-      max_tokens: 8000
+      max_completion_tokens: 10000
       thinking:
         type: enabled
-        budget_tokens: 3000
+        budget_tokens: 8192
+        include_thoughts: false
+      stream: false
 
   - model_name: planning-fallback
     litellm_params:
@@ -17,7 +19,7 @@ model_list:
       api_key: os.environ/GOOGLE_API_KEY
       temperature: 0.2
       top_p: 0.95
-      max_tokens: 8000
+      max_completion_tokens: 10000
 
 
   # ── Execution: iterative tool calling inside workers ─────────────────────────
@@ -27,10 +29,12 @@ model_list:
       api_key: os.environ/GOOGLE_API_KEY
       temperature: 0.2
       top_p: 0.95
-      max_tokens: 8000
+      max_completion_tokens: 5000
       thinking:
         type: enabled
-        budget_tokens: 4000
+        budget_tokens: 2048
+        include_thoughts: true
+      stream: false
 
   - model_name: execution-fallback
     litellm_params:
@@ -38,16 +42,44 @@ model_list:
       api_key: os.environ/GOOGLE_API_KEY
       temperature: 0.2
       top_p: 0.95
-      max_tokens: 8000
+      max_completion_tokens: 5000
+
+  # ── Retrieval-Augment: retrieve and augment information ─────────────────────
+  - model_name: retrieval-augment
+    litellm_params:
+      model: gemini/gemini-2.5-flash-lite
+      api_key: os.environ/GOOGLE_API_KEY
+      temperature: 1.0
+      top_p: 0.95
+      max_completion_tokens: 10000
+      thinking:
+        type: enabled
+        budget_tokens: 2048
+        include_thoughts: true
+      stream: true
+
+  - model_name: retrieval-augment-fallback
+    litellm_params:
+      model: gemini/gemma-4-26b-a4b-it
+      api_key: os.environ/GOOGLE_API_KEY
+      temperature: 1.0
+      top_p: 0.95
+      max_completion_tokens: 10000
+
 
   # ── Aggregator: synthesise parallel worker results ───────────────────────────
   - model_name: aggregator
     litellm_params:
-      model: gemini/gemini-2.5-flash
+      model: gemini/gemini-2.5-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
-      temperature: 0.2
+      temperature: 1.0
       top_p: 0.95
-      max_tokens: 8000
+      max_completion_tokens: 50000
+      thinking:
+        type: enabled
+        budget_tokens: 2048
+        includeThoughts: true
+      stream: true
 
   - model_name: aggregator-fallback
     litellm_params:
@@ -55,7 +87,7 @@ model_list:
       api_key: os.environ/GOOGLE_API_KEY
       temperature: 0.2
       top_p: 0.95
-      max_tokens: 8000
+      max_completion_tokens: 50000
 
   # ── Tool: shared by tools, query-understanding pipeline, guardrails ───────────
   - model_name: tool
@@ -64,7 +96,7 @@ model_list:
       api_key: os.environ/GOOGLE_API_KEY
       temperature: 0.2
       top_p: 0.95
-      max_tokens: 8000
+      max_completion_tokens: 8000
   
   - model_name: tool-fallback
     litellm_params:
@@ -72,11 +104,12 @@ model_list:
       api_key: os.environ/GOOGLE_API_KEY
       temperature: 0.2
       top_p: 0.95
-      max_tokens: 8000
+      max_completion_tokens: 8000
 
 router_settings:
   fallbacks:
     - planning: [planning-fallback]
     - execution: [execution-fallback]
+    - retrieval-augment: [retrieval-augment-fallback]
     - aggregator: [aggregator-fallback]
     - tool: [tool-fallback]
