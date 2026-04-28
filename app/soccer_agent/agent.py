@@ -12,6 +12,7 @@ from langchain_core.tools import BaseTool
 from langchain_core.callbacks.manager import adispatch_custom_event
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph, RunnableConfig
+from langgraph.types import Command
 from langgraph.prebuilt import ToolNode
 from langgraph.constants import Send
 from langgraph.checkpoint.memory import MemorySaver
@@ -51,12 +52,11 @@ class SoccerAgent:
     This agent analyzes questions about soccer and determines the appropriate
     tool chain needed to answer them.
     """
-    def __init__(self, model_name: str = DEFAULT_MODEL, checkpointer=None):
+    def __init__(self, checkpointer=None):
         """
         Initialize the Soccer Planning Agent.
 
         Args:
-            model_name: The LLM model to use (default from config)
             checkpointer: Optional LangGraph checkpointer for state persistence
         """
         self.planning_llm = get_llm("planning")
@@ -225,105 +225,114 @@ class SoccerAgent:
                 "tool_calls_history": [],
                 "tool_results_history": [],
             }
-    async def _get_conversational_history(self, state: AgentState):
+        
+    async def _get_conversational_history(self, state: AgentState, config: RunnableConfig):
         """
         This node retrieves the conversation history from the storage and updates the state.
         """
         messages = state.get("messages", [])
-        user_query = messages[-1].content if messages else ""
+        user_query = messages[-1].text if messages else ""
+        additional_material = state.get("additional_material", [])
+        metadata = config.get("metadata", {})
+        thread_id = metadata.get("thread_id", str(uuid.uuid4()))
+
         # Load conversation history
         # with root_trace.start_as_current_observation(as_type="span", name="load_memory") as mem_span:
-        #     chat_history = None
-        #     if session_id:
-        #         try:
-        #             memory_object, connection, pool = await self.get_memory(session_id=session_id)
-        #             try:
-        #                 history = memory_object.load_memory_variables({})
-        #                 chat_history = history.get("history")
-        #                 mem_span.update(output={"memory_loaded": True, "history_length": len(chat_history) if chat_history else 0})
-        #             except Exception as e:
-        #                 logging.warning(f"Memory load failed for session {session_id}: {e}")
-        #                 mem_span.update(output={"memory_loaded": False, "error": str(e)})
-        #         except Exception as e:
-        #             logging.warning(f"Failed to obtain memory for session {session_id}: {e}")
-        #             mem_span.update(output={"memory_loaded": False, "error": str(e)})
+        chat_history = None
+        if thread_id:
+            try:
+                memory_object, connection, pool = await self.get_memory(session_id=thread_id)
+                try:
+                    history = memory_object.load_memory_variables({})
+                    chat_history = history.get("history")
+                    #mem_span.update(output={"memory_loaded": True, "history_length": len(chat_history) if chat_history else 0})
+                except Exception as e:
+                    logging.warning(f"Memory load failed for session {thread_id}: {e}")
+                    #mem_span.update(output={"memory_loaded": False, "error": str(e)})
+            except Exception as e:
+                logging.warning(f"Failed to obtain memory for session {thread_id}: {e}")
+                #mem_span.update(output={"memory_loaded": False, "error": str(e)})
 
-        # # Build history and run Query Understanding on all paths
-        # history_text = ""
-        # effective_memory = SessionMemory()
-        # recent_msgs_for_qu = []
-
-        # if chat_history:
-        #     raw_history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
-        #     for msg in chat_history[-10:]:
-        #         if hasattr(msg, 'content'):
-        #             role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
-        #             raw_history_text += f"{role}: {msg.content}\n"
-
-        #     token_count = self.session_memory_manager.count_tokens(raw_history_text)
-
-        #     if token_count > SESSION_MEMORY_TOKEN_THRESHOLD:
-        #         # Path B: history exceeds threshold — use SessionMemory + recent slice
-        #         old_msgs = chat_history[:-(SESSION_MEMORY_RECENT_KEEP-1)]
-        #         recent_msgs_for_qu = chat_history[-SESSION_MEMORY_RECENT_KEEP:]
-
-        #         cached_memory = await self.session_memory_manager.load_cached_memory(session_id)
-        #         if cached_memory is None:
-        #             if old_msgs:
-        #                 asyncio.create_task(
-        #                     self.session_memory_manager.background_summarise(session_id, old_msgs)
-        #                 )
-        #         else:
-        #             effective_memory = cached_memory
-
-        #         history_text = self.session_memory_manager.format_compressed_history(
-        #             effective_memory, recent_msgs_for_qu
-        #         )
-        #         logger.info(f"[Path B] token_count={token_count}.")
-        #     else:
-        #         # Path A: full history fits — pass all as recent context
-        #         recent_msgs_for_qu = chat_history
-        #         history_text = raw_history_text
-        #         logger.info(f"[Path A] token_count={token_count}.")
+        # Build history and run Query Understanding on all paths
         history_text = ""
-        # It load messages from DB then add them to "messages" array.
+        effective_memory = SessionMemory()
+        recent_msgs_for_qu = []
+
+        if chat_history:
+            raw_history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
+            for msg in chat_history[-10:]:
+                if hasattr(msg, 'content'):
+                    role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
+                    raw_history_text += f"{role}: {msg.content}\n"
+
+            token_count = self.session_memory_manager.count_tokens(raw_history_text)
+
+            if token_count > SESSION_MEMORY_TOKEN_THRESHOLD:
+                # Path B: history exceeds threshold — use SessionMemory + recent slice
+                old_msgs = chat_history[:-(SESSION_MEMORY_RECENT_KEEP-1)]
+                recent_msgs_for_qu = chat_history[-SESSION_MEMORY_RECENT_KEEP:]
+
+                cached_memory = await self.session_memory_manager.load_cached_memory(thread_id)
+                if cached_memory is None:
+                    if old_msgs:
+                        asyncio.create_task(
+                            self.session_memory_manager.background_summarise(thread_id, old_msgs)
+                        )
+                else:
+                    effective_memory = cached_memory
+
+                history_text = self.session_memory_manager.format_compressed_history(
+                    effective_memory, recent_msgs_for_qu
+                )
+                logger.info(f"[Path B] token_count={token_count}.")
+            else:
+                # Path A: full history fits — pass all as recent context
+                recent_msgs_for_qu = chat_history
+                history_text = raw_history_text
+                logger.info(f"[Path A] token_count={token_count}.")
+
+        # Always run QueryUnderstanding — handles jargon, abbreviations, pronouns
+        qu_output = await self.query_understanding.run(
+            user_query=user_query,
+            session_memory=effective_memory,
+            recent_messages=recent_msgs_for_qu,
+        )
+        logger.info(f"[QU] clarified='{qu_output.clarified_query}' is_ambiguous={qu_output.is_ambiguous}")
+
+        # Short-circuit: if query is ambiguous, ask for clarification immediately
+        # Skip if user attached images/videos — visual context resolves the ambiguity
+        if qu_output.is_ambiguous and qu_output.clarifying_questions and not additional_material:
+            questions_text = "\n".join(f"- {q}" for q in qu_output.clarifying_questions)
+            clarification_response = AIMessage(content=(
+                f"Câu hỏi của bạn chưa đủ rõ ràng để tôi trả lời chính xác. "
+                f"Bạn có thể làm rõ thêm không?\n{questions_text}"
+            ))
+            logger.info("[QU] is_ambiguous=True — returning clarification request, skipping graph.")
+            #root_trace.update(output={"final_response": clarification_response, "is_ambiguous": True})
+            
+            return Command(
+                goto="END",
+                update={
+                    "messages": messages + [clarification_response],
+                }
+            )
+
         return {
             "messages": state.get("messages", []), # Copilotkit will append new user messages to "messages", so we need to update the state
             "conversation_history": history_text,
+            "claried_query": qu_output.clarified_query,
         }
 
-    async def _understand_user_message(self, state: AgentState):
+    async def _understand_user_message(self, state: AgentState, config: RunnableConfig):
         """
         This node is responsible for understanding the user message based on the conversation history. If the message is ambiguous, it will ask for clarification.
         """
         messages = state.get("messages", [])
-        user_query = messages[-1].content if messages else ""
-        # Always run QueryUnderstanding — handles jargon, abbreviations, pronouns
-        # qu_output = await self.query_understanding.run(
-        #     user_query=request.user_query,
-        #     session_memory=effective_memory,
-        #     recent_messages=recent_msgs_for_qu,
-        # )
-        # logger.info(f"[QU] clarified='{qu_output.clarified_query}' is_ambiguous={qu_output.is_ambiguous}")
+        user_query = messages[-1].text if messages else ""
 
-        # # Short-circuit: if query is ambiguous, ask for clarification immediately
-        # # Skip if user attached images/videos — visual context resolves the ambiguity
-        # has_media = bool(request.additional_material)
-        # if qu_output.is_ambiguous and qu_output.clarifying_questions and not has_media:
-        #     questions_text = "\n".join(f"- {q}" for q in qu_output.clarifying_questions)
-        #     clarification_response = (
-        #         f"Câu hỏi của bạn chưa đủ rõ ràng để tôi trả lời chính xác. "
-        #         f"Bạn có thể làm rõ thêm không?\n{questions_text}"
-        #     )
-        #     logger.info("[QU] is_ambiguous=True — returning clarification request, skipping graph.")
-        #     root_trace.update(output={"final_response": clarification_response, "is_ambiguous": True})
-        #     return clarification_response
-
-        # claried_query = qu_output.clarified_query
-        claried_query = ""
-        return {
-            "claried_query": claried_query
-        }
+        # TODO: Refactor _get_conversational_history seperate between retrieving history and running query understanding
+        
+        return {}
 
     async def _tool_chain_planning(self, state: AgentState, config: RunnableConfig) -> dict:
         """
@@ -775,101 +784,18 @@ class SoccerAgent:
         ) as root_trace:
             root_trace.update(input={"user_query": request.user_query})
             
-            connection = None
-            pool = None
-            memory_object = None
-            
             try:
                 logger.info(f"Starting run for query: {request.user_query[:100]}...")
-                # TODO: implement a manual invoke
-                # # Load conversation history
-                # with root_trace.start_as_current_observation(as_type="span", name="load_memory") as mem_span:
-                #     chat_history = None
-                #     if session_id:
-                #         try:
-                #             memory_object, connection, pool = await self.get_memory(session_id=session_id)
-                #             try:
-                #                 history = memory_object.load_memory_variables({})
-                #                 chat_history = history.get("history")
-                #                 mem_span.update(output={"memory_loaded": True, "history_length": len(chat_history) if chat_history else 0})
-                #             except Exception as e:
-                #                 logging.warning(f"Memory load failed for session {session_id}: {e}")
-                #                 mem_span.update(output={"memory_loaded": False, "error": str(e)})
-                #         except Exception as e:
-                #             logging.warning(f"Failed to obtain memory for session {session_id}: {e}")
-                #             mem_span.update(output={"memory_loaded": False, "error": str(e)})
-
-                # # Build history and run Query Understanding on all paths
-                # history_text = ""
-                # effective_memory = SessionMemory()
-                # recent_msgs_for_qu = []
-
-                # if chat_history:
-                #     raw_history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
-                #     for msg in chat_history[-10:]:
-                #         if hasattr(msg, 'content'):
-                #             role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
-                #             raw_history_text += f"{role}: {msg.content}\n"
-
-                #     token_count = self.session_memory_manager.count_tokens(raw_history_text)
-
-                #     if token_count > SESSION_MEMORY_TOKEN_THRESHOLD:
-                #         # Path B: history exceeds threshold — use SessionMemory + recent slice
-                #         old_msgs = chat_history[:-(SESSION_MEMORY_RECENT_KEEP-1)]
-                #         recent_msgs_for_qu = chat_history[-SESSION_MEMORY_RECENT_KEEP:]
-
-                #         cached_memory = await self.session_memory_manager.load_cached_memory(session_id)
-                #         if cached_memory is None:
-                #             if old_msgs:
-                #                 asyncio.create_task(
-                #                     self.session_memory_manager.background_summarise(session_id, old_msgs)
-                #                 )
-                #         else:
-                #             effective_memory = cached_memory
-
-                #         history_text = self.session_memory_manager.format_compressed_history(
-                #             effective_memory, recent_msgs_for_qu
-                #         )
-                #         logger.info(f"[Path B] token_count={token_count}.")
-                #     else:
-                #         # Path A: full history fits — pass all as recent context
-                #         recent_msgs_for_qu = chat_history
-                #         history_text = raw_history_text
-                #         logger.info(f"[Path A] token_count={token_count}.")
-
-                # # Always run QueryUnderstanding — handles jargon, abbreviations, pronouns
-                # qu_output = await self.query_understanding.run(
-                #     user_query=request.user_query,
-                #     session_memory=effective_memory,
-                #     recent_messages=recent_msgs_for_qu,
-                # )
-                # logger.info(f"[QU] clarified='{qu_output.clarified_query}' is_ambiguous={qu_output.is_ambiguous}")
-
-                # # Short-circuit: if query is ambiguous, ask for clarification immediately
-                # # Skip if user attached images/videos — visual context resolves the ambiguity
-                # has_media = bool(request.additional_material)
-                # if qu_output.is_ambiguous and qu_output.clarifying_questions and not has_media:
-                #     questions_text = "\n".join(f"- {q}" for q in qu_output.clarifying_questions)
-                #     clarification_response = (
-                #         f"Câu hỏi của bạn chưa đủ rõ ràng để tôi trả lời chính xác. "
-                #         f"Bạn có thể làm rõ thêm không?\n{questions_text}"
-                #     )
-                #     logger.info("[QU] is_ambiguous=True — returning clarification request, skipping graph.")
-                #     root_trace.update(output={"final_response": clarification_response, "is_ambiguous": True})
-                #     return clarification_response
-
-                # claried_query = qu_output.clarified_query
-
                 initial_state = {
                     "user_query": request.user_query,
-                    "claried_query": claried_query,
+                    "claried_query": "",
                     "additional_material": request.additional_material or [],
                     "tool_chains": [],
                     "sub_queries": [],
                     "tool_calls_history": [],
                     "tool_results_history": [],
                     "last_tool_artifact": None,
-                    "conversation_history": history_text,
+                    "conversation_history": "",
                     "parallel_results": [],
                     "need_call_tools": True
                 }

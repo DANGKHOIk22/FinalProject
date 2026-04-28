@@ -45,6 +45,7 @@ dependencies = [
     "langchain-litellm>=0.6.1",
     "copilotkit>=0.1.84",
     "ag-ui-langgraph>=0.0.29",
+    "langgraph-checkpoint-postgres>=3.0.5",
 ]
 
 [tool.pytest.ini_options]
