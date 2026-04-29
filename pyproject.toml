@@ -44,7 +44,7 @@ dependencies = [
     "langchain-redis>=0.2.5",
     "langchain-litellm>=0.6.1",
     "copilotkit>=0.1.84",
-    "ag-ui-langgraph>=0.0.29",
+    "ag-ui-langgraph@git+https://github.com/khiemDL/ag-ui.git@fix_agui_messages_to_langchain_func#subdirectory=integrations/langgraph/python",
     "langgraph-checkpoint-postgres>=3.0.5",
 ]
 
