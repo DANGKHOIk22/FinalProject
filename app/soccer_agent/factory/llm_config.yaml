@@ -70,15 +70,12 @@ model_list:
   # ── Aggregator: synthesise parallel worker results ───────────────────────────
   - model_name: aggregator
     litellm_params:
-      model: gemini/gemini-2.5-flash-lite
+      model: gemini/gemini-3.1-flash-lite-preview
       api_key: os.environ/GOOGLE_API_KEY
       temperature: 1.0
       top_p: 0.95
       max_completion_tokens: 50000
-      thinking:
-        type: enabled
-        budget_tokens: 2048
-        includeThoughts: true
+      thinking_level: low
       stream: true
 
   - model_name: aggregator-fallback

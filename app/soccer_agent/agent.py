@@ -138,7 +138,6 @@ class SoccerAgent:
         workflow.add_node("worker_graph", self._worker_node)
         workflow.add_node("aggregator_node", self._aggregator_node)
 
-        # Define the flow:
         # Define the flow
         workflow.set_entry_point("get_conversation_history")        
         workflow.add_edge("get_conversation_history", "understand_user_message")
@@ -291,6 +290,17 @@ class SoccerAgent:
                 history_text = raw_history_text
                 logger.info(f"[Path A] token_count={token_count}.")
 
+
+        # Emit a tool call event to show the planning step in the UI
+        await adispatch_custom_event(
+            "manually_emit_tool_call",  # An AG-UI event to trigger tool call visualization without an actual tool execution
+            data={
+                "id": str(uuid.uuid4()),
+                "name": "understand_user_message",
+                "args": {}
+            },
+            config=config
+        )
         # Always run QueryUnderstanding — handles jargon, abbreviations, pronouns
         qu_output = await self.query_understanding.run(
             user_query=user_query,
@@ -548,7 +558,7 @@ class SoccerAgent:
         
          # If the previous step is from the tool_node, add the tool execution result to history and add the artifact to state
         last_artifact = state.get("last_tool_artifact")
-        last_tool_message = ToolMessage()
+        last_tool_message = None
         if messages and isinstance(messages[-1], ToolMessage):
             last_tool_message = messages[-1]
             last_artifact = last_tool_message.artifact if hasattr(last_tool_message, 'artifact') else None
@@ -589,7 +599,7 @@ class SoccerAgent:
 
             # If the last tool message is from augmentation tool, return the result from the tool instead of the execution agent's response,.
             # Note: this step must be after the execution response to ensure there is no error from the tool.
-            if last_tool_message and (last_tool_message.name == "textual_retrieval_augment" or last_tool_message.name == "game_history_retrieval" or last_tool_message.name == "game_info_retrieval"):
+            if last_tool_message is not None and (last_tool_message.name == "textual_retrieval_augment" or last_tool_message.name == "game_history_retrieval" or last_tool_message.name == "game_info_retrieval"):
                 worker_result = last_tool_message.content
             elif response.text:
                 worker_result = response.text

@@ -36,7 +36,7 @@ class TextualRetrievalAugmentTool(BaseTool):
         super().__init__()
         self._llm = get_llm("retrieval-augment")
 
-    async def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, None]:
+    def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, None]:
         """
         Args:
             query (str): Prompt query could be the original question, or the well defined question that can help retrieve the question.
@@ -80,7 +80,7 @@ class TextualRetrievalAugmentTool(BaseTool):
 
         # Get answer
         try: 
-            final_answer = await retrieval_augment_chain.ainvoke(inputs)
+            final_answer = retrieval_augment_chain.invoke(inputs)
             return str(final_answer.text), None
         except Exception as e:
             error_msg = f"Error in textual_retrieval_augment tool: {str(e)}"
