@@ -2,12 +2,11 @@ import logging
 import uuid
 import asyncio
 from typing import List
-from langfuse import get_client, observe
-from langfuse.langchain import CallbackHandler
+from langfuse import get_client
 
 from langchain_core.output_parsers import PydanticOutputParser
 from app.soccer_agent.factory.llm_provider import get_llm
-from langchain_core.messages import ToolMessage, ToolCall, AIMessage
+from langchain_core.messages import ToolMessage, ToolCall, AIMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_core.callbacks.manager import adispatch_custom_event
 from langgraph.graph import StateGraph, END
@@ -15,7 +14,6 @@ from langgraph.graph.state import CompiledStateGraph, RunnableConfig
 from langgraph.types import Command
 from langgraph.prebuilt import ToolNode
 from langgraph.constants import Send
-from langgraph.checkpoint.memory import MemorySaver
 
 from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
@@ -43,7 +41,6 @@ from app.cache.semantic_cache import semantic_cache
 
 # Configure logging
 logger = logging.getLogger(__name__)
-langfuse_client = get_client()
 
 class SoccerAgent:
     """
@@ -168,7 +165,6 @@ class SoccerAgent:
             case_bank_cache.set(query, has_media, examples)
         return {"retrieved_cases": examples or None}
 
-    @observe(name="worker_node", as_type="span", capture_input=True)
     async def _worker_node(self, state: WorkerState, config: RunnableConfig) -> dict:
         """
         Wrapper for worker_graph with proper timeout and Langfuse tracing.
@@ -179,23 +175,6 @@ class SoccerAgent:
         #
         try:
             async def worker_execution():
-                # Append langfuse callback to the worker graph invocation config to capture all tool calls and results in the worker graph
-                langfuse_handler = CallbackHandler()
-                callbacks = config.get("callbacks", [])
-                if not isinstance(callbacks, list):
-                    if callbacks is not None:
-                        callbacks = [callbacks]
-                    else:
-                        callbacks = []
-                callbacks.append(langfuse_handler)
-
-                # Add metadata for better traceability in Langfuse
-                metadata = config.get("metadata", {})
-                metadata.update({
-                    "sub_query": state.get("sub_query", "")[:100],
-                    "tool_chain": ", ".join(state.get("tool_chain", [])),
-                    "worker_id": id(state)
-                })
                 return await asyncio.wait_for(
                     self.worker_graph.ainvoke(state, config=config),
                     timeout=120.0
@@ -235,60 +214,71 @@ class SoccerAgent:
         metadata = config.get("metadata", {})
         thread_id = metadata.get("thread_id", str(uuid.uuid4()))
 
-        # Load conversation history
-        # with root_trace.start_as_current_observation(as_type="span", name="load_memory") as mem_span:
-        chat_history = None
-        if thread_id:
-            try:
-                memory_object, connection, pool = await self.get_memory(session_id=thread_id)
+        langfuse = get_client()
+        with langfuse.start_as_current_observation(
+            as_type="chain", 
+            name="create_history_string") as observation:
+
+            # Load conversation history
+            chat_history = None
+            if thread_id:
                 try:
-                    history = memory_object.load_memory_variables({})
-                    chat_history = history.get("history")
-                    #mem_span.update(output={"memory_loaded": True, "history_length": len(chat_history) if chat_history else 0})
+                    memory_object, connection, pool = await self.get_memory(session_id=thread_id)
+                    try:
+                        history = memory_object.load_memory_variables({})
+                        chat_history = history.get("history")
+                    except Exception as e:
+                        logging.warning(f"Memory load failed for session {thread_id}: {e}")
+                    finally:
+                        await self.cleanup(connection=connection, pool=pool, session_id=thread_id)
                 except Exception as e:
-                    logging.warning(f"Memory load failed for session {thread_id}: {e}")
-                    #mem_span.update(output={"memory_loaded": False, "error": str(e)})
-            except Exception as e:
-                logging.warning(f"Failed to obtain memory for session {thread_id}: {e}")
-                #mem_span.update(output={"memory_loaded": False, "error": str(e)})
+                    logging.warning(f"Failed to obtain memory for session {thread_id}: {e}")
 
-        # Build history and run Query Understanding on all paths
-        history_text = ""
-        effective_memory = SessionMemory()
-        recent_msgs_for_qu = []
+            # Build history and run Query Understanding on all paths
+            history_text = ""
+            effective_memory = SessionMemory()
+            recent_msgs_for_qu = []
 
-        if chat_history:
-            raw_history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
-            for msg in chat_history[-10:]:
-                if hasattr(msg, 'content'):
-                    role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
-                    raw_history_text += f"{role}: {msg.content}\n"
+            if chat_history:
+                raw_history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
+                for msg in chat_history[-10:]:
+                    if hasattr(msg, 'content'):
+                        role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
+                        raw_history_text += f"{role}: {msg.content}\n"
 
-            token_count = self.session_memory_manager.count_tokens(raw_history_text)
+                token_count = self.session_memory_manager.count_tokens(raw_history_text)
 
-            if token_count > SESSION_MEMORY_TOKEN_THRESHOLD:
-                # Path B: history exceeds threshold — use SessionMemory + recent slice
-                old_msgs = chat_history[:-(SESSION_MEMORY_RECENT_KEEP-1)]
-                recent_msgs_for_qu = chat_history[-SESSION_MEMORY_RECENT_KEEP:]
+                if token_count > SESSION_MEMORY_TOKEN_THRESHOLD:
+                    # Path B: history exceeds threshold — use SessionMemory + recent slice
+                    old_msgs = chat_history[:-(SESSION_MEMORY_RECENT_KEEP-1)]
+                    recent_msgs_for_qu = chat_history[-SESSION_MEMORY_RECENT_KEEP:]
 
-                cached_memory = await self.session_memory_manager.load_cached_memory(thread_id)
-                if cached_memory is None:
-                    if old_msgs:
-                        asyncio.create_task(
-                            self.session_memory_manager.background_summarise(thread_id, old_msgs)
-                        )
+                    cached_memory = await self.session_memory_manager.load_cached_memory(thread_id)
+                    if cached_memory is None:
+                        if old_msgs:
+                            asyncio.create_task(
+                                self.session_memory_manager.background_summarise(thread_id, old_msgs)
+                            )
+                    else:
+                        effective_memory = cached_memory
+
+                    history_text = self.session_memory_manager.format_compressed_history(
+                        effective_memory, recent_msgs_for_qu
+                    )
+                    logger.info(f"[Path B] token_count={token_count}.")
                 else:
-                    effective_memory = cached_memory
+                    # Path A: full history fits — pass all as recent context
+                    recent_msgs_for_qu = chat_history
+                    history_text = raw_history_text
+                    logger.info(f"[Path A] token_count={token_count}.")
 
-                history_text = self.session_memory_manager.format_compressed_history(
-                    effective_memory, recent_msgs_for_qu
-                )
-                logger.info(f"[Path B] token_count={token_count}.")
-            else:
-                # Path A: full history fits — pass all as recent context
-                recent_msgs_for_qu = chat_history
-                history_text = raw_history_text
-                logger.info(f"[Path A] token_count={token_count}.")
+            observation.update(
+                output={
+                    "chat_history": chat_history or "",
+                    "history_text": history_text or "No conversation history.",
+                    "recent_msgs_for_qu": recent_msgs_for_qu
+                }
+            )
 
 
         # Emit a tool call event to show the planning step in the UI
@@ -301,6 +291,8 @@ class SoccerAgent:
             },
             config=config
         )
+        await asyncio.sleep(0.1)  
+
         # Always run QueryUnderstanding — handles jargon, abbreviations, pronouns
         qu_output = await self.query_understanding.run(
             user_query=user_query,
@@ -318,7 +310,6 @@ class SoccerAgent:
                 f"Bạn có thể làm rõ thêm không?\n{questions_text}"
             ))
             logger.info("[QU] is_ambiguous=True — returning clarification request, skipping graph.")
-            #root_trace.update(output={"final_response": clarification_response, "is_ambiguous": True})
             
             return Command(
                 goto="END",
@@ -356,6 +347,9 @@ class SoccerAgent:
         """
         messages = state.get("messages", [])
         user_query = messages[-1].content if messages else ""
+        additional_material_list = state.get("additional_material")
+        additional_material = ", ".join(additional_material_list) if additional_material_list else "None"
+        conversation_history = state.get("conversation_history", "No previous conversation.")
 
         # Emit a tool call event to show the planning step in the UI
         await adispatch_custom_event(
@@ -367,70 +361,43 @@ class SoccerAgent:
             },
             config=config
         )
+        await asyncio.sleep(0.1) 
+    
+        logger.info("="*70)
+        logger.info("🧠 Starting TOOL CHAIN PLANNING STEP")
         
-        with langfuse_client.start_as_current_observation(as_type="span", name="tool_chain_planning") as root_span:
-            logger.info("="*70)
-            logger.info("🧠 Starting TOOL CHAIN PLANNING STEP")
-            additional_material_list = state.get("additional_material")
-            additional_material = ", ".join(additional_material_list) if additional_material_list else "None"
-            conversation_history = state.get("conversation_history", "No previous conversation.")
+        # Create prompt for planning agent
+        tool_descriptions = ""
+        for tool in self.tools:
+            tool_descriptions += f"- {tool.name}: {tool.description}\n"
+        
+        format_instructions = self.planning_parser.get_format_instructions()
+        planning_agent_prompt_template = get_planning_prompt_template()
+        planning_agent_prompt = planning_agent_prompt_template.invoke({
+            "toolbox_descriptions": tool_descriptions,
+            "format_instructions": format_instructions,
+            "user_query": state.get("claried_query") or user_query,
+            "additional_material": additional_material,
+            "conversation_history": conversation_history,
+            "retrieved_cases": state.get("retrieved_cases") or "",
+        })
             
-            # Create prompt for planning agent
-            with root_span.start_as_current_observation(as_type="span", name="create_prompt") as prompt_span:
-                tool_descriptions = ""
-                for tool in self.tools:
-                    tool_descriptions += f"- {tool.name}: {tool.description}\n"
-                
-                format_instructions = self.planning_parser.get_format_instructions()
-                planning_agent_prompt_template = get_planning_prompt_template()
-                planning_agent_prompt = planning_agent_prompt_template.invoke({
-                    "toolbox_descriptions": tool_descriptions,
-                    "format_instructions": format_instructions,
-                    "user_query": state.get("claried_query") or user_query,
-                    "additional_material": additional_material,
-                    "conversation_history": conversation_history,
-                    "retrieved_cases": state.get("retrieved_cases") or "",
-                })
-                
-                prompt_span.update(
-                    output={"planning_prompt": planning_agent_prompt},
-                    metadata={"user_query": user_query[:100]}
-                )
+        # Modify the config metadata to skip emit planning agent response
+        config.update(metadata={
+            "copilotkit:emit-messages": False,
+            "copilotkit:emit-tool_calls": False,
+        })
+        response = await self.planning_llm.ainvoke(planning_agent_prompt, config=config)
+        response_text = response.text if hasattr(response, 'text') else str(response)
             
-            # Call the planning model to get the tool chain
-            langfuse_handler = CallbackHandler()
-            callbacks = config.get("callbacks", [])
-            if not isinstance(callbacks, list):
-                if callbacks is not None:
-                    callbacks = [callbacks]
-                else:
-                    callbacks = []
-            callbacks.append(langfuse_handler)
-
-            # Add metadata for better traceability in Langfuse
-            metadata = config.get("metadata", {})
-            metadata.update({
-                "user_query": user_query[:100],
-                "model_step": "planning"
-            })
-            response = await self.planning_llm.ainvoke(planning_agent_prompt, config=config)
-            response_text = response.text if hasattr(response, 'text') else str(response)
-                
-            planning_output: PlanningOutput = self.planning_parser.parse(response_text)
-            logger.debug(f"🤖 Response from Planning Agent: {planning_output}")
-            
-            # Update root span with final output
-            root_span.update(
-                output={
-                    "tool_chains": planning_output.tool_chains,
-                    "sub_queries": planning_output.sub_queries
-                }
-            )
-            
-            logger.info("Tool Chain Planning Results:")
-            logger.info(f"\t Tool Chains: {planning_output.tool_chains}")
-            logger.info("✅ TOOL CHAIN PLANNING STEP COMPLETED")
-            logger.info("="*70)
+        planning_output: PlanningOutput = self.planning_parser.parse(response_text)
+        logger.debug(f"🤖 Response from Planning Agent: {planning_output}")
+        
+        
+        logger.info("Tool Chain Planning Results:")
+        logger.info(f"\t Tool Chains: {planning_output.tool_chains}")
+        logger.info("✅ TOOL CHAIN PLANNING STEP COMPLETED")
+        logger.info("="*70)
 
         return {
             "additional_material": sorted(state.get("additional_material") or []),
@@ -472,70 +439,74 @@ class SoccerAgent:
         """Aggregate results from parallel executions and provide the final response."""
         messages = state.get("messages", [])
         user_query = messages[-1].content if messages else ""
-        with langfuse_client.start_as_current_observation(as_type="span", name="aggregator") as root_span:
-            logger.info("="*70)
-            logger.info("🧠 Starting AGGREGATOR STEP")
-            
-            additional_material_list = state.get("additional_material", [])
-            additional_material = ", ".join(additional_material_list) if additional_material_list else "None"
-            conversation_history = state.get("conversation_history", "No previous conversation.")
-            root_span.update(input={
-                "additional_material": additional_material,
-                "conversation_history": conversation_history
-            })
+        additional_material_list = state.get("additional_material", [])
+        additional_material = ", ".join(additional_material_list) if additional_material_list else "None"
+        conversation_history = state.get("conversation_history", "No previous conversation.")
+        results = state.get("parallel_results", [])
 
-            results = state.get("parallel_results", [])
-            if results:
-                worker_results_str = "\n".join([f"Worker {i+1} finding:\n{r}\n" for i, r in enumerate(results)])
-            else:
-                worker_results_str = "No tools were executed."
+        logger.info("="*70)
+        logger.info("🧠 Starting AGGREGATOR STEP")
             
-            # Prepare the aggregation context for the prompt
-            with root_span.start_as_current_observation(as_type="span", name="prepare_aggregation_context") as prep_span:
-                prep_span.update(
-                    output={
-                        "worker_results_str": worker_results_str,  
-                        "num_results": len(results),
-                        "has_results": len(results) > 0
-                    }
-                )
+        
+        if results:
+            worker_results_str = "\n".join([f"Worker {i+1} finding:\n{r}\n" for i, r in enumerate(results)])
+        else:
+            worker_results_str = "No tools were executed."
             
-                aggregator_prompt_template = get_aggregator_prompt_template()
-                aggregator_prompt = aggregator_prompt_template.invoke({
-                    "user_query": state.get("claried_query") or user_query,
-                    "additional_material": additional_material,
-                    "conversation_history": conversation_history,
-                    "worker_results": worker_results_str
-                })
-                prep_span.update(output={"aggregator_prompt": aggregator_prompt})
+        aggregator_prompt_template = get_aggregator_prompt_template()
+        aggregator_prompt = aggregator_prompt_template.invoke({
+            "user_query": state.get("claried_query") or user_query,
+            "additional_material": additional_material,
+            "conversation_history": conversation_history,
+            "worker_results": worker_results_str
+        })
 
-            # Append langfuse callback to the aggregator model
-            langfuse_handler = CallbackHandler()
-            callbacks = config.get("callbacks", [])
-            if not isinstance(callbacks, list):
-                if callbacks is not None:
-                    callbacks = [callbacks]
-                else:
-                    callbacks = []
-            callbacks.append(langfuse_handler)
-            metadata = config.get("metadata", {})
-            metadata.update({
-                "user_query": user_query[:100],
-                "num_worker_results": len(results),
-                "model_step": "aggregation",
-            })
-
-            response = await self.aggregator_llm.ainvoke(
-                aggregator_prompt,
-                config=config
-            )
-            logger.info("✅ AGGREGATOR STEP COMPLETED")
-            logger.info("="*70)
+        response = await self.aggregator_llm.ainvoke(
+            aggregator_prompt,
+            config=config
+        )
+        logger.info("✅ AGGREGATOR STEP COMPLETED")
+        logger.info("="*70)
             
         return {
             "messages": [response], # Final response from aggregator
         }
     
+    async def _save_to_memory_node(self, state: AgentState, config: RunnableConfig) -> dict:
+        """Save the final response along with tool call history into conversation memory."""
+        tool_calls_history = state.get("tool_calls_history", [])
+        tool_results_history = state.get("tool_results_history", [])
+        messages = state.get("messages", [])
+        last_message = messages[-1] if messages else None # Final response from the aggregator agent.
+        metadata = config.get("metadata", {})
+        thread_id = metadata.get("thread_id", str(uuid.uuid4()))
+
+        # Find the last user message in the messages history
+        last_user_message = None
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                last_user_message = msg
+                break
+
+        try:
+            output_with_tools = self._build_tool_summary_for_memory(
+                tool_calls_history=tool_calls_history,
+                tool_results_history=tool_results_history,
+                final_response=last_message.text if last_message else "No response generated",
+            )
+            asyncio.create_task(
+                self._background_save_memory(thread_id, last_user_message.text if last_user_message else "No user message found", output_with_tools)
+            )
+            # Incremental update of Redis SessionMemory if tool calls were made
+            if tool_calls_history:
+                asyncio.create_task(
+                    self.session_memory_manager.background_update(thread_id, output_with_tools)
+                )
+        except Exception as e:
+            logging.warning(f"Failed to prepare memory save for session {thread_id}: {e}")
+        
+        return {}
+
     async def _execution_node(self, state: WorkerState, config: RunnableConfig) -> dict:
         """
         Iteratively execute the tool chain step by step using bind_tools with tool_choice.
@@ -562,7 +533,6 @@ class SoccerAgent:
         if messages and isinstance(messages[-1], ToolMessage):
             last_tool_message = messages[-1]
             last_artifact = last_tool_message.artifact if hasattr(last_tool_message, 'artifact') else None
-            logger.info(f"Received tool result: {last_tool_message.content}")
 
         # Create prompt for execution agent
         additional_material_str = ", ".join(additional_material_list) if additional_material_list else "None"
@@ -584,7 +554,6 @@ class SoccerAgent:
         try:
             # Invoke the model with the tool
             response = await self.execution_llm_with_tools.ainvoke([system_prompt] + messages, config=config) # type: ignore
-            logger.info(f"🤖 Response from execution agent: \n \t Response content: {response.text} \n \t Tool Calls: {response.tool_calls}")
         except Exception as e:
             error_msg = f"Error in tool execution agent: {str(e)}"
             logger.error(error_msg)
@@ -788,7 +757,7 @@ class SoccerAgent:
 
     async def run(self, request: ChatRequest) -> str:
         """
-        Run the complete workflow: planning + execution.
+        Mannually run the agent for a given user query and additional material
 
         Args:
             request: The ChatRequest object containing user_query and additional_material
@@ -797,13 +766,15 @@ class SoccerAgent:
             Final response from the agent
         """
         session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, request.user_id))
+        config = RunnableConfig(
+            metadata={"thread_id": session_id},
+        )
         
         with langfuse_client.start_as_current_observation(
             as_type="chain", 
             name="soccer_agent_request"
         ) as root_trace:
             root_trace.update(input={"user_query": request.user_query})
-            
             try:
                 logger.info(f"Starting run for query: {request.user_query[:100]}...")
                 initial_state = {
@@ -824,7 +795,7 @@ class SoccerAgent:
                 # Execute the graph with the initial state
                 with root_trace.start_as_current_observation(as_type="span", name="execute_langgraph") as graph_span:
                     graph_span.update(input={"initial_state": {k: (v if k != "additional_material" else "List[str]") for k, v in initial_state.items()}})
-                    final_state = await self.graph.ainvoke(initial_state)
+                    final_state = await self.graph.ainvoke(initial_state, config=config)
                     last_message = final_state.get("messages", [])[-1] if final_state.get("messages") else None
                     graph_span.update(
                         output={
@@ -833,42 +804,14 @@ class SoccerAgent:
                     )
                     logger.info("Graph execution completed")
                 
-                # # Save conversation memory in background (non-blocking, uses its own DB connection)
-                # try:
-                #     output_with_tools = self._build_tool_summary_for_memory(
-                #         tool_calls_history=final_state.get("tool_calls_history", []),
-                #         tool_results_history=final_state.get("tool_results_history", []),
-                #         final_response=last_message.text if last_message else "No response generated",
-                #     )
-                #     asyncio.create_task(
-                #         self._background_save_memory(session_id, request.user_query, output_with_tools)
-                #     )
-                #     # Incremental update of Redis SessionMemory if tool calls were made
-                #     if final_state.get("tool_calls_history"):
-                #         asyncio.create_task(
-                #             self.session_memory_manager.background_update(session_id, output_with_tools)
-                #         )
-                # except Exception as e:
-                #     logging.warning(f"Failed to prepare memory save for session {session_id}: {e}")
-                # logger.info("Run completed successfully")
-
-                root_trace.update(output={"final_response": result["final_response"]})
+                root_trace.update(output={"final_response": last_message.text if last_message else "No response generated"})
                 return last_message.text if last_message else "No response generated"
 
             except Exception as e:
                 logging.error(f"Error in agent execution: {e}", exc_info=True)
                 root_trace.update(output={"error": str(e)}, level="ERROR")
                 return f"✗ Error: {str(e)}"
-            finally:
-                # Cleanup connection
-                try:
-                    await self.cleanup(connection=connection, pool=pool, session_id=session_id)
-                    logging.debug("✅ ChatAgent connection cleaned up")
-                except Exception as cleanup_error:
-                    logging.error(f"❌ ChatAgent cleanup error: {cleanup_error}")
 
-# Do NOT create singleton here - it will be created in main.py lifespan
-# agent_service = SoccerAgent()
 
 def get_agent_service() -> SoccerAgent:
     """Get the singleton SoccerAgent service from main.py."""

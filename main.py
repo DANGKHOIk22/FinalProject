@@ -7,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from ag_ui_langgraph import add_langgraph_fastapi_endpoint
 from copilotkit import LangGraphAGUIAgent
 from langfuse import get_client
+from langchain_core.runnables import RunnableConfig
+from langfuse.langchain import CallbackHandler
 
 import pymongo
 from pymongo.server_api import ServerApi
@@ -40,6 +42,10 @@ postgres_connected = False
 
 # Global variable for agent service
 agent_service = None
+
+# Langfuse callback handler for tracing
+class InlineCallbackHandler(CallbackHandler):
+    run_inline = True
 
 # --- 1. Lifespan: Quản lý khởi động/tắt app ---
 @asynccontextmanager
@@ -105,12 +111,17 @@ async def lifespan(app: FastAPI):
             agent_service = SoccerAgent(checkpointer=checkpointer)
             logger.info("✅ SoccerAgent initialized successfully")
 
+            # Create a RunnableConfig containing the Langfuse callback handler for tracing
+            langfuse_handler = InlineCallbackHandler()
+            config = RunnableConfig(callbacks=[langfuse_handler])
+
             # Create LangGraph Endpoint for Copilotkit Integration
             add_langgraph_fastapi_endpoint(
                 app=app,
                 agent=LangGraphAGUIAgent(
                     name="SoccerAgent",
-                    graph=agent_service.graph
+                    graph=agent_service.graph, 
+                    config=config
                 ),
                 path="/soccer_agent/copilotkit"
             ) 
