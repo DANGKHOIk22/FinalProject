@@ -134,6 +134,7 @@ class SoccerAgent:
         workflow.add_node("tool_chain_planning", self._tool_chain_planning)
         workflow.add_node("worker_graph", self._worker_node)
         workflow.add_node("aggregator_node", self._aggregator_node)
+        workflow.add_node("save_to_memory", self._save_to_memory_node)
 
         # Define the flow
         workflow.set_entry_point("get_conversation_history")        
@@ -146,7 +147,8 @@ class SoccerAgent:
             ["worker_graph", "aggregator_node"]
         )
         workflow.add_edge("worker_graph", "aggregator_node")
-        workflow.add_edge("aggregator_node", END)
+        workflow.add_edge("aggregator_node", "save_to_memory")
+        workflow.add_edge("save_to_memory", END)
 
         return workflow.compile(checkpointer=self.checkpointer)
 
@@ -214,6 +216,12 @@ class SoccerAgent:
         metadata = config.get("metadata", {})
         thread_id = metadata.get("thread_id", str(uuid.uuid4()))
 
+        # --- Flags for tracing metadata ---
+        loading_history_status = "failed" # "success"/"failed"
+        load_from_cache = False # True: This question has already stored in cache, just load from cache database
+        pass_full_history = False # True: The history length is not over threshold limit, give the agent full history without summary
+        is_ambigous = False # True: Even thought using history context, the use is ambigous
+
         langfuse = get_client()
         with langfuse.start_as_current_observation(
             as_type="chain", 
@@ -227,6 +235,7 @@ class SoccerAgent:
                     try:
                         history = memory_object.load_memory_variables({})
                         chat_history = history.get("history")
+                        loading_history_status = "success"
                     except Exception as e:
                         logging.warning(f"Memory load failed for session {thread_id}: {e}")
                     finally:
@@ -261,16 +270,19 @@ class SoccerAgent:
                             )
                     else:
                         effective_memory = cached_memory
+                        load_from_cache = True
 
                     history_text = self.session_memory_manager.format_compressed_history(
                         effective_memory, recent_msgs_for_qu
                     )
+                    pass_full_history = False
                     logger.info(f"[Path B] token_count={token_count}.")
                 else:
                     # Path A: full history fits — pass all as recent context
                     recent_msgs_for_qu = chat_history
                     history_text = raw_history_text
                     logger.info(f"[Path A] token_count={token_count}.")
+                    pass_full_history = True
 
             observation.update(
                 output={
@@ -318,6 +330,16 @@ class SoccerAgent:
                 }
             )
 
+        # --- Update tracing span metadata ---
+        langfuse = get_client()
+        langfuse.update_current_span(
+            metadata={
+                "loading_history_status": loading_history_status,
+                "load_from_cache": load_from_cache,
+                "pass_full_history": pass_full_history,
+                "is_ambigous": qu_output.is_ambiguous
+            }
+        )
         return {
             "messages": state.get("messages", []), # Copilotkit will append new user messages to "messages", so we need to update the state
             "conversation_history": history_text,
@@ -351,7 +373,10 @@ class SoccerAgent:
         additional_material = ", ".join(additional_material_list) if additional_material_list else "None"
         conversation_history = state.get("conversation_history", "No previous conversation.")
 
-        # Emit a tool call event to show the planning step in the UI
+        # --- Flags for tracing metadata ---
+        need_call_tool = True # True/False: Indicates whether tool calls are necessary
+
+        # --- Emit a tool call event to show the planning step in the UI ---
         await adispatch_custom_event(
             "manually_emit_tool_call",  # An AG-UI event to trigger tool call visualization without an actual tool execution
             data={
@@ -391,7 +416,7 @@ class SoccerAgent:
         response_text = response.text if hasattr(response, 'text') else str(response)
             
         planning_output: PlanningOutput = self.planning_parser.parse(response_text)
-        logger.debug(f"🤖 Response from Planning Agent: {planning_output}")
+        need_call_tool = planning_output.need_call_tools
         
         
         logger.info("Tool Chain Planning Results:")
@@ -399,6 +424,13 @@ class SoccerAgent:
         logger.info("✅ TOOL CHAIN PLANNING STEP COMPLETED")
         logger.info("="*70)
 
+        # --- Update tracing metadata ---
+        langfuse = get_client()
+        langfuse.update_current_span(
+            metadata={
+                "need_call_tool": need_call_tool
+            }
+        )
         return {
             "additional_material": sorted(state.get("additional_material") or []),
             "planning_output": planning_output,
