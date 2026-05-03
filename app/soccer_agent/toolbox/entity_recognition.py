@@ -12,7 +12,7 @@ from dns import resolver
 from langsmith import get_current_run_tree
 from pymongo.server_api import ServerApi
 from typing import Any, Tuple, Type, Optional, Literal, List, Dict
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from qdrant_client import QdrantClient, models
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
@@ -50,8 +50,7 @@ class EntityRecognitionTool(BaseTool):
     _insight_payload_header: Dict[str, str] = PrivateAttr(default={})
     _insight_endpoint_key: str = PrivateAttr(default="")
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     
     def __init__(self, **data):
         super().__init__(**data)

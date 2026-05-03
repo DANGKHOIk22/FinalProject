@@ -32,9 +32,8 @@ from app.soccer_agent.case_bank.cache import case_bank_cache
 from app.soccer_agent.toolbox import (
     textual_entity_search, 
     textual_retrieval_augment, 
-    game_history_retrieval, 
-    game_info_retrieval, 
-    game_search, 
+    game_history_retrieval,
+    game_info_retrieval,
     choice_selection,
     entity_recognition,
     segment,
@@ -117,13 +116,12 @@ class SoccerAgent:
         self.tool_registry: dict[str, BaseTool] = {
             "textual_entity_search": textual_entity_search(),
             "textual_retrieval_augment": textual_retrieval_augment(),
-            "game_search": game_search(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
             "entity_recognition": entity_recognition(),
             "choice_selection": choice_selection(),
             "segment": segment(),
-            # "frame_selection": frame_selection(),
+            "frame_selection": frame_selection(),
             "commentary_generation": commentary_generation(),
         }
 

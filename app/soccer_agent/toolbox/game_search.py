@@ -1,215 +1,164 @@
-import os
 import logging
-import pandas as pd
-from typing import Type, Optional, Literal, Tuple
+from typing import Type, Optional, Literal, Tuple, Any
+
 from pydantic import BaseModel, Field, PrivateAttr
 from langchain.tools import BaseTool
-from app.soccer_agent.factory.llm_provider import get_llm
-from typing import Any
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.output_parsers import PydanticOutputParser
+from pymongo import MongoClient
+from dns import resolver
 
-# Import config và prompts từ project của bạn
-from app.config.config import PROJECT_PATH
+from app.config.settings import settings
 from app.schema.match import MatchInfo
-from app.soccer_agent.prompts.toolbox.game_search import get_extraction_prompt_template, get_match_selection_prompt_template
+from app.soccer_agent.factory.llm_provider import get_llm
+from app.soccer_agent.prompts.toolbox.game_search import (
+    get_extraction_prompt_template,
+    get_match_selection_prompt_template,
+)
 
 logger = logging.getLogger(__name__)
 
-# --- Input Schema ---
+
 class GameSearchInput(BaseModel):
     query: str = Field(description="Câu truy vấn tự nhiên về trận đấu bóng đá cần tìm kiếm.")
 
-# --- Output Schema (Internal use) ---
-class FinalResult(BaseModel):
-    """Cấu trúc trả về từ LLM khi chọn trận đấu."""
-    path: Optional[str] = Field(description="Đường dẫn file (file_path) của trận đấu nếu tìm thấy chính xác. Nếu không tìm thấy, để null.", default=None)
-    response_llm: str = Field(description="Lời giải thích chi tiết về việc tìm thấy hay không tìm thấy trận đấu.")
 
-# --- Tool Definition ---
+class FinalResult(BaseModel):
+    game_id: Optional[str] = Field(
+        description="game_id của trận đấu nếu tìm thấy chính xác. Nếu không, để null.",
+        default=None,
+    )
+    response_llm: str = Field(description="Lời giải thích chi tiết về việc tìm thấy hay không.")
+
+
 class GameSearchTool(BaseTool):
     name: str = "game_search"
     description: str = """
-    Ability: Given certain information regarding a match, this tool retrieves the corresponding game from the soccer match database. 
-    The games pertain to six major European leagues (England Premier, Germany Bundesliga, Italy Serie A, Spain La Liga, France Ligue 1, 
+    Ability: Given certain information regarding a match, this tool retrieves the corresponding game from the soccer match database.
+    The games pertain to six major European leagues (England Premier, Germany Bundesliga, Italy Serie A, Spain La Liga, France Ligue 1,
     and the European Champions League) spanning the years 2017-2024.
     Query Input: Simply the original inquiry as the query input here.
-    Output: Returns a summary message and the JSON file path of the identified game as an artifact.
+    Output: Returns a summary message and the game_id of the identified game as an artifact.
     Remark: This tool must be utilized initially to acquire the game's context.
     """
     args_schema: Type[BaseModel] = GameSearchInput
-    
-    # Cấu hình trả về cả Content (Text) và Artifact (File Path)
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
 
-    # Các thuộc tính nội bộ
-    project_path: str = PROJECT_PATH
-    csv_path: str = ""
     _llm: Any = PrivateAttr()
     _parser: PydanticOutputParser = PrivateAttr()
-    df: pd.DataFrame = None
+    _collection: Any = PrivateAttr()
 
     def __init__(self):
         super().__init__()
-        self.csv_path = os.path.join(self.project_path, "app", "database", "game_database.csv")
-        
-        # Khởi tạo LLM
         self._llm = get_llm("tool")
-        
-        # Khởi tạo parser
         self._parser = PydanticOutputParser(pydantic_object=MatchInfo)
-        
-        # Load dữ liệu CSV
-        try:
-            if os.path.exists(self.csv_path):
-                self.df = pd.read_csv(self.csv_path)
-            else:
-                logger.error(f"CSV file not found at: {self.csv_path}")
-                self.df = pd.DataFrame()
-        except Exception as e:
-            logger.error(f"Error loading CSV: {e}")
-            self.df = pd.DataFrame()
+
+        _resolver = resolver.Resolver(configure=False)
+        _resolver.nameservers = ['8.8.8.8', '1.1.1.1']
+        resolver.default_resolver = _resolver
+
+        mongo_client = MongoClient(settings.MONGO_SRV)
+        self._collection = mongo_client[settings.SOCCER_DB_NAME][settings.GAME_COLLECTION_NAME]
 
     def _extract_match_info(self, query: str) -> MatchInfo:
-        """Bước 1: Trích xuất thông tin."""
         prompt = get_extraction_prompt_template()
-        format_instructions = self._parser.get_format_instructions()
-        
         chain = prompt | self._llm | self._parser
-        return chain.invoke({"question": query, "format_instructions": format_instructions})
+        return chain.invoke({
+            "question": query,
+            "format_instructions": self._parser.get_format_instructions(),
+        })
 
-    def _retrieve_candidates(self, info: MatchInfo):
-        """Bước 2: Lọc dữ liệu Pandas."""
-        if self.df.empty:
-            return None, None
+    def _build_mongo_filter(self, info: MatchInfo) -> dict:
+        f: dict = {}
+        if info.league != "unknown":
+            f["league"] = info.league
+        if info.season != "unknown":
+            f["season"] = info.season
+        if info.year != "unknown":
+            f.setdefault("date", {})
+            f["date"]["$regex"] = f"^{info.year}"
+        if info.month != "unknown":
+            m = info.month.lstrip("0").zfill(2)
+            f.setdefault("date", {})
+            f["date"]["$regex"] = f"^\\d{{4}}-{m}"
 
-        df = self.df.copy()
-        conditions = []
+        t1 = info.team1 if info.team1 != "unknown" else ""
+        t2 = info.team2 if info.team2 != "unknown" else ""
 
-        # Lọc Metadata
-        if info.league != "unknown": conditions.append(df["league"] == info.league)
-        if info.season != "unknown": conditions.append(df["season"] == info.season)
-        if info.year != "unknown": conditions.append(df["year"] == int(info.year))
-        if info.month != "unknown": conditions.append(df["month"] == int(info.month.lstrip('0')))
-        if info.day != "unknown": conditions.append(df["day"] == int(info.day.lstrip('0')))
-        if info.time != "unknown": conditions.append(df["time"] == info.time)
+        if t1 and t2:
+            f["$or"] = [
+                {"home_team": {"$regex": t1, "$options": "i"}, "away_team": {"$regex": t2, "$options": "i"}},
+                {"home_team": {"$regex": t2, "$options": "i"}, "away_team": {"$regex": t1, "$options": "i"}},
+            ]
+        elif t1:
+            f["$or"] = [
+                {"home_team": {"$regex": t1, "$options": "i"}},
+                {"away_team": {"$regex": t1, "$options": "i"}},
+            ]
+        elif t2:
+            f["$or"] = [
+                {"home_team": {"$regex": t2, "$options": "i"}},
+                {"away_team": {"$regex": t2, "$options": "i"}},
+            ]
+        return f
 
-        if conditions:
-            combined_condition = pd.concat(conditions, axis=1).all(axis=1)
-            initial_filtered_df = df[combined_condition]
-        else:
-            initial_filtered_df = df
+    def _retrieve_candidates(self, info: MatchInfo) -> list[dict]:
+        mongo_filter = self._build_mongo_filter(info)
+        projection = {
+            "game_id": 1, "league": 1, "season": 1,
+            "date": 1, "home_team": 1, "away_team": 1, "score": 1, "_id": 0,
+        }
+        return list(self._collection.find(mongo_filter, projection).limit(20))
 
-        if initial_filtered_df.empty:
-            return initial_filtered_df, None
+    def _finalize_candidate_selection(
+        self, candidates: list[dict], info: MatchInfo, question: str
+    ) -> Tuple[str, Optional[str]]:
+        if not candidates:
+            return (
+                "We did not find the match you mentioned in the database. "
+                "Stop the execution and ask user give more specific information.",
+                None,
+            )
 
-        # Lọc Team
-        final_filtered_df = initial_filtered_df
-        team_values = [t for t in [info.team1, info.team2] if t != "unknown"]
-        
-        if team_values:
-            team_conditions = []
-            t1 = info.team1.replace(" ", "") if info.team1 != "unknown" else ""
-            t2 = info.team2.replace(" ", "") if info.team2 != "unknown" else ""
-            target_df = initial_filtered_df
+        if len(candidates) == 1:
+            g = candidates[0]
+            return f"Found match: {g['home_team']} vs {g['away_team']} ({g['date']}).", g["game_id"]
 
-            if t1 and t2:
-                mask = (
-                    (target_df["home_team"].str.replace(" ", "").str.contains(t1, case=False, na=False) &
-                     target_df["away_team"].str.replace(" ", "").str.contains(t2, case=False, na=False)) |
-                    (target_df["home_team"].str.replace(" ", "").str.contains(t2, case=False, na=False) &
-                     target_df["away_team"].str.replace(" ", "").str.contains(t1, case=False, na=False))
-                )
-                team_conditions.append(mask)
-            elif t1:
-                mask = (target_df["home_team"].str.replace(" ", "").str.contains(t1, case=False, na=False) |
-                        target_df["away_team"].str.replace(" ", "").str.contains(t1, case=False, na=False))
-                team_conditions.append(mask)
-            elif t2:
-                mask = (target_df["home_team"].str.replace(" ", "").str.contains(t2, case=False, na=False) |
-                        target_df["away_team"].str.replace(" ", "").str.contains(t2, case=False, na=False))
-                team_conditions.append(mask)
+        candidate_text = ""
+        for i, g in enumerate(candidates, 1):
+            candidate_text += (
+                f"\nCandidate {i}:\n"
+                f"  - Date: {g['date']}, League: {g['league']}\n"
+                f"  - Match: {g['home_team']} vs {g['away_team']}\n"
+                f"  - Score: {g['score']}, game_id: {g['game_id']}\n"
+            )
 
-            if team_conditions:
-                final_mask = pd.concat(team_conditions, axis=1).any(axis=1)
-                final_filtered_df = initial_filtered_df[final_mask]
+        prompt = get_match_selection_prompt_template()
+        structured_llm = self._llm.with_structured_output(FinalResult)
+        response: FinalResult = (prompt | structured_llm).invoke({
+            "question": question,
+            "info": info.model_dump_json(),
+            "candidates": candidate_text,
+        })  # type: ignore
+        return response.response_llm, response.game_id
 
-        if len(final_filtered_df) > 10:
-            final_filtered_df = None 
-
-        return initial_filtered_df, final_filtered_df
-
-    def _finalize_candidate_selection(self, candidates, candidates_with_team, info: MatchInfo, question: str) -> Tuple[str, Optional[str]]:
-        """Bước 3: Chọn kết quả cuối cùng (Trả về Content và Path)."""
-        
-        if candidates is None or (isinstance(candidates, pd.DataFrame) and candidates.empty):
-             return "We did not find the match you mentioned in the database. Stop the execution and ask user give more specific information.", None
-
-        # Case: Tìm thấy chính xác 1 kết quả
-        target_candidates = candidates_with_team if candidates_with_team is not None else candidates
-        
-        if len(target_candidates) == 1:
-            row = target_candidates.iloc[0]
-            msg = f"Found match: {row['home_team']} vs {row['away_team']} ({row['date']})."
-            return msg, row['file_path']
-
-        # Case: Nhiều kết quả -> Dùng LLM chọn
-        if len(target_candidates) > 1:
-            candidate_text = ""
-            for i, row in target_candidates.iterrows():
-                candidate_text += f"""
-                Candidate {i + 1}:
-                - Date: {row['date']}, League: {row['league']}
-                - Match: {row['home_team']} vs {row['away_team']}
-                - Score: {row['score']}, File: {row['file_path']}
-                """
-
-            prompt = get_match_selection_prompt_template()
-            
-            # Gemini tự parse ra object FinalResult
-            structured_llm = self._llm.with_structured_output(FinalResult)
-            
-            chain = prompt | structured_llm
-            
-            response: FinalResult = chain.invoke({
-                "question": question,
-                "info": info.model_dump_json(),
-                "candidates": candidate_text
-            }) # type: ignore
-            
-            return response.response_llm, response.path
-        
-        return "Could not find a specific match.", None
-
-    def _run(self, query: str, run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, Optional[str]]:
-        """
-        Hàm thực thi chính.
-        Trả về Tuple (Content, Artifact) vì response_format="content_and_artifact".
-        """
+    def _run(
+        self,
+        query: str,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Tuple[str, Optional[str]]:
         logger.info(f"🔎 Game Search Query: {query}")
-        
         try:
-            # 1. Extract
             info = self._extract_match_info(query)
             logger.debug(f"Extracted Info: {info}")
-            
-            # 2. Filter
-            candidates, candidates_with_team = self._retrieve_candidates(info)
-            
-            # 3. Finalize
-            content, artifact_path = self._finalize_candidate_selection(
-                candidates, 
-                candidates_with_team, 
-                info, 
-                query
-            )
-            
-            logger.info(f"✅ Search Result: {content} | Path: {artifact_path}")
-            
-            # Trả về đúng định dạng (Content, Artifact)
-            return content, artifact_path
-            
+            candidates = self._retrieve_candidates(info)
+            content, artifact = self._finalize_candidate_selection(candidates, info, query)
+            logger.info(f"✅ Search Result: {content} | game_id: {artifact}")
+            return content, artifact
         except Exception as e:
-            error_msg = f"Error in Game Search: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            return f"An error occurred while searching for the game. Details: {str(e)}. Please check your query or try again.", None
+            logger.error(f"Error in Game Search: {e}", exc_info=True)
+            return (
+                f"An error occurred while searching for the game. Details: {str(e)}. "
+                "Please check your query or try again.",
+                None,
+            )

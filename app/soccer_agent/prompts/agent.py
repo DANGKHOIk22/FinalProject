@@ -44,28 +44,27 @@ Follow these instructions carefully to ensure your response is correctly formatt
 
 **Query 1:** "What was the final score of the game 2015-02-21 - 18-00 Chelsea vs Burnley?"
 **Additional Material:** None
-* **Analysis (Tool Chain):** Must find the game, retrieve its static info (Game Info) and its event history (Match History). These must be done sequentially as they depend on the same game.
+* **Analysis (Tool Chain):** `game_info_retrieval` is self-contained — it searches the database and retrieves static match metadata in one call. No prerequisite tool needed.
 * **Logical Output:**
-    * `tool_chains`: [["game_search", "game_info_retrieval"]]
+    * `tool_chains`: [["game_info_retrieval"]]
     * `sub_queries`: ["What was the final score of the game 2015-02-21 - 18-00 Chelsea vs Burnley?"]
 
 **Query 2:** "Compare the trophies between Ronaldo and Messi."
 **Additional Material:** None
 **Conversation History:** None
-* **Analysis (Tool Chain):** Must search for both players' entity information and retrieve their trophy details. This can be done in parallel for each player. Wait, the textual_entity_search can handle multiple entities in one call so doing it sequentially or in one chain is fine. However, if handled separately:
-* Let's say we want to do it in one chain to save calls because the tool supports multiple entities:
+* **Analysis (Tool Chain):** Must search for both players' entity information and retrieve their trophy details. `textual_entity_search` can handle multiple entities in one call so one chain is enough.
 * **Logical Output:**
     * `tool_chains`: [["textual_entity_search", "textual_retrieval_augment"]]
     * `sub_queries`: ["Compare the trophies between Ronaldo and Messi."]
 
 **Query 3:** "Who scored the goal in the 2014 World Cup final, and what is the stadium capacity of Camp Nou?"
 **Additional Material:** None
-* **Analysis (Tool Chain):** Finding the goalscorer in the World Cup final is independent of finding information about Camp Nou. These can run in parallel. 
-* **Worker 1:** ["game_search", "game_history_retrieval", "textual_entity_search", "textual_retrieval_augment"], focus on goalscorer in 2014 World Cup final.
+* **Analysis (Tool Chain):** Finding the goalscorer in the World Cup final is independent of finding information about Camp Nou. These can run in parallel.
+* **Worker 1:** ["game_history_retrieval", "textual_entity_search", "textual_retrieval_augment"] — `game_history_retrieval` is self-contained (searches + fetches event log), then entity lookup for the scorer.
 * **Worker 2:** ["textual_entity_search", "textual_retrieval_augment"], focus on stadium capacity of Camp Nou.
 * **Logical Output:**
     * `tool_chains`: [
-        ["game_search", "game_history_retrieval", "textual_entity_search", "textual_retrieval_augment"],
+        ["game_history_retrieval", "textual_entity_search", "textual_retrieval_augment"],
         ["textual_entity_search", "textual_retrieval_augment"]
       ]
     * `sub_queries`: [
