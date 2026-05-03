@@ -30,4 +30,7 @@ def get_llm(role: str = "tool") -> ChatLiteLLMRouter:
       aggregator – Gemini 2.5 Flash, no thinking
       tool       – Gemini 2.5 Flash Lite, shared by tools / guardrails / query-understanding
     """
-    return ChatLiteLLMRouter(router=_get_router(), model_name=role,num_retries=0)
+    if role in ["retrieval-augment", "aggregator"]:
+        # Enable thinking for some roles to enhance UX
+        return ChatLiteLLMRouter(router=_get_router(), model_name=role,num_retries=0, streaming=True)
+    return ChatLiteLLMRouter(router=_get_router(), model_name=role,num_retries=0, streaming=False)

@@ -34,7 +34,7 @@ class TextualRetrievalAugmentTool(BaseTool):
 
     def __init__(self):
         super().__init__()
-        self._llm = get_llm("tool")
+        self._llm = get_llm("retrieval-augment")
 
     def _run(self, query: str, execution_agent_state: Annotated[dict, InjectedState], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, None]:
         """
@@ -81,8 +81,7 @@ class TextualRetrievalAugmentTool(BaseTool):
         # Get answer
         try: 
             final_answer = retrieval_augment_chain.invoke(inputs)
-            logger.info(f"Raw textual retrieval augment answer: {final_answer}")
-            return str(final_answer.content), None
+            return str(final_answer.text), None
         except Exception as e:
             error_msg = f"Error in textual_retrieval_augment tool: {str(e)}"
             logger.error(error_msg, exc_info=True)

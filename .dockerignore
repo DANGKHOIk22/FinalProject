@@ -1,0 +1,15 @@
+.git/
+.github/
+.venv/
+.vscode/
+__pycache__/
+*.pyc
+*.log
+# Ignore environment variables and sensitive information
+.env
+CLAUDE.md
+
+# Ignore temporary files and directories
+temporary/
+scripts/
+uv.lock

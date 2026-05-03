@@ -7,13 +7,15 @@ PROJECT_PATH = os.getcwd()  # Đường dẫn tuyệt đối đến thư mục d
 TEMPORARY_DIR = os.path.join(PROJECT_PATH, "temporary")
 
 # Model Configuration
-# Canonical model name constants
+GEMINI_GEMMA_4_31B = "gemma-4-31b-it"
 GEMINI_2_5_FLASH = "gemini-2.5-flash"
 GEMINI_2_5_FLASH_LITE = "gemini-2.5-flash-lite"
-GEMINI_2_0_FLASH_LITE = GEMINI_2_5_FLASH_LITE
+GEMINI_3_1_FLASH = "gemini-3.1-flash-preview"
+GEMINI_3_1_FLASH_LITE = "gemini-3.1-flash-lite-preview"
+
 # Backwards-compatible default model
-DEFAULT_MODEL = GEMINI_2_5_FLASH
-MODEL_TEMPERATURE = 0.2
+DEFAULT_MODEL = GEMINI_3_1_FLASH_LITE
+MODEL_TEMPERATURE = 1.0
 MODEL_TOP_P = 0.95
 MAX_COMPLETION_TOKENS = 8000
 

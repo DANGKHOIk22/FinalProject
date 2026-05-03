@@ -214,7 +214,7 @@ class GameInfoRetrievalTool(BaseTool):
 
     def __init__(self) -> None:
         super().__init__()
-        self._llm = get_llm("tool")
+        self._llm = get_llm("retrieval-augment")
         self._collection = _get_collection()
         self._finder = _GameFinder(self._llm, self._collection)
 
@@ -285,7 +285,7 @@ class GameHistoryRetrievalTool(BaseTool):
 
     def __init__(self) -> None:
         super().__init__()
-        self._llm = get_llm("tool")
+        self._llm = get_llm("retrieval-augment")
         self._collection = _get_collection()
         self._finder = _GameFinder(self._llm, self._collection)
 

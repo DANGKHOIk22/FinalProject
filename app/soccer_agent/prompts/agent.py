@@ -20,8 +20,7 @@ Your planning is used to guide the execution workers in the orderly to use the t
 
 # Note:
 1. If the user query is not clear or not relevant to soccer, you can set `need_call_tools=false`.
-
-
+2. Always think step by step and be precise in your analysis to determine the correct tool chains. The execution workers will rely on your planning to call the tools in the right order and with the right parameters, so accuracy is crucial.
 """
         ),
         HumanMessagePromptTemplate.from_template(
@@ -84,15 +83,12 @@ Additional Material: {additional_material}
     return planning_prompt_template
 
 
-def get_execution_prompt_template() -> ChatPromptTemplate:
-    """Create the execution prompt template for a single execution worker."""
-
-    execution_prompt_template = ChatPromptTemplate.from_messages([
-        SystemMessage(
-            content="You are the execution worker responsible for calling tools in support of the Soccer Question Answering Agent."
-        ),
-        HumanMessagePromptTemplate.from_template(
-            """# Task Overview:
+# Create system and user messages for the execution worker
+def get_execution_system_prompt() -> SystemMessage:
+    """Create the system prompt for the execution worker."""
+    return SystemMessage(
+        content="""You are the execution worker responsible for calling tools in support of the Soccer Question Answering Agent.
+# Task Overview:
 You will execute the provided tool chain to gather information for the user's query. You are working in parallel with other workers, so focus only on your assigned tool chain and your specific sub-query.
 
 # Execution Guidelines:
@@ -102,18 +98,26 @@ You will execute the provided tool chain to gather information for the user's qu
 4. If the previous tool call succeeded, analyze the output and the next tool description to determine the precise parameters needed for the next tool call. Only generate the parameters required for that tool, based on the information you have and the tool's description. However, if you don't have sufficient information to generate the parameters for the next tool call, stop the execution and explain concisely why you cannot proceed. Do NOT make up any information that is not available to you.
 5. When finishing all tool calls in the chain, summarize the gathered information to answer the sub-query assigned to you. This will be combined with other workers' responses later.
 
+# Important Notes:
+1. If the previous tool call is from "textual_retrieval_augment" or "game_info_retrieval", or "game_history_retrieval" tool, and it provides useful information, you should return nothing.
+2. Think step by step and be precise to ensure the correct execution.
+""")
+
+def get_execution_human_prompt() -> HumanMessagePromptTemplate:
+    """Create the human prompt for the execution worker."""
+    return HumanMessagePromptTemplate.from_template(
+        """
 # Input:
-1. Your specific sub-query to focus on: "{sub_query}"
+1. Your specific sub-query to focus on: '{sub_query}'
 2. Additional material: {additional_material}
-3. Suggested tool chain for your sub-query: {tool_chain}
-4. Execution history of your tool chain:
-{history}
+3. Suggested tool chain for your sub-query: '{tool_chain}'
 
 # Next Step
 Based on the above determine the next step in your execution:
-""")])
-    return execution_prompt_template
+""")
 
+
+# Create the prompt template for the aggregator worker that synthesizes the outputs from parallel workers
 def get_aggregator_prompt_template() -> ChatPromptTemplate:
     """Create the aggregator prompt template that synthesized worker outputs."""
     
@@ -142,7 +146,7 @@ Below are the summarized findings from each parallel worker that investigated th
 1. Integrate all findings to fully address all parts of the user's query.
 2. If the workers encountered errors or could not find the information, state what is known.
 3. Base your final response ONLY on the provided worker findings and conversation history, without making up facts.
-4. Provide a coherent, polite, natural language response.
+4. Think step by step and be precise to ensure the correct synthesis.
 
 Generate the final answer below:
 """)])
