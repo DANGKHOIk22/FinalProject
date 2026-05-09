@@ -25,8 +25,7 @@ from app.soccer_agent.case_bank.retriever import CaseBankRetriever
 from app.soccer_agent.case_bank.cache import case_bank_cache
 
 from app.soccer_agent.toolbox import (
-    textual_entity_search, 
-    textual_retrieval_augment, 
+    entity_augment,
     game_history_retrieval,
     game_info_retrieval,
     choice_selection,
@@ -73,8 +72,7 @@ class SoccerAgent:
 
         # Tool mapping dictionary using LangChain @tool decorated functions
         self.tool_registry: dict[str, BaseTool] = {
-            "textual_entity_search": textual_entity_search(),
-            "textual_retrieval_augment": textual_retrieval_augment(),
+            "entity_augment": entity_augment(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
             #"entity_recognition": entity_recognition(),
@@ -154,7 +152,9 @@ class SoccerAgent:
 
     async def _retrieve_cases_node(self, state: AgentState) -> dict:
         """Retrieve few-shot planning examples from case bank (with Redis cache)."""
-        query = state.get("claried_query") or state["user_query"]
+        messages = state.get("messages", [])
+        user_query = messages[-1].content if messages else ""
+        query = state.get("claried_query") or user_query
         has_media = bool(state.get("additional_material"))
 
         cached = case_bank_cache.get(query, has_media)
@@ -524,10 +524,10 @@ class SoccerAgent:
             output_with_tools = self._build_tool_summary_for_memory(
                 tool_calls_history=tool_calls_history,
                 tool_results_history=tool_results_history,
-                final_response=last_message.text if last_message else "No response generated",
+                final_response=last_message.content if last_message else "No response generated",
             )
             asyncio.create_task(
-                self._background_save_memory(thread_id, last_user_message.text if last_user_message else "No user message found", output_with_tools)
+                self._background_save_memory(thread_id, last_user_message.content if last_user_message else "No user message found", output_with_tools)
             )
             # Incremental update of Redis SessionMemory if tool calls were made
             if tool_calls_history:
@@ -600,7 +600,7 @@ class SoccerAgent:
 
             # If the last tool message is from augmentation tool, return the result from the tool instead of the execution agent's response,.
             # Note: this step must be after the execution response to ensure there is no error from the tool.
-            if last_tool_message is not None and (last_tool_message.name == "textual_retrieval_augment" or last_tool_message.name == "game_history_retrieval" or last_tool_message.name == "game_info_retrieval"):
+            if last_tool_message is not None and (last_tool_message.name == "entity_augment" or last_tool_message.name == "game_history_retrieval" or last_tool_message.name == "game_info_retrieval"):
                 worker_result = last_tool_message.content
             elif response.text:
                 worker_result = response.text
@@ -691,9 +691,14 @@ class SoccerAgent:
             parts.append(f"  Step {i + 1}: {tool_name}({args_str})")
 
             if i < len(tool_results_history):
-                result_msg: ToolMessage = tool_results_history[i]
-                parts.append(f"    Response: {result_msg.content}")
-                artifact = getattr(result_msg, "artifact", None)
+                result_msg = tool_results_history[i]
+                if isinstance(result_msg, dict):
+                    content = result_msg.get("content", "")
+                    artifact = result_msg.get("artifact")
+                else:
+                    content = result_msg.content
+                    artifact = getattr(result_msg, "artifact", None)
+                parts.append(f"    Response: {content}")
                 if artifact is not None:
                     parts.append(f"    Artifact: {artifact}")
 
@@ -802,7 +807,7 @@ class SoccerAgent:
             metadata={"thread_id": session_id},
         )
         
-        with langfuse_client.start_as_current_observation(
+        with langfuse.start_as_current_observation(
             as_type="chain", 
             name="soccer_agent_request"
         ) as root_trace:

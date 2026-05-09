@@ -36,7 +36,7 @@ class EntityRecognitionTool(BaseTool):
     """
     
     name: str = "entity_recognition"
-    description: str = """Given an image path, the tool retrieves the requiring entities of the question, and return its according WikiPage. You should use segment tool before this tool. The entity database contains the history and background knowledge for all the players, teams, venues, coaches and referees from games are from 2022 World Cup and 6 European major leagues (England Premier, Germany Bundesliga, Italy Serie-a, Spain Laliga, France Ligue-1 and European Champions League) during 2017-2024. Because this tool can retrieve detailed information about the entities, it's not necessary to call textual_entity_search after calling this tool."""
+    description: str = """Given an image path, the tool retrieves the requiring entities of the question, and return its according WikiPage. You should use segment tool before this tool. The entity database contains the history and background knowledge for all the players, teams, venues, coaches and referees from games are from 2022 World Cup and 6 European major leagues (England Premier, Germany Bundesliga, Italy Serie-a, Spain Laliga, France Ligue-1 and European Champions League) during 2017-2024. Because this tool can retrieve detailed information about the entities, it's not necessary to call entity_augment after calling this tool."""
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     args_schema: Type[BaseModel] = EntityRecognitionInput # type: ignore
     

@@ -51,20 +51,20 @@ Follow these instructions carefully to ensure your response is correctly formatt
 **Query 2:** "Compare the trophies between Ronaldo and Messi."
 **Additional Material:** None
 **Conversation History:** None
-* **Analysis (Tool Chain):** Must search for both players' entity information and retrieve their trophy details. `textual_entity_search` can handle multiple entities in one call so one chain is enough.
+* **Analysis (Tool Chain):** Must search for both players' entity information and synthesize a trophy comparison. `entity_augment` accepts multiple entity names in one call and produces the answer in a single step.
 * **Logical Output:**
-    * `tool_chains`: [["textual_entity_search", "textual_retrieval_augment"]]
+    * `tool_chains`: [["entity_augment"]]
     * `sub_queries`: ["Compare the trophies between Ronaldo and Messi."]
 
 **Query 3:** "Who scored the goal in the 2014 World Cup final, and what is the stadium capacity of Camp Nou?"
 **Additional Material:** None
 * **Analysis (Tool Chain):** Finding the goalscorer in the World Cup final is independent of finding information about Camp Nou. These can run in parallel.
-* **Worker 1:** ["game_history_retrieval", "textual_entity_search", "textual_retrieval_augment"] — `game_history_retrieval` is self-contained (searches + fetches event log), then entity lookup for the scorer.
-* **Worker 2:** ["textual_entity_search", "textual_retrieval_augment"], focus on stadium capacity of Camp Nou.
+* **Worker 1:** ["game_history_retrieval", "entity_augment"] — `game_history_retrieval` is self-contained (searches + fetches event log), then `entity_augment` looks up and synthesizes info about the scorer.
+* **Worker 2:** ["entity_augment"], focus on stadium capacity of Camp Nou.
 * **Logical Output:**
     * `tool_chains`: [
-        ["game_history_retrieval", "textual_entity_search", "textual_retrieval_augment"],
-        ["textual_entity_search", "textual_retrieval_augment"]
+        ["game_history_retrieval", "entity_augment"],
+        ["entity_augment"]
       ]
     * `sub_queries`: [
         "Who scored the goal in the 2014 World Cup final?",
@@ -99,7 +99,7 @@ You will execute the provided tool chain to gather information for the user's qu
 5. When finishing all tool calls in the chain, summarize the gathered information to answer the sub-query assigned to you. This will be combined with other workers' responses later.
 
 # Important Notes:
-1. If the previous tool call is from "textual_retrieval_augment" or "game_info_retrieval", or "game_history_retrieval" tool, and it provides useful information, you should return nothing.
+1. If the previous tool call is from "entity_augment" or "game_info_retrieval", or "game_history_retrieval" tool, and it provides useful information, you should return nothing.
 2. Think step by step and be precise to ensure the correct execution.
 """)
 
