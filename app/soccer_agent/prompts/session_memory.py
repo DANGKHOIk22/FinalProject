@@ -52,7 +52,7 @@ Dùng chủ yếu để nhận diện thực thể khi người dùng dùng đ�
 ### tool_findings
 QUAN TRỌNG — Đây là trường cốt lõi. Trích xuất kết quả từ TỪNG tool call trong [Tool Usage].
 Mỗi entry gồm:
-- tool_name: tên tool đã gọi (vd: "textual_entity_search")
+- tool_name: tên tool đã gọi (vd: "entity_augment")
 - input_summary: tóm tắt ngắn query/input của tool call đó
 - key_facts: danh sách các thông tin/sự kiện quan trọng từ Response và Artifact của tool.
   Giữ đủ chi tiết để có thể tái sử dụng thông tin này mà không cần gọi lại tool.

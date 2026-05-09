@@ -64,8 +64,23 @@ Sau khi thực hiện Bước 1 và Bước 2, đánh giá xem câu hỏi đã �
 - Viết tắt có nhiều nghĩa khả dĩ và nghĩa nào cũng hợp lý (ví dụ: "City" có thể là Man City hoặc Leicester City khi không có ngữ cảnh)
 - Câu hỏi thiếu thông tin bắt buộc mà không có cách nào suy luận được (ví dụ: "anh ấy ghi bao nhiêu bàn?" khi không có bất kỳ thực thể nào trong lịch sử hội thoại)
 
-**Quy tắc bổ sung:**
-- Luôn trả về clarified_query (kể cả khi is_ambiguous=true — dùng giả thuyết tốt nhất).
+**Quy tắc về tên cầu thủ nổi tiếng (rất quan trọng — KHÔNG được mark ambiguous):**
+Khi user nhắc tới một tên thông dụng, luôn hiểu theo nghĩa phổ biến/đương đại nhất, KHÔNG hỏi lại:
+- "Ronaldo" (không kèm context) → Cristiano Ronaldo
+- "Messi" → Lionel Messi
+- "Ronaldinho" → Ronaldo de Assis Moreira (Ronaldinho Gaúcho)
+- "Maradona" → Diego Maradona
+- "Pelé" / "Pele" → Edson Arantes do Nascimento (Pelé)
+- "Beckham" → David Beckham
+- "Zidane" / "Zizou" → Zinedine Zidane
+- "Mbappe" / "Mbappé" → Kylian Mbappé
+- "Haaland" → Erling Haaland
+- "Neymar" → Neymar Jr.
+- Các tên một-từ tương tự: chọn cầu thủ nổi tiếng nhất
+
+**Quy tắc bổ sung (NGHIÊM NGẶT):**
+- `clarified_query` LUÔN là một câu hỏi/yêu cầu đã được làm rõ — KHÔNG BAO GIỜ là câu hỏi quay lại user (KHÔNG được chứa "Bạn đang hỏi về...?", "Vui lòng cung cấp thêm...", v.v.).
+- Khi is_ambiguous=true, `clarified_query` vẫn phải là câu hỏi đã giải nghĩa theo giả thuyết hợp lý nhất (ví dụ: chọn entity phổ biến nhất). Câu hỏi quay lại user CHỈ được đặt trong `clarifying_questions`.
 - clarified_query dùng cùng ngôn ngữ với câu hỏi gốc.
 - clarifying_questions phải ngắn gọn, cụ thể, dễ trả lời. Mỗi câu hỏi chỉ hỏi về 1 điểm mơ hồ.
 - Chỉ điền clarifying_questions khi is_ambiguous=true.
@@ -76,6 +91,8 @@ Sau khi thực hiện Bước 1 và Bước 2, đánh giá xem câu hỏi đã �
 - Bộ nhớ có cả "Chelsea" và "Arsenal", user hỏi "đội đó có mấy cầu thủ nước ngoài?" → clarified_query = "Chelsea FC / Arsenal có mấy cầu thủ nước ngoài?", is_ambiguous=true, clarifying_questions=["Bạn đang hỏi về Chelsea hay Arsenal?"]
 - User hỏi "anh ấy ghi bao nhiêu bàn?" khi không có lịch sử hội thoại → is_ambiguous=true, clarifying_questions=["Bạn đang hỏi về cầu thủ nào?"]
 - User hỏi "Barca UCL 2015 final score?" → clarified_query = "Kết quả trận chung kết UEFA Champions League 2015 của FC Barcelona là bao nhiêu?", is_ambiguous=false
+- User hỏi "RONALDO có bao nhiêu quả bóng vàng" → clarified_query = "Cristiano Ronaldo có bao nhiêu quả bóng vàng (Ballon d'Or)?", is_ambiguous=false (mặc định "Ronaldo" = Cristiano Ronaldo)
+- User hỏi "messi năm 2019 có bao nhiêu bàn thắng" → clarified_query = "Lionel Messi ghi bao nhiêu bàn thắng trong năm 2019?", is_ambiguous=false
 
 ## Output Format:
 {format_instructions}

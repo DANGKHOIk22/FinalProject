@@ -62,6 +62,17 @@ class QueryUnderstandingPipeline:
             response = await self.llm.ainvoke(prompt)
             response_text = response.text if hasattr(response, "text") else str(response)
             result = self._parser.parse(response_text)
+
+            # Defensive: LLM sometimes puts a clarification question into clarified_query.
+            # Detect that and fall back to the original user query so downstream nodes
+            # (planning, case-bank retrieval) see the actual user intent.
+            if self._looks_like_clarification(result.clarified_query):
+                logger.warning(
+                    f"[QU] clarified_query looked like a clarification question "
+                    f"({result.clarified_query!r}); falling back to original user_query."
+                )
+                result.clarified_query = user_query
+
             logger.info(
                 f"[QU] clarified_query='{result.clarified_query}' "
                 f"is_ambiguous={result.is_ambiguous}"
@@ -70,6 +81,23 @@ class QueryUnderstandingPipeline:
         except Exception as e:
             logger.warning(f"[QU] Parse failed: {e}. Returning original query.")
             return QueryUnderstandingOutput(clarified_query=user_query)
+
+    @staticmethod
+    def _looks_like_clarification(text: str) -> bool:
+        """Heuristic: detect when the LLM mistakenly puts a clarification question
+        for the user into clarified_query instead of the resolved query itself."""
+        if not text:
+            return True
+        lowered = text.lower()
+        markers = (
+            "bạn đang hỏi về",
+            "bạn có thể làm rõ",
+            "vui lòng cung cấp",
+            "could you clarify",
+            "please provide more",
+            "what do you mean",
+        )
+        return any(m in lowered for m in markers)
 
     @staticmethod
     def _memory_to_text(memory: SessionMemory) -> str:
