@@ -2,6 +2,9 @@ from contextlib import asynccontextmanager
 import logging
 import os
 import uvicorn
+
+# Suppress broken OTel resource detector registered by azure-* packages
+logging.getLogger("opentelemetry.sdk.resources").setLevel(logging.CRITICAL)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from ag_ui_langgraph import add_langgraph_fastapi_endpoint

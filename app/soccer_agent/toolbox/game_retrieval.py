@@ -164,12 +164,14 @@ class _GameFinder:
 
     def _select(self, candidates: list[dict], info: MatchInfo, question: str) -> _FindResult:
         if not candidates:
+            logger.warning(f"🔍 GameFinder: no candidates found for query. Extracted info: {info}")
             return _GameNotFound(
                 reason="We did not find the match you mentioned in the database. "
                        "Stop the execution and ask user give more specific information."
             )
         if len(candidates) == 1:
             g = candidates[0]
+            logger.info(f"✅ GameFinder: single candidate — game_id={g['game_id']} | {g['home_team']} vs {g['away_team']} ({g['date']})")
             return _GameFound(
                 message=f"Found match: {g['home_team']} vs {g['away_team']} ({g['date']}).",
                 game_id=g["game_id"],
@@ -190,7 +192,9 @@ class _GameFinder:
             "candidates": candidate_text,
         })  # type: ignore
         if response.game_id:
+            logger.info(f"✅ GameFinder: LLM selected game_id={response.game_id} from {len(candidates)} candidates")
             return _GameFound(message=response.response_llm, game_id=response.game_id)
+        logger.warning(f"🔍 GameFinder: LLM could not select a match from {len(candidates)} candidates")
         return _GameNotFound(reason=response.response_llm)
 
 
@@ -255,6 +259,7 @@ class GameInfoRetrievalTool(BaseTool):
                 "query": query,
                 "context": context,
             })  # type: ignore
+            logger.info(f"✅ game_info_retrieval: game_id={result.game_id} | answer={response.answer[:200]}")
             return response.answer, result.game_id
 
         except Exception as e:
@@ -370,7 +375,7 @@ class GameHistoryRetrievalTool(BaseTool):
                 "query": query,
                 "context": history_context,
             })  # type: ignore
-            logger.info(f"GameHistoryRetrieval response: {response}")
+            logger.info(f"✅ game_history_retrieval: game_id={game_id} | answer={response.answer[:200]}")
             return response.answer, game_id
 
         except Exception as e:

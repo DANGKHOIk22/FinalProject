@@ -7,8 +7,8 @@ import logging
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_postgres.chat_message_histories import PostgresChatMessageHistory
 
-from app.memory.chat_history import get_postgres_memory, get_connection_pool
-from app.memory.conversation_memory import CustomSystemPromptMemory
+from app.soccer_agent.memory.chat_history import get_postgres_memory, get_connection_pool
+from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
 
 logger = logging.getLogger(__name__)
 

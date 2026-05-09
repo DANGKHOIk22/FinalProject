@@ -8,8 +8,6 @@ TEMPORARY_DIR = os.path.join(PROJECT_PATH, "temporary")
 
 # Model Configuration
 GEMINI_GEMMA_4_31B = "gemma-4-31b-it"
-GEMINI_2_5_FLASH = "gemini-2.5-flash"
-GEMINI_2_5_FLASH_LITE = "gemini-2.5-flash-lite"
 GEMINI_3_1_FLASH = "gemini-3.1-flash-preview"
 GEMINI_3_1_FLASH_LITE = "gemini-3.1-flash-lite-preview"
 
