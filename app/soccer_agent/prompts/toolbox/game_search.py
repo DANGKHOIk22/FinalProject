@@ -43,29 +43,33 @@ def get_match_selection_prompt_template() -> ChatPromptTemplate:
         ),
         HumanMessagePromptTemplate.from_template(
         """
-        Now we need to retrieve a file path for the most probable match from the database from the question: "{question}".
-        
-        Such question has been transformed to the original query information as:  
+        Now we need to identify the game_id for the most probable match from the database based on the question: "{question}".
+
+        A game_id has the format: {{league}}/{{season}}/{{date}}/{{home_team}}-vs-{{away_team}}
+        Example: england_epl/2014-2015/2015-02-21/chelsea-vs-burnley
+        (team names are lowercased with spaces replaced by dashes)
+
+        Such question has been transformed to the original query information as:
         Extracted Info: {info}
 
         Here are the candidate matches:
         Candidates:
         {candidates}
 
-        Based on the original query information and the candidate matches above, is there a match that is significantly more likely than the others? 
+        Based on the original query information and the candidate matches above, is there a match that is significantly more likely than the others?
 
         Firstly, you should exclude those candidates in the following situation:
-        1. If **any of the team's name in original query information** is sure not to be in team names from candidates, such candidate cannot be returned anymore, you cannot let such candidate take place in your return answer. 
+        1. If **any of the team's name in original query information** is sure not to be in team names from candidates, such candidate cannot be returned anymore, you cannot let such candidate take place in your return answer.
         2. For example, if the original query information contains "Chelsea" and "West Ham", but candidates contains "chelsea FC" and "Liverpool", since such candidate cannot be returned anymore since West Ham is not in candidate information.
         3. For example, if the original query information contains "Chelsea" and "West Ham", but candidates contains "Chelsea FC" and "West Ham United", since such candidate is still possible to be returned since both team names are in candidate information.
         4. For example, if the original query information contains only "Chelsea", but candidates contains "Bayern Munich" and "Real Madrid", since such candidate cannot be returned since Chelsea is not in candidate information.
-        
+
         After considering the above situation and exclude those candidate having team name unmatched, you should consider the following two situations:
 
-        1. If there are still **obviously** probable answer with all known information correct, please return the file path of that match EXACTLY in the following format:
-        "The given information seems incomplete, but we found the most probable match in the database with this file path: [The file path of the **hugely most probable** match]. [Here give some recommendation to complete the information if possible, for example, provide the date or the score of the match, or which team is the home/away team .etc. Use simple and clear words here.]" 
+        1. If there are still **obviously** probable answer with all known information correct, please return the game_id of that match EXACTLY in the following format:
+        "The given information seems incomplete, but we found the most probable match in the database with this game_id: [The game_id of the **hugely most probable** match]. [Here give some recommendation to complete the information if possible, for example, provide the date or the score of the match, or which team is the home/away team .etc. Use simple and clear words here.]"
 
-        2. If no match is significantly more likely among all the candidates, please return all candidate matches with information of league, season, date, time, score, home_team, away_team, venue and referee (without file path), and explain that the information provided is too vague. For this situation you only need to summarize with a little bit the games and give a brief reply with some short sentences.
+        2. If no match is significantly more likely among all the candidates, please return all candidate matches with information of league, season, date, time, score, home_team, away_team, venue and referee (without game_id), and explain that the information provided is too vague. For this situation you only need to summarize with a little bit the games and give a brief reply with some short sentences.
         """
         )
     ])

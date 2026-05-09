@@ -1,7 +1,10 @@
 import base64
+import logging
 import mimetypes
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 from typing import Any, List, Optional, Tuple, Type, Literal, Union, Dict
 from pydantic import BaseModel, Field, PrivateAttr
 
@@ -72,6 +75,7 @@ class CommentaryGenerationTool(BaseTool):
                 f"Extracted {len(output.annotations)} annotations. "
                 f"This is the short commentary:\n\n{output.commentary}"
             )
+            logger.info(f"✅ commentary_generation: annotations={len(output.annotations)} | commentary={output.commentary[:200]}")
             return content_msg, output.annotations
 
         except Exception as e:

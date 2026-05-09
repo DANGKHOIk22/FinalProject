@@ -1,0 +1,12 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: soccer-agent:latest
+    container_name: soccer-agent
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    restart: unless-stopped
