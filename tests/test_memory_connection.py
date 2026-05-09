@@ -1,16 +1,44 @@
 """
 Test case để kiểm tra kết nối memory, thêm và lấy dữ liệu.
+
+Yêu cầu một PostgreSQL instance đang chạy và cấu hình qua POSTGRES_DATABASE_URL.
+Test sẽ tự động bị skip nếu DB không sẵn sàng (ví dụ trong CI mặc định) — local
+dev có DB thì chạy bình thường.
 """
-import pytest
-import uuid
 import logging
-from langchain_core.messages import HumanMessage, AIMessage
+import os
+import uuid
+
+import psycopg
+import pytest
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_postgres.chat_message_histories import PostgresChatMessageHistory
 
-from app.soccer_agent.memory.chat_history import get_postgres_memory, get_connection_pool
+from app.soccer_agent.memory.chat_history import get_connection_pool, get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
 
 logger = logging.getLogger(__name__)
+
+
+def _postgres_available() -> bool:
+    """Quick probe: open a real connection with a short timeout. Returns False
+    when the DB is unreachable so the test can be skipped instead of failing."""
+    dsn = os.getenv("POSTGRES_DATABASE_URL")
+    if not dsn:
+        return False
+    try:
+        with psycopg.connect(dsn, connect_timeout=2) as conn:  # type: ignore[arg-type]
+            conn.execute("SELECT 1")
+        return True
+    except Exception as e:
+        logger.info(f"Postgres probe failed → skipping memory tests: {e}")
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _postgres_available(),
+    reason="POSTGRES_DATABASE_URL not set or PostgreSQL not reachable",
+)
 
 
 def ensure_table_exists(connection, table_name: str = "messages_agents"):
