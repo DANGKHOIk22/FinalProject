@@ -194,15 +194,16 @@ class SessionMemoryManager:
 
     def _update_sync(self, session_id: str, turn_tool_summary: str) -> None:
         """
-        Load existing SessionMemory from Redis, merge in new tool findings
-        from the current turn, then save back.
+        Load existing SessionMemory from Redis (or start from empty if none exists),
+        merge in new tool findings from the current turn, then save back.
         """
         from app.soccer_agent.prompts.session_memory import get_update_prompt
 
         existing = self._redis_load(session_id)
-        if existing is None:
-            logger.warning(f"[SessionMemory] Update skipped — no existing memory for {session_id}")
-            return
+        is_first = existing is None
+        if is_first:
+            existing = SessionMemory()
+            logger.info(f"[SessionMemory] No prior memory for {session_id} — initialising from empty.")
 
         update_parser = PydanticOutputParser(pydantic_object=SessionMemory)
         prompt_template = get_update_prompt()
@@ -217,7 +218,7 @@ class SessionMemoryManager:
             updated = update_parser.parse(response_text)
             self._redis_save(session_id, updated)
             logger.info(
-                f"[SessionMemory] Incremental update done for {session_id}. "
+                f"[SessionMemory] {'Initial' if is_first else 'Incremental'} update done for {session_id}. "
                 f"tool_findings: {len(existing.tool_findings)} → {len(updated.tool_findings)}"
             )
         except Exception as e:
@@ -281,6 +282,49 @@ class SessionMemoryManager:
             result.append(SM(content="\n".join(parts)))
         result.extend(recent)
         return result
+
+    def format_compressed_history(
+        self, memory: SessionMemory, recent: List[BaseMessage]
+    ) -> str:
+        """
+        Build a single text block representing compressed history (Path B).
+
+        Combines the SessionMemory summary (scope, state, confirmed entities,
+        tool findings, user context, open threads) with the verbatim recent
+        messages — produces the shape the planning/aggregator prompts expect
+        for the `conversation_history` template variable.
+        """
+        parts: List[str] = []
+        if memory.scope:
+            parts.append(f"Phạm vi thảo luận: {memory.scope}")
+        if memory.conversation_state:
+            parts.append(f"Trạng thái hội thoại: {memory.conversation_state}")
+        if memory.confirmed_entities:
+            parts.append("Thực thể đã xác nhận:")
+            for entity in memory.confirmed_entities:
+                parts.append(f"  - {entity}")
+        if memory.tool_findings:
+            parts.append("Kết quả từ các tool đã gọi:")
+            for finding in memory.tool_findings:
+                parts.append(f"  [{finding.tool_name}] Input: {finding.input_summary}")
+                for fact in finding.key_facts:
+                    parts.append(f"    • {fact}")
+        if memory.user_context.preferences:
+            parts.append("Sở thích người dùng: " + "; ".join(memory.user_context.preferences))
+        if memory.user_context.goals:
+            parts.append("Mục tiêu người dùng: " + "; ".join(memory.user_context.goals))
+        if memory.open_discussion_threads:
+            parts.append("Chủ đề đang thảo luận: " + "; ".join(memory.open_discussion_threads))
+
+        sections: List[str] = []
+        if parts:
+            sections.append("### TÓM TẮT LỊCH SỬ HỘI THOẠI (Session Memory):\n" + "\n".join(parts))
+
+        recent_text = self._messages_to_text(recent)
+        if recent_text:
+            sections.append("### TIN NHẮN GẦN ĐÂY:\n" + recent_text)
+
+        return "\n\n".join(sections) if sections else ""
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

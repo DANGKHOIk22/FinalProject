@@ -324,10 +324,10 @@ class SoccerAgent:
             logger.info("[QU] is_ambiguous=True — returning clarification request, skipping graph.")
             
             return Command(
-                goto="END",
+                goto=END,
                 update={
                     "messages": messages + [clarification_response],
-                }
+                },
             )
 
         # --- Update tracing span metadata ---
@@ -804,9 +804,10 @@ class SoccerAgent:
         """
         session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, request.user_id))
         config = RunnableConfig(
+            configurable={"thread_id": session_id},
             metadata={"thread_id": session_id},
         )
-        
+        langfuse = get_client()
         with langfuse.start_as_current_observation(
             as_type="chain", 
             name="soccer_agent_request"

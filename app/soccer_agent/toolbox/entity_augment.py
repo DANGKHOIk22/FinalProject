@@ -30,9 +30,10 @@ class EntityAugmentInput(BaseModel):
     entity_names: List[str] = Field(
         ...,
         description=(
-            "List of soccer-related entity names extracted from the user's question or inferred by previous tools. "
+            "List of soccer-related entity names already extracted from the user's question or inferred from previous tool results. "
             "Each item should be a direct name (player, team, venue, referee, coach, club) without extra narration. "
-            "Capitalize the first letter of each word."
+            "Use this tool only after the agent has resolved the names; do not pass raw user questions here. "
+            "Remember to capitalize the first letter of each word in the entity names."
         ),
         examples=[
             ["Lionel Messi", "Barcelona"],
@@ -50,13 +51,12 @@ class EntityAugmentInput(BaseModel):
 class EntityAugmentTool(BaseTool):
     name: str = "entity_augment"
     description: str = """
-    Look up soccer-related entities (players, teams, venues, coaches, referees) in the local
-    knowledge base by name and synthesize a concise, user-facing answer in a single step.
-    The dataset covers matches from 2017-2024, including the 2022 World Cup and six major
-    European leagues (Premier League, Bundesliga, Serie A, LaLiga, Ligue 1, Champions League).
-    Use this tool whenever the user asks about background, biography, history, achievements,
-    or other entity-level facts. Returns the final synthesized answer as text; entity records
-    found and any missing entity names are also returned as a structured artifact for tracing.
+    Given a list of entity names and a text query, the tool looks up the entities in the local
+    soccer knowledge base and synthesizes the relevant information into a final answer in one step.
+    Always use it for background information on players, teams, coaches, referees, venues, etc. —
+    including biography, career history, achievements, awards, trophies, season-level stats,
+    transfer history, stadium facts, and entity comparisons. Entity facts must come from the DB,
+    not from background knowledge.
     """
     args_schema: Type[BaseModel] = EntityAugmentInput  # type: ignore
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"

@@ -13,14 +13,26 @@ Your planning is used to guide the execution workers in the orderly to use the t
 
 # Instructions:
 1. Analyze the user's query and any additional material provided to understand the specific information being requested.
-2. Check the conversation history to see if the specific information requested is already available. If it is, set `need_call_tools=false` and skip tool planning.
+2. Check the conversation history. ONLY set `need_call_tools=false` when a previous turn in the conversation history already contains the exact factual answer the user is now asking about. Do NOT set it to false based on your own background knowledge.
 3. Analyze the tool descriptions to determine which tools are needed to gather the missing information. Consider the dependencies between tools, which type of data they can handle (text, images, video) and the specific information they can retrieve.
 4. Decompose the user's query into independent sub-queries if possible, and determine which tools are needed for each sub-query. Group tools that must be executed sequentially into the same chain, and separate independent chains that can run in parallel.
 5. Follow the output format instructions carefully to ensure your response is correctly structured for the execution workers.
 
+# Default Behaviour (very important):
+- Soccer questions about facts, stats, players, teams, venues, coaches, referees, matches, trophies, awards, transfers, history, and rivalries MUST go through tools — never answer from your own training knowledge.
+- For entity background / biography / achievements / awards (e.g. "How many Ballon d'Or did Ronaldo win?", "How many goals did Messi score in 2019?", "What's Camp Nou's capacity?") use `entity_augment` (it does DB lookup AND synthesis in one step — a single-element chain `["entity_augment"]` is the correct shape).
+- For specific match data (final score, lineup, events) use `game_info_retrieval` or `game_history_retrieval`.
+- Combine tools only when one tool's output is needed as input to the next (sequential chain) or when sub-queries are independent (parallel chains).
+
+# When to set `need_call_tools=false`:
+- The user is making pure small-talk / greeting / off-topic chit-chat with no factual question.
+- The exact factual answer to the current question already appears in the conversation history (look for explicit numbers/names/dates from a prior tool result, not just topic mention).
+- Otherwise → ALWAYS set `need_call_tools=true` and provide at least one tool chain.
+
 # Note:
-1. If the user query is not clear or not relevant to soccer, you can set `need_call_tools=false`.
-2. Always think step by step and be precise in your analysis to determine the correct tool chains. The execution workers will rely on your planning to call the tools in the right order and with the right parameters, so accuracy is crucial.
+1. If the user query is genuinely unrelated to soccer/football, you may set `need_call_tools=false`.
+2. NEVER set `need_call_tools=false` because you (the LLM) think you already know the answer. The system requires answers backed by the database / web tools.
+3. Always think step by step and be precise in your analysis to determine the correct tool chains. The execution workers will rely on your planning to call the tools in the right order and with the right parameters, so accuracy is crucial.
 """
         ),
         HumanMessagePromptTemplate.from_template(
@@ -55,6 +67,14 @@ Follow these instructions carefully to ensure your response is correctly formatt
 * **Logical Output:**
     * `tool_chains`: [["entity_augment"]]
     * `sub_queries`: ["Compare the trophies between Ronaldo and Messi."]
+
+**Query 2b:** "Cristiano Ronaldo có bao nhiêu quả bóng vàng (Ballon d'Or)?"
+**Additional Material:** None
+**Conversation History:** None
+* **Analysis (Tool Chain):** Direct entity-fact question about a player's awards. Use `entity_augment` — single chain, single step. Do NOT answer from your own knowledge; the tool retrieves the canonical record from the database.
+* **Logical Output:**
+    * `tool_chains`: [["entity_augment"]]
+    * `sub_queries`: ["Cristiano Ronaldo có bao nhiêu quả bóng vàng?"]
 
 **Query 3:** "Who scored the goal in the 2014 World Cup final, and what is the stadium capacity of Camp Nou?"
 **Additional Material:** None
