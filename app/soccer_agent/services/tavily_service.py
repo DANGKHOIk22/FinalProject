@@ -252,9 +252,13 @@ class TavilyService:
         async def _call(client):
             return await client.search(
                 query=entity_name,
-                include_domains=["wikipedia.org"],
+                include_domains=["en.wikipedia.org","wikipedia.org"],
                 max_results=max_results,
                 search_depth="advanced",
+                exact_match = True,
+                chunks_per_source=1,
+                topic="general"
+                
             )
 
         try:

@@ -24,7 +24,7 @@ from app.soccer_agent.factory.llm_provider import get_llm
 from app.soccer_agent.prompts.toolbox.textual_retrieval_augment import (
     get_textual_retrieval_augment_prompt_template,
 )
-from app.soccer_agent.services.content_cleaner import clean_wiki_markdown, extract_summary
+from app.soccer_agent.services.content_cleaner import clean_wiki_markdown, extract_summary, strip_summary
 from app.soccer_agent.services.tavily_service import TavilyService
 from app.soccer_agent.toolbox._config_loader import tool_description
 
@@ -137,24 +137,21 @@ def _get_tavily() -> TavilyService:
     return _tavily_service
 
 
-class _DBAnswer(BaseModel):
-    answer: str = Field(description="Answer synthesized from the entity data")
+class _AugmentedAnswer(BaseModel):
+    answer: str = Field(description="Answer synthesized from the provided data (DB or Web content)")
     has_sufficient_info: bool = Field(
+        default=True,
         description=(
-            "True only when every entity was found AND data fully answers the query. "
-            "False if any entity is NOT FOUND, data is incomplete, or answer is uncertain."
+            "True only when the provided data fully answers the query. "
+            "False if data is incomplete, entity is not found, or answer is uncertain."
         )
     )
-
-
-class _WebAnswer(BaseModel):
-    answer: str = Field(description="Answer synthesized from the web content")
     entity_types: dict[str, str] = Field(
         default_factory=dict,
         description=(
-            "For each entity name that was NOT found in the local DB, classify its type. "
+            "For each entity name that was NOT found in the local database, classify its type. "
             "Keys are entity names; values are one of: 'player', 'team', 'venue', 'referee'. "
-            "Only include entities that were missing from DB. Leave empty if all were found."
+            "Leave empty if all entities were found or if no classification is needed."
         ),
     )
 
@@ -253,7 +250,6 @@ class EntityAugmentTool(BaseTool):
             # Step 3: Tavily fallback
             logger.info("DB answer insufficient — running Tavily fallback.")
             web_answer = await self._tavily_fallback(query, searching_result)
-            logger.info(f"✅ entity_augment: web answer={web_answer[:120]}")
             return web_answer, searching_result
 
         except Exception as e:
@@ -271,21 +267,21 @@ class EntityAugmentTool(BaseTool):
     # Step 2: LLM answer from DB with structured output
     # ------------------------------------------------------------------
 
-    async def _generate_answer_from_db(self, query: str, searching_result: SearchingResult) -> _DBAnswer:
+    async def _generate_answer_from_db(self, query: str, searching_result: SearchingResult) -> _AugmentedAnswer:
         prompt = get_textual_retrieval_augment_prompt_template()
-        structured_llm = self._llm.with_structured_output(_DBAnswer)
+        structured_llm = self._llm.with_structured_output(_AugmentedAnswer)
         chain = prompt | structured_llm
         searching_text = self._aggregate_searching_results(searching_result)
         try:
             result = await chain.ainvoke({"query": query, "searching_result": searching_text})
-            if isinstance(result, _DBAnswer):
+            if isinstance(result, _AugmentedAnswer):
                 return result
             # Unexpected output type — treat as insufficient
             logger.warning(f"Unexpected structured output type: {type(result)}")
-            return _DBAnswer(answer=str(result), has_sufficient_info=False)
+            return _AugmentedAnswer(answer=str(result), has_sufficient_info=False)
         except Exception as e:
             logger.warning(f"Structured output failed ({e}), defaulting to Tavily fallback.")
-            return _DBAnswer(answer="", has_sufficient_info=False)
+            return _AugmentedAnswer(answer="", has_sufficient_info=False)
 
     # ------------------------------------------------------------------
     # Step 3: Tavily fallback
@@ -357,11 +353,11 @@ class EntityAugmentTool(BaseTool):
             )
         logger.info(f"[tavily_fallback] Step 4 — generating answer via LLM (is_missing={is_missing})")
         prompt = get_textual_retrieval_augment_prompt_template()
-        web_llm = self._llm.with_structured_output(_WebAnswer)
+        web_llm = self._llm.with_structured_output(_AugmentedAnswer)
         try:
             web_result = await (prompt | web_llm).ainvoke({"query": query, "searching_result": llm_context})
-            answer = web_result.answer if isinstance(web_result, _WebAnswer) else str(web_result)
-            entity_type = web_result.entity_types.get(name, "").lower() if isinstance(web_result, _WebAnswer) else ""
+            answer = web_result.answer if isinstance(web_result, _AugmentedAnswer) else str(web_result)
+            entity_type = web_result.entity_types.get(name, "").lower() if isinstance(web_result, _AugmentedAnswer) else ""
             logger.info(f"[tavily_fallback] Step 4 — answer_len={len(answer)}, entity_type='{entity_type}'")
         except Exception as e:
             logger.warning(f"[tavily_fallback] Step 4 — LLM failed: {e}")
@@ -387,10 +383,10 @@ class EntityAugmentTool(BaseTool):
     async def _generate_web_answer(self, query: str, web_context: str) -> str:
         """Generate answer from web context without DB save (search_general path)."""
         prompt = get_textual_retrieval_augment_prompt_template()
-        web_llm = self._llm.with_structured_output(_WebAnswer)
+        web_llm = self._llm.with_structured_output(_AugmentedAnswer)
         try:
             result = await (prompt | web_llm).ainvoke({"query": query, "searching_result": web_context})
-            return result.answer if isinstance(result, _WebAnswer) else str(result)
+            return result.answer if isinstance(result, _AugmentedAnswer) else str(result)
         except Exception as e:
             logger.warning(f"Web answer generation failed: {e}")
             return web_context[:2000]
@@ -429,7 +425,7 @@ class EntityAugmentTool(BaseTool):
                 doc = {k: v for k, v in db_entity.model_dump().items() if k != "_id" and v is not None}
                 doc.pop("INFOBOX", None)
                 doc["SUMMARY"] = extract_summary(cleaned)
-                doc["CONTENT"] = cleaned
+                doc["CONTENT"] = strip_summary(cleaned)
                 doc["IMAGES"] = images
                 collection.replace_one({"NAME": {"$regex": f"^{name}$", "$options": "i"}}, doc)
                 logger.info(f"[upsert] Force-replaced DB entity: {name}")
@@ -443,7 +439,7 @@ class EntityAugmentTool(BaseTool):
                     "NAME": name,
                     "ENTITY_TYPE": entity_type,
                     "SUMMARY": extract_summary(cleaned),
-                    "CONTENT": cleaned,
+                    "CONTENT": strip_summary(cleaned),
                     "IMAGES": images,
                     url_field: wiki_url,
                 }

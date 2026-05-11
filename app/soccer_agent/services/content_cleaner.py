@@ -91,6 +91,45 @@ def extract_summary(md: str, max_chars: int = 1500) -> str:
     return " ".join(collected).strip()
 
 
+def strip_summary(md: str) -> str:
+    """Return the cleaned markdown with the intro/summary block removed.
+
+    Keeps the ``# Title`` heading (if present) then skips everything up to
+    the first ``##`` sub-section, so CONTENT stores only the body sections
+    (the part that is NOT already captured in the SUMMARY field).
+    """
+    if not md:
+        return ""
+
+    lines = md.split("\n")
+    # Find where the # Title heading is (if any)
+    title_idx: int | None = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("# ") and not stripped.startswith("## "):
+            title_idx = i
+            break
+
+    # Find the first ## heading (start of body sections)
+    first_section_idx: int | None = None
+    search_from = (title_idx + 1) if title_idx is not None else 0
+    for i, line in enumerate(lines[search_from:], start=search_from):
+        if line.strip().startswith("## "):
+            first_section_idx = i
+            break
+
+    if first_section_idx is None:
+        # No sub-sections at all — nothing left after removing the summary
+        return ""
+
+    # Keep title line + everything from the first ## onwards
+    result_lines = []
+    if title_idx is not None:
+        result_lines.append(lines[title_idx])
+    result_lines.extend(lines[first_section_idx:])
+    return "\n".join(result_lines).strip()
+
+
 def detect_sections(text: str) -> list[tuple[int, str, int]]:
     """Debug helper: list every ``#``-``###`` heading as ``(level, title, line)``."""
     sections: list[tuple[int, str, int]] = []
