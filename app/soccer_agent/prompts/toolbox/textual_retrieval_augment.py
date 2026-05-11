@@ -17,15 +17,16 @@ def get_textual_retrieval_augment_prompt_template() -> ChatPromptTemplate:
             ### INPUT FORMAT
             The SEARCHING RESULT will be provided as a structured list of text snippets/JSON objects containing the relevant facts.
 
-            ### OUTPUT FORMAT
-            Return a JSON object with exactly two fields:
-            - "answer": the complete answer based solely on the SEARCHING RESULT. If data is insufficient, explain what is missing.
-            - "has_sufficient_info": true ONLY if every entity was found AND the data fully answers the query. Set false if any entity is listed as NOT FOUND, if key facts are missing, or if you are uncertain.
-
-            If the question is not related to soccer/football, set answer to 'I can only answer questions related to soccer/football topics.' and has_sufficient_info to true.
+            If the question is not related to soccer/football, state that you can only answer questions related to soccer/football topics.
 
             ### REQUIREMENTS
             The answer **must be strictly based** on the information provided in the **SEARCHING RESULT**. Do not add, omit, or infer any information.
+
+            ### OUTPUT FORMAT INSTRUCTIONS
+            You must provide your response in a structured format with the following fields:
+            1. **answer**: The final synthesized answer based on the provided search results.
+            2. **has_sufficient_info**: Set this to `true` if the search results provided enough information to fully and accurately answer the user's query. Set to `false` if the information is missing, incomplete, or if you had to rely on web fallback indicators.
+            3. **entity_types**: If the search results indicate that an entity is missing from the database (e.g., "NOT FOUND INFORMATION FOR..."), or if the context suggests the entity is new, you MUST classify it. Map the entity name to one of: 'player', 'team', 'venue', 'referee'. If all entities are found and accounted for, leave this dictionary empty.
 
             ### USER QUERY
             {query}
