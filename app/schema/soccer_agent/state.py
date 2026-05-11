@@ -21,7 +21,9 @@ class AgentState(CopilotKitState):
     tool_calls_history: Annotated[List[ToolCall], operator.add] # History of tool calls
     tool_results_history: Annotated[List[ToolMessage], operator.add] # History of tool results
     conversation_history: Optional[str] # Optional conversation history for context
-    retrived_cases: Optional[List[str]] # Few-shot planning examples retrieved from case bank
+    retrieved_cases: Optional[List[str]] # Few-shot planning examples retrieved from case bank
+    recent_msgs_for_qu: Optional[List[Any]] # Passed from history to understanding
+    effective_memory: Optional[Any] # Passed from history to understanding
 
 class WorkerState(CopilotKitState):
     """State for individual tool chain execution workers. It is derived from CopilotKitState, which provides 'messages' list to store the conversation history"""
