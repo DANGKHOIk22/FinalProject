@@ -33,6 +33,7 @@ from app.soccer_agent.toolbox import (
     segment,
     frame_selection,
     commentary_generation,
+    web_news_search,
 )
 from app.schema.soccer_agent.state import PlanningOutput, AgentState, WorkerState
 from app.schema.chat import ChatRequest
@@ -80,6 +81,7 @@ class SoccerAgent:
             "segment": segment(),
             "frame_selection": frame_selection(),
             "commentary_generation": commentary_generation(),
+            "web_news_search": web_news_search(),
         }
 
         # List of all tools
@@ -398,6 +400,7 @@ class SoccerAgent:
         
         format_instructions = self.planning_parser.get_format_instructions()
         planning_agent_prompt_template = get_planning_prompt_template()
+        from datetime import date
         planning_agent_prompt = planning_agent_prompt_template.invoke({
             "toolbox_descriptions": tool_descriptions,
             "format_instructions": format_instructions,
@@ -405,6 +408,7 @@ class SoccerAgent:
             "additional_material": additional_material,
             "conversation_history": conversation_history,
             "retrieved_cases": state.get("retrieved_cases") or "",
+            "current_date": date.today().isoformat(),
         })
             
         # Modify the config metadata to skip emit planning agent response

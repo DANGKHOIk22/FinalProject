@@ -17,6 +17,7 @@ from langsmith import get_current_run_tree
 from app.soccer_agent.prompts.toolbox.commentary_generation import get_commentary_generation_prompt_template
 from app.schema.match import Annotation
 from app.cache.standard_cache import standard_cache
+from app.soccer_agent.toolbox._config_loader import tool_description
 
 
 class CommentaryGenerationInput(BaseModel):
@@ -57,7 +58,7 @@ class CommentaryGenerationTool(BaseTool):
     _vlm: Any = PrivateAttr()
 
     def __init__(self):
-        super().__init__()
+        super().__init__(description=tool_description("commentary_generation"))
         self._vlm = get_llm("tool")
 
     def _run(

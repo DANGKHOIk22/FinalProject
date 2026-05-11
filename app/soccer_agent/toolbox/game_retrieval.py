@@ -3,6 +3,8 @@ import logging
 from dataclasses import dataclass
 from typing import List, Type, Optional, Literal, Annotated, Union, Any, Tuple
 
+from app.soccer_agent.toolbox._config_loader import tool_description
+
 from pydantic import BaseModel, Field, PrivateAttr
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.output_parsers import PydanticOutputParser
@@ -217,7 +219,7 @@ class GameInfoRetrievalTool(BaseTool):
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
 
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(description=tool_description("game_info_retrieval"))
         self._llm = get_llm("retrieval-augment")
         self._collection = _get_collection()
         self._finder = _GameFinder(self._llm, self._collection)
@@ -289,7 +291,7 @@ class GameHistoryRetrievalTool(BaseTool):
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
 
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(description=tool_description("game_history_retrieval"))
         self._llm = get_llm("retrieval-augment")
         self._collection = _get_collection()
         self._finder = _GameFinder(self._llm, self._collection)

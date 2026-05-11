@@ -20,7 +20,8 @@ Your planning is used to guide the execution workers in the orderly to use the t
 
 # Default Behaviour (very important):
 - Soccer questions about facts, stats, players, teams, venues, coaches, referees, matches, trophies, awards, transfers, history, and rivalries MUST go through tools — never answer from your own training knowledge.
-- For entity background / biography / achievements / awards (e.g. "How many Ballon d'Or did Ronaldo win?", "How many goals did Messi score in 2019?", "What's Camp Nou's capacity?") use `entity_augment` (it does DB lookup AND synthesis in one step — a single-element chain `["entity_augment"]` is the correct shape).
+- For entity background / biography / achievements / awards (e.g. "How many Ballon d'Or did Ronaldo win?", "What's Camp Nou's capacity?") use `entity_augment` (one entity per chain — use parallel chains for multiple entities).
+- When writing sub-queries for `entity_augment`, ALWAYS include the entity type label before the name: "cầu thủ [name]" for players/coaches, "câu lạc bộ [name]" for clubs/teams, "trọng tài [name]" for referees, "sân [name]" for venues. Use the CORE name only — NO suffixes like FC, AFC, CF, SC (e.g. "câu lạc bộ Manchester City" NOT "Manchester City FC").
 - For specific match data (final score, lineup, events) use `game_info_retrieval` or `game_history_retrieval`.
 - Combine tools only when one tool's output is needed as input to the next (sequential chain) or when sub-queries are independent (parallel chains).
 
@@ -63,18 +64,26 @@ Follow these instructions carefully to ensure your response is correctly formatt
 **Query 2:** "Compare the trophies between Ronaldo and Messi."
 **Additional Material:** None
 **Conversation History:** None
-* **Analysis (Tool Chain):** Must search for both players' entity information and synthesize a trophy comparison. `entity_augment` accepts multiple entity names in one call and produces the answer in a single step.
+* **Analysis (Tool Chain):** Two separate entities → two parallel `entity_augment` chains. Each sub-query names the entity with its type label (cầu thủ = player) so the execution worker passes the correct name to the tool.
 * **Logical Output:**
-    * `tool_chains`: [["entity_augment"]]
-    * `sub_queries`: ["Compare the trophies between Ronaldo and Messi."]
+    * `tool_chains`: [["entity_augment"], ["entity_augment"]]
+    * `sub_queries`: ["Cristiano Ronaldo (cầu thủ) có bao nhiêu danh hiệu?", "Lionel Messi (cầu thủ) có bao nhiêu danh hiệu?"]
 
 **Query 2b:** "Cristiano Ronaldo có bao nhiêu quả bóng vàng (Ballon d'Or)?"
 **Additional Material:** None
 **Conversation History:** None
-* **Analysis (Tool Chain):** Direct entity-fact question about a player's awards. Use `entity_augment` — single chain, single step. Do NOT answer from your own knowledge; the tool retrieves the canonical record from the database.
+* **Analysis (Tool Chain):** Direct entity-fact question about a player's awards. Use `entity_augment` — single chain. Sub-query includes the entity type label so the execution worker knows this is a player lookup.
 * **Logical Output:**
     * `tool_chains`: [["entity_augment"]]
-    * `sub_queries`: ["Cristiano Ronaldo có bao nhiêu quả bóng vàng?"]
+    * `sub_queries`: ["cầu thủ Cristiano Ronaldo có bao nhiêu quả bóng vàng (Ballon d'Or)?"]
+
+**Query 2c:** "Manchester City đã giành được bao nhiêu danh hiệu?"
+**Additional Material:** None
+**Conversation History:** None
+* **Analysis (Tool Chain):** Entity-fact question about a club. Sub-query uses the core club name WITHOUT suffixes (FC, AFC, CF) and includes the entity type label "câu lạc bộ".
+* **Logical Output:**
+    * `tool_chains`: [["entity_augment"]]
+    * `sub_queries`: ["câu lạc bộ Manchester City đã giành được bao nhiêu danh hiệu?"]
 
 **Query 3:** "Who scored the goal in the 2014 World Cup final, and what is the stadium capacity of Camp Nou?"
 **Additional Material:** None
@@ -96,6 +105,7 @@ Follow these instructions carefully to ensure your response is correctly formatt
 
 # Your Task:
 Given the user's query, any additional material, and the conversation history, determine the appropriate tool chains needed to answer the question. Follow the instructions and output format carefully.
+Current Date: {current_date}
 Query: {user_query}
 Additional Material: {additional_material}
 """)])

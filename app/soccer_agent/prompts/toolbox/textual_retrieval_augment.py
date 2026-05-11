@@ -1,6 +1,7 @@
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 from langchain_core.messages import SystemMessage
 
+
 def get_textual_retrieval_augment_prompt_template() -> ChatPromptTemplate:
     """Create a prompt template for synthesizing information from retrieved soccer-related texts.
     It is used in the 'textual_retrieval_augment' tool."""
@@ -14,16 +15,17 @@ def get_textual_retrieval_augment_prompt_template() -> ChatPromptTemplate:
             After synthesizing the information related to the entities identified in the user's query, your role is to compile that raw information into a complete and accurate final answer.
 
             ### INPUT FORMAT
-            The SEARCHING RESULT will be provided as a structured list of text snippets/JSON objects containing the relevant facts."
+            The SEARCHING RESULT will be provided as a structured list of text snippets/JSON objects containing the relevant facts.
 
             ### OUTPUT FORMAT
-            If the user's question is about a soccer/football topic, the answer must consist of two sections, formatted as follows:
-            1. Information Synthesis: List the pieces of information relevant to the user's question and explain the reason you selected each piece.
-            2. Final Answer: Write the complete answer based solely on the information listed in section 1. If the provided data is insufficient to answer the question, you must explain the missing data/facts that prevent you from answering.
-            If the user's question is not related to soccer/football topics, respond with 'I can only answer questions related to soccer/football topics.'
-                
+            Return a JSON object with exactly two fields:
+            - "answer": the complete answer based solely on the SEARCHING RESULT. If data is insufficient, explain what is missing.
+            - "has_sufficient_info": true ONLY if every entity was found AND the data fully answers the query. Set false if any entity is listed as NOT FOUND, if key facts are missing, or if you are uncertain.
+
+            If the question is not related to soccer/football, set answer to 'I can only answer questions related to soccer/football topics.' and has_sufficient_info to true.
+
             ### REQUIREMENTS
-            The final answer **must be strictly based** on the information provided in the **SEARCHING RESULT**. Do not add, omit, or infer any information.
+            The answer **must be strictly based** on the information provided in the **SEARCHING RESULT**. Do not add, omit, or infer any information.
 
             ### USER QUERY
             {query}

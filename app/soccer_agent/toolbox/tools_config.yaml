@@ -1,0 +1,110 @@
+# Tool configuration for Soccer Agent toolbox.
+# Each entry declares the tool name, a short description (shown to the planning LLM),
+# and per-input descriptions (shown in the tool schema).
+
+tools:
+
+  entity_augment:
+    description: >
+      Look up a soccer entity (player, team, venue, or referee) in the local knowledge base
+      and synthesise a final answer in one step. If the local DB is insufficient, automatically
+      falls back to fetching the entity's Wikipedia page via Tavily and saves the result to DB.
+      Use for: player biography, career history, achievements, awards, trophies, season-level stats,
+      transfer history, club history, stadium facts, coach profile, referee profile, and entity comparisons.
+      Do NOT use for: current news, live scores, upcoming fixtures, or recent events — use web_news_search.
+      Do NOT use for: specific historical match data (score, lineup, events) — use game_info_retrieval or game_history_retrieval.
+      IMPORTANT: Pass only ONE entity per call. If the user asks about multiple entities, use parallel chains.
+    inputs:
+      entity_names: >
+        List containing exactly ONE soccer entity name (player, team, venue, or referee).
+        Rules:
+        - Core name only — DO NOT include suffixes FC, AFC, CF, SC, SSC, AC, EC, FK or prefixes FC, AFC.
+          Write "Manchester City" not "Manchester City FC", "Barcelona" not "FC Barcelona".
+        - Capitalize the first letter of each word.
+        - No raw questions, pronouns, or type labels — just the name.
+        Examples: ["Lionel Messi"], ["Manchester City"], ["Old Trafford"], ["Howard Webb"].
+      query: >
+        The user's question or a focused retrieval query used to shape the final answer.
+
+  web_news_search:
+    description: >
+      Search the web for recent soccer/football news articles (transfers, injuries, match results,
+      upcoming fixtures, league standings updates, manager appointments, etc.).
+      Use when the user asks about anything that requires up-to-date information not in the
+      static knowledge base.
+      Do NOT use for: player career bios or team founding history — use entity_augment.
+      Do NOT use for: specific historical match data — use game tools.
+    inputs:
+      query: >
+        Specific news search query including the entity name and news angle.
+        Examples: "Erling Haaland injury update", "Real Madrid summer transfer news",
+        "Premier League top scorer 2025".
+      time_range: >
+        Recency filter: "day" (last 24 h, breaking news), "week" (last 7 days, default),
+        "month" (last 30 days, background context).
+
+  game_info_retrieval:
+    description: >
+      Retrieve static pre-match and post-match summary data for a specific match:
+      teams, date, venue, final score, starting lineups, formations, substitutions, attendance.
+      Use when the question asks for match metadata, final result, or who played/started.
+      Do NOT use for: in-game events (goals, cards, substitution timestamps) — use game_history_retrieval.
+      Do NOT use for: player career stats across seasons — use entity_augment.
+    inputs:
+      query: >
+        A natural-language description of the match to look up.
+        Should include team names and the match date or season for best retrieval accuracy.
+        Example: "Arsenal vs Chelsea 2024-03-16", "Champions League final 2023".
+
+  game_history_retrieval:
+    description: >
+      Retrieve the detailed in-game event log for a specific match: goal timestamps and scorers,
+      yellow/red cards, substitution events, and other match incidents.
+      Use when the question asks about who scored, when a goal was scored, which players
+      received cards, or other in-game events.
+      Do NOT use for: pre-match lineup or static match summary — use game_info_retrieval.
+    inputs:
+      query: >
+        A natural-language description of the match to look up.
+        Include team names and date/season.
+        Example: "goals scored in Man United vs Liverpool 2024-04-07".
+
+  choice_selection:
+    description: >
+      Select the single best option from a list of candidates given a goal or criterion.
+      Used internally by other tools; rarely invoked directly by the planning LLM.
+    inputs:
+      goal: >
+        The selection objective — what property or fit the best option must satisfy.
+      choices: >
+        List of candidate items to choose from.
+
+  segment:
+    description: >
+      Segment an image to detect and locate objects or regions using GroundingDINO.
+      Produces bounding-box crops for downstream visual tools.
+      Requires visual media input (image URL or path).
+    inputs:
+      image_path: >
+        Path or URL to the input image to segment.
+      text_prompt: >
+        Text description of the objects to detect and segment (e.g. "soccer player", "ball").
+
+  commentary_generation:
+    description: >
+      Generate natural-language commentary or description for a visual soccer scene (image or video frame).
+      Use when the user asks what is happening in an image, or requests commentary on a play.
+      Requires visual media input.
+    inputs:
+      image_path: >
+        Path or URL to the image or frame to describe.
+
+  entity_recognition:
+    description: >
+      Identify a specific soccer player from a cropped image region using face/body recognition (DeepFace).
+      Must receive a cropped image — typically the output of the segment tool.
+      Use only after segment has isolated the relevant region.
+      Requires visual media input.
+    inputs:
+      image_path: >
+        Path or URL to the cropped image region containing the player to identify.

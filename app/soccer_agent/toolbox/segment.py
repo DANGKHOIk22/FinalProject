@@ -17,6 +17,7 @@ from langchain.chat_models import BaseChatModel
 from langchain_core.callbacks import CallbackManagerForToolRun
 from app.config.config import SEGMENT_IMAGE_FOLDER
 from app.config import settings
+from app.soccer_agent.toolbox._config_loader import tool_description
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ class SegmentTool(BaseTool):
     _client: Any = PrivateAttr(default=None)
 
     def __init__(self, llm: Optional[BaseChatModel] = None):
-        super().__init__()
+        super().__init__(description=tool_description("segment"))
         self._initialize_endpoint()
         os.makedirs(SEGMENT_IMAGE_FOLDER, exist_ok=True)
     

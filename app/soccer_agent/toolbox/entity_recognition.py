@@ -22,6 +22,7 @@ from app.config.config import QDRANT_SEARCH_SCORE_THRESHOLD as THRESHOLD
 from app.schema.textual_entity_search import SearchingResult
 from app.schema.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
 from app.cache.standard_cache import standard_cache
+from app.soccer_agent.toolbox._config_loader import tool_description
 
 
 # Setup logger
@@ -53,7 +54,7 @@ class EntityRecognitionTool(BaseTool):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
     def __init__(self, **data):
-        super().__init__(**data)
+        super().__init__(description=tool_description("entity_recognition"), **data)
         self._initialize_clients()
     
     def _initialize_clients(self):
