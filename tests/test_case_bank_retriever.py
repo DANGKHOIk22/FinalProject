@@ -32,7 +32,7 @@ class TestRetrieve:
         with patch("app.soccer_agent.case_bank.retriever.GoogleGenerativeAIEmbeddings"):
             r = CaseBankRetriever()
         r._embeddings = MagicMock()
-        r._embeddings.embed_query.return_value = [0.1] * 768
+        r._embeddings.aembed_query = AsyncMock(return_value=[0.1] * 768)
         return r
 
     @pytest.mark.asyncio
