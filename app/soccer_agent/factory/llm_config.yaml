@@ -2,102 +2,61 @@ model_list:
   # ── Planning: heavy reasoning, query decomposition ───────────────────────────
   - model_name: planning
     litellm_params:
-      model: gemini/gemini-3.1-flash-lite-preview
-      api_key: os.environ/GOOGLE_API_KEY
-      temperature: 1.0
-      top_p: 0.95
+      model: openai/gpt-5.4-nano
+      api_key: os.environ/OPENAI_API_KEY
       max_completion_tokens: 10000
-      thinking_level: high
+      reasoning_effort: high
       stream: false
-
-  - model_name: planning-fallback
-    litellm_params:
-      model: gemini/gemini-2.5-flash
-      api_key: os.environ/GOOGLE_API_KEY
-      temperature: 0.2
-      top_p: 0.95
-      max_completion_tokens: 10000
-
 
   # ── Execution: iterative tool calling inside workers ─────────────────────────
   - model_name: execution
     litellm_params:
-      model: gemini/gemini-3.1-flash-lite-preview
-      api_key: os.environ/GOOGLE_API_KEY
-      temperature: 1.0
+      model: openai/gpt-5.4-nano
+      api_key: os.environ/OPENAI_API_KEY
+      temperature: 0.5
       top_p: 0.95
       max_completion_tokens: 5000
-      # thinking_level: medium
       stream: false
-
-  - model_name: execution-fallback
-    litellm_params:
-      model: gemini/gemini-2.5-flash
-      api_key: os.environ/GOOGLE_API_KEY
-      temperature: 0.2
-      top_p: 0.95
-      max_completion_tokens: 5000
 
   # ── Retrieval-Augment: retrieve and augment information ─────────────────────
   - model_name: retrieval-augment
     litellm_params:
-      model: gemini/gemini-3.1-flash-lite-preview
-      api_key: os.environ/GOOGLE_API_KEY
-      temperature: 1.0
+      model: openai/gpt-5.4-nano
+      api_key: os.environ/OPENAI_API_KEY
+      temperature: 0.5
       top_p: 0.95
       max_completion_tokens: 10000
-      # thinking_level: medium
       stream: true
-
-  - model_name: retrieval-augment-fallback
-    litellm_params:
-      model: gemini/gemini-2.5-flash
-      api_key: os.environ/GOOGLE_API_KEY
-      temperature: 1.0
-      top_p: 0.95
-      max_completion_tokens: 10000
-
 
   # ── Aggregator: synthesise parallel worker results ───────────────────────────
   - model_name: aggregator
     litellm_params:
-      model: gemini/gemini-3.1-flash-lite-preview
-      api_key: os.environ/GOOGLE_API_KEY
-      temperature: 1.0
-      top_p: 0.95
+      model: openai/gpt-5.4-nano
+      api_key: os.environ/OPENAI_API_KEY
       max_completion_tokens: 50000
-      # thinking_level: low
+      reasoning_effort: medium
       stream: true
-
-  - model_name: aggregator-fallback
-    litellm_params:
-      model: gemini/gemini-2.5-flash
-      api_key: os.environ/GOOGLE_API_KEY
-      temperature: 1.0
-      top_p: 0.95
-      max_completion_tokens: 50000
 
   # ── Tool: shared by tools, query-understanding pipeline, guardrails ───────────
   - model_name: tool
     litellm_params:
-      model: gemini/gemini-2.5-flash-lite-preview-05-20
-      api_key: os.environ/GOOGLE_API_KEY
+      model: openai/gpt-5.4-nano
+      api_key: os.environ/OPENAI_API_KEY
       temperature: 0.2
       top_p: 0.95
       max_completion_tokens: 8000
 
-  - model_name: tool-fallback
+  # ── Fallbacks (Gemini as backup now) ────────────────────────────────────────
+  - model_name: gemini-backup
     litellm_params:
-      model: gemini/gemini-2.5-flash
+      model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
       temperature: 0.2
-      top_p: 0.95
-      max_completion_tokens: 8000
 
 router_settings:
   fallbacks:
-    - planning: [planning-fallback]
-    - execution: [execution-fallback]
-    - retrieval-augment: [retrieval-augment-fallback]
-    - aggregator: [aggregator-fallback]
-    - tool: [tool-fallback]
+    - planning: [gemini-backup]
+    - execution: [gemini-backup]
+    - retrieval-augment: [gemini-backup]
+    - aggregator: [gemini-backup]
+    - tool: [gemini-backup]

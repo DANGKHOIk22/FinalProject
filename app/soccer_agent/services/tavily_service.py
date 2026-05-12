@@ -398,7 +398,7 @@ class TavilyService:
         self,
         query: str,
         time_range: str = "week",
-        max_results: int = 7,
+        max_results: int = 20,
         include_domains: Optional[Iterable[str]] = None,
         score_threshold: float = 0.5,
     ) -> List[dict]:
@@ -412,6 +412,8 @@ class TavilyService:
                 max_results=max_results,
                 search_depth="advanced",
                 include_domains=list(include_domains or _DEFAULT_NEWS_DOMAINS),
+                chunks_per_source=5,
+                
             )
 
         try:
@@ -425,7 +427,7 @@ class TavilyService:
             if (r.get("score") or 0.0) >= score_threshold
         ]
 
-    async def search_general(self, query: str, max_results: int = 3) -> List[dict]:
+    async def search_general(self, query: str, max_results: int = 5) -> List[dict]:
         """Domain-less fallback search — used when extraction fails entirely."""
 
         async def _call(client):

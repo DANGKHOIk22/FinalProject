@@ -2,17 +2,12 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from app.soccer_agent.nodes.memory_saving import SaveToMemoryNode
-from app.soccer_agent.memory.session_memory import SessionMemoryManager
 
 @pytest.fixture
-def mock_session_memory_manager():
-    manager = MagicMock(spec=SessionMemoryManager)
-    manager.add_message_to_cache = AsyncMock()
-    return manager
-
-@pytest.fixture
-def memory_saving_node(mock_session_memory_manager):
-    return SaveToMemoryNode(session_memory_manager=mock_session_memory_manager)
+def memory_saving_node():
+    node = SaveToMemoryNode()
+    node.get_memory = AsyncMock()
+    return node
 
 def test_build_tool_summary_for_memory(memory_saving_node):
     tool_calls = [
@@ -45,9 +40,10 @@ async def test_save_to_memory_node(mock_create_task, memory_saving_node):
     }
     config = {"metadata": {"thread_id": "test-session"}}
     
+    # Mock get_memory to avoid postgres connection
+    memory_saving_node.get_memory = AsyncMock(return_value=(MagicMock(), MagicMock(), MagicMock()))
+    
     result = await memory_saving_node.save_to_memory_node(state, config)
     
     assert result == {}  # Should return empty dict
-    
-    # We shouldn't await create_task in test directly easily, but we can verify it was called
     mock_create_task.assert_called()

@@ -70,6 +70,8 @@ def get_match_selection_prompt_template() -> ChatPromptTemplate:
         "The given information seems incomplete, but we found the most probable match in the database with this game_id: [The game_id of the **hugely most probable** match]. [Here give some recommendation to complete the information if possible, for example, provide the date or the score of the match, or which team is the home/away team .etc. Use simple and clear words here.]"
 
         2. If no match is significantly more likely among all the candidates, please return all candidate matches with information of league, season, date, time, score, home_team, away_team, venue and referee (without game_id), and explain that the information provided is too vague. For this situation you only need to summarize with a little bit the games and give a brief reply with some short sentences.
+
+        MANDATORY: All text in your response MUST be in ENGLISH.
         """
         )
     ])

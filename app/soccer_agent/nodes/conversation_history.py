@@ -8,14 +8,12 @@ from langchain_core.messages import HumanMessage
 from app.schema.soccer_agent.state import AgentState
 from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
-from app.config.config import SESSION_MEMORY_TOKEN_THRESHOLD, SESSION_MEMORY_RECENT_KEEP
-from app.soccer_agent.memory.session_memory import SessionMemoryManager, SessionMemory
 
 logger = logging.getLogger(__name__)
 
 class ConversationHistoryNode:
-    def __init__(self, session_memory_manager: SessionMemoryManager):
-        self.session_memory_manager = session_memory_manager
+    def __init__(self):
+        pass
 
     async def get_memory(self, session_id: str):
         """Get conversation memory for the given session."""
@@ -101,44 +99,44 @@ class ConversationHistoryNode:
 
             # Build history
             history_text = ""
-            effective_memory = SessionMemory()
             recent_msgs_for_qu = []
 
             if chat_history:
-                raw_history_text = "\n\n### LỊCH SỬ HỘI THOẠI:\n"
-                for msg in chat_history[-10:]:
-                    if hasattr(msg, 'content'):
+                # Filter to only keep real chat turns (Human and AI)
+                # EXCLUDE: ToolMessage, and AIMessage that are just tool calls (no content or has tool_calls)
+                filtered_history = []
+                for msg in chat_history:
+                    msg_type = msg.__class__.__name__
+                    content = msg.content if isinstance(msg.content, str) else ""
+                    
+                    if msg_type == "HumanMessage" and content.strip():
+                        filtered_history.append(msg)
+                    elif msg_type == "AIMessage":
+                        # Only keep AI messages that have actual text and are NOT tool calls
+                        has_tool_calls = hasattr(msg, "tool_calls") and len(msg.tool_calls) > 0
+                        if content.strip() and not has_tool_calls:
+                            filtered_history.append(msg)
+                
+                # Take last 10-15 messages for short-term context
+                recent_msgs_for_qu = filtered_history[-10:]
+                
+                if recent_msgs_for_qu:
+                    raw_history_text = "### LỊCH SỬ HỘI THOẠI GẦN ĐÂY:\n"
+                    for msg in recent_msgs_for_qu:
                         role = "User" if msg.__class__.__name__ == "HumanMessage" else "Assistant"
                         raw_history_text += f"{role}: {msg.content}\n"
-
-                token_count = self.session_memory_manager.count_tokens(raw_history_text)
-
-                if token_count > SESSION_MEMORY_TOKEN_THRESHOLD:
-                    # Path B: history exceeds threshold — use SessionMemory + recent slice
-                    old_msgs = chat_history[:-(SESSION_MEMORY_RECENT_KEEP-1)]
-                    recent_msgs_for_qu = chat_history[-SESSION_MEMORY_RECENT_KEEP:]
-
-                    cached_memory = await self.session_memory_manager.load_cached_memory(thread_id)
-                    if cached_memory is None:
-                        if old_msgs:
-                            asyncio.create_task(
-                                self.session_memory_manager.background_summarise(thread_id, old_msgs)
-                            )
-                    else:
-                        effective_memory = cached_memory
-                        load_from_cache = True
-
-                    history_text = self.session_memory_manager.format_compressed_history(
-                        effective_memory, recent_msgs_for_qu
-                    )
-                    pass_full_history = False
-                    logger.info(f"[Path B] token_count={token_count}.")
-                else:
-                    # Path A: full history fits — pass all as recent context
-                    recent_msgs_for_qu = chat_history
                     history_text = raw_history_text
-                    logger.info(f"[Path A] token_count={token_count}.")
                     pass_full_history = True
+                
+                logger.info(f"[History] Retrieved {len(recent_msgs_for_qu)} clean chat turns.")
+
+            observation.update(
+                output={
+                    "chat_history": chat_history or [],
+                    "history_text": history_text or "No conversation history.",
+                    "recent_msgs_for_qu": recent_msgs_for_qu
+                }
+            )
 
             observation.update(
                 output={
@@ -160,5 +158,9 @@ class ConversationHistoryNode:
         return {
             "conversation_history": history_text,
             "recent_msgs_for_qu": recent_msgs_for_qu,
-            "effective_memory": effective_memory
+            "effective_memory": None,
+            # Reset history fields to prevent accumulation across turns in the same thread_id
+            "parallel_results": [],
+            "tool_calls_history": [],
+            "tool_results_history": []
         }

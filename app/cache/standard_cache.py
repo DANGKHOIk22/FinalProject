@@ -49,7 +49,10 @@ class StandardCache:
         
         prefix = "soccer_agent:cache"
         key = f"{prefix}:{module_name}:{func_name}:{dumped_args}:{dumped_kwargs}"
-        logger.info(f"Checking Standard Cache for [{module_name}.{func_name}] with key: {key}")
+        
+        # Truncate long key for display
+        display_key = (key[:100] + "...") if len(key) > 100 else key
+        logger.info(f"Checking Standard Cache for [{module_name}.{func_name}] with key: {display_key}")
 
         try:
             cached_result = self.client.get(key)
@@ -136,7 +139,9 @@ class StandardCache:
             return
 
         self.set_key(key, serialized_result, ttl)
-        logger.info(f"💾 Standard Cache STORED for key: {key}")
+        # Truncate long key for display
+        display_key = (key[:100] + "...") if len(key) > 100 else key
+        logger.info(f"💾 Standard Cache STORED for key: {display_key}")
 
     def set_key(self, key: str, value: Any, ttl: int = 60 * 60):
         self.client.set(key, value)

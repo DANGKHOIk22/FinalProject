@@ -10,6 +10,8 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 from app.config.settings import settings
 
+from app.cache.standard_cache import standard_cache
+
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = settings.QDRANT_CASE_BANK_COLLECTION_NAME
@@ -45,8 +47,9 @@ class CaseBankRetriever:
             )
         return self._client
 
+    @standard_cache.cache(ttl=60*60*24) # Cache embeddings for 24h
     async def _embed(self, text: str) -> List[float]:
-        return await asyncio.to_thread(self._embeddings.embed_query, text)
+        return await self._embeddings.aembed_query(text)
 
     async def _search(
         self, vector: List[float], has_media: bool, label: str, top_k: int

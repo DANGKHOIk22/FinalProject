@@ -59,7 +59,7 @@ class WorkerNodes:
         sub_queries = planning_output.sub_queries if planning_output else []
         need_call_tools = planning_output.need_call_tools if planning_output else True
         messages = state.get("messages", [])
-        claried_query = state.get("claried_query") or messages[-1].content if messages else ""
+        clarified_query = state.get("clarified_query") or messages[-1].content if messages else ""
         
         # Short-circuit to aggregator if planner says no tools needed, or no chains provided
         if not need_call_tools or not tool_chains:
@@ -68,7 +68,7 @@ class WorkerNodes:
             
         sends = []
         for idx, chain in enumerate(tool_chains):
-            sub_query = sub_queries[idx] if idx < len(sub_queries) else claried_query
+            sub_query = sub_queries[idx] if idx < len(sub_queries) else clarified_query
             worker_state = {
                 "messages": [], # Start with empty messages for the worker;
                 "sub_query": sub_query,
@@ -77,8 +77,10 @@ class WorkerNodes:
                 "tool_calls_history": [],
                 "tool_results_history": [],
                 "last_tool_artifact": None,
-                "parallel_results": []
+                "parallel_results": [],
+                "time_context": state.get("time_context")
             }
+            logger.info(f"🚀 Triggering worker {idx}: sub_query='{sub_query}', chain={chain}")
             sends.append(Send("worker_graph", worker_state))
         return sends
 
@@ -143,7 +145,8 @@ class WorkerNodes:
             execution_prompt = execution_prompt_template.format(
                 sub_query=sub_query,
                 additional_material=additional_material_str,
-                tool_chain=" -> ".join(tool_chain) if tool_chain else "No tools needed"
+                tool_chain=" -> ".join(tool_chain) if tool_chain else "No tools needed",
+                time_context=state.get("time_context") or "Unknown"
             )
             messages = [execution_prompt]
         

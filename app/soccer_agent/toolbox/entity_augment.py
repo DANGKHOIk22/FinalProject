@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 import logging
 import re
 from typing import Any, List, Literal, Optional, Tuple, Type
@@ -27,6 +28,7 @@ from app.soccer_agent.prompts.toolbox.textual_retrieval_augment import (
 from app.soccer_agent.services.content_cleaner import clean_wiki_markdown, extract_summary, strip_summary
 from app.soccer_agent.services.tavily_service import TavilyService
 from app.soccer_agent.toolbox._config_loader import tool_description
+from app.soccer_agent.memory.long_term_memory import long_term_memory_manager
 
 logger = logging.getLogger(__name__)
 
@@ -137,20 +139,21 @@ def _get_tavily() -> TavilyService:
     return _tavily_service
 
 
+class _EntityClassification(BaseModel):
+    entity_name: str = Field(description="Name of the entity found in the text")
+    entity_type: str = Field(description="Type of the entity: 'player', 'team', 'venue', 'referee', or 'unknown'")
+
 class _AugmentedAnswer(BaseModel):
     answer: str = Field(description="Answer synthesized from the provided data (DB or Web content)")
     has_sufficient_info: bool = Field(
-        default=True,
         description=(
             "True only when the provided data fully answers the query. "
             "False if data is incomplete, entity is not found, or answer is uncertain."
         )
     )
-    entity_types: dict[str, str] = Field(
-        default_factory=dict,
+    unknown_entities: List[_EntityClassification] = Field(
         description=(
-            "For each entity name that was NOT found in the local database, classify its type. "
-            "Keys are entity names; values are one of: 'player', 'team', 'venue', 'referee'. "
+            "List of entity classifications for entities that were NOT found in the local database. "
             "Leave empty if all entities were found or if no classification is needed."
         ),
     )
@@ -178,6 +181,10 @@ class EntityAugmentInput(BaseModel):
         description=(
             "The user's question (or a well-defined retrieval query) used to focus the final answer."
         ),
+    )
+    time_context: Optional[str] = Field(
+        default=None,
+        description="Current date and time for temporal reasoning."
     )
 
 
@@ -208,14 +215,16 @@ class EntityAugmentTool(BaseTool):
         self,
         entity_names: List[str],
         query: str,
+        time_context: Optional[str] = None,
         _run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, SearchingResult]:
-        return asyncio.run(self._arun(entity_names, query))
+        return asyncio.run(self._arun(entity_names, query, time_context))
 
     async def _arun(
         self,
         entity_names: List[str],
         query: str,
+        time_context: Optional[str] = None,
         _run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> Tuple[str, SearchingResult]:
         run_tree = get_current_run_tree()
@@ -233,14 +242,20 @@ class EntityAugmentTool(BaseTool):
             entities = SoccerEntities(**{k: (v if v else None) for k, v in buckets.items()})
             logger.info(f"Received entities for lookup: {entities}")
 
-            searching_result = EntityAugmentTool._query_database(entities)
+            searching_result = self._query_database(entities)
             logger.info(
                 f"DB lookup: found={len(searching_result.found_entities)}, "
                 f"missing={len(searching_result.missing_entities)}"
             )
 
+            # --- NEW Logic: If NO entities found in DB at all, skip DB answer attempt and go to Tavily ---
+            if not searching_result.found_entities:
+                logger.info("❌ No entities found in DB — jumping straight to Tavily fallback.")
+                web_answer = await self._tavily_fallback(query, searching_result, time_context)
+                return web_answer, searching_result
+
             # Step 2: LLM structured answer from DB data
-            db_answer = await self._generate_answer_from_db(query, searching_result)
+            db_answer = await self._generate_answer_from_db(query, searching_result, time_context)
             logger.info(f"DB answer sufficient={db_answer.has_sufficient_info}")
 
             if db_answer.has_sufficient_info:
@@ -249,7 +264,7 @@ class EntityAugmentTool(BaseTool):
 
             # Step 3: Tavily fallback
             logger.info("DB answer insufficient — running Tavily fallback.")
-            web_answer = await self._tavily_fallback(query, searching_result)
+            web_answer = await self._tavily_fallback(query, searching_result, time_context)
             return web_answer, searching_result
 
         except Exception as e:
@@ -267,27 +282,27 @@ class EntityAugmentTool(BaseTool):
     # Step 2: LLM answer from DB with structured output
     # ------------------------------------------------------------------
 
-    async def _generate_answer_from_db(self, query: str, searching_result: SearchingResult) -> _AugmentedAnswer:
+    async def _generate_answer_from_db(self, query: str, searching_result: SearchingResult, time_context: Optional[str] = None) -> _AugmentedAnswer:
         prompt = get_textual_retrieval_augment_prompt_template()
         structured_llm = self._llm.with_structured_output(_AugmentedAnswer)
         chain = prompt | structured_llm
         searching_text = self._aggregate_searching_results(searching_result)
         try:
-            result = await chain.ainvoke({"query": query, "searching_result": searching_text})
+            result = await chain.ainvoke({"query": query, "searching_result": searching_text, "time_context": time_context or "Unknown"})
             if isinstance(result, _AugmentedAnswer):
                 return result
             # Unexpected output type — treat as insufficient
             logger.warning(f"Unexpected structured output type: {type(result)}")
-            return _AugmentedAnswer(answer=str(result), has_sufficient_info=False)
+            return _AugmentedAnswer(answer=str(result), has_sufficient_info=False, unknown_entities=[])
         except Exception as e:
             logger.warning(f"Structured output failed ({e}), defaulting to Tavily fallback.")
-            return _AugmentedAnswer(answer="", has_sufficient_info=False)
+            return _AugmentedAnswer(answer="", has_sufficient_info=False, unknown_entities=[])
 
     # ------------------------------------------------------------------
     # Step 3: Tavily fallback
     # ------------------------------------------------------------------
 
-    async def _tavily_fallback(self, query: str, searching_result: SearchingResult) -> str:
+    async def _tavily_fallback(self, query: str, searching_result: SearchingResult, time_context: Optional[str] = None) -> str:
         service = _get_tavily()
 
         # Step 1: Resolve entity
@@ -310,18 +325,30 @@ class EntityAugmentTool(BaseTool):
             wiki_url = await service.find_wiki_url(name)
             logger.info(f"[tavily_fallback] Step 2 — find_wiki_url result: {wiki_url}")
 
-        # Step 3a: No URL → search_general only, skip DB save
+        # Step 3a: No URL → search_general only
         if not wiki_url:
-            logger.info(f"[tavily_fallback] Step 3a — no URL, falling back to search_general (no DB save)")
+            logger.info(f"[tavily_fallback] Step 3a — no URL, falling back to search_general")
             fallback = await service.search_general(name)
             if not fallback:
                 logger.warning(f"[tavily_fallback] search_general returned empty for '{name}'")
                 return "Không tìm thấy thông tin bổ sung từ web."
+            
             logger.info(f"[tavily_fallback] search_general returned {len(fallback)} results")
-            web_context = f"## {name}\nSource: web search\n" + "\n".join(
-                r.get("content", "") for r in fallback[:2] if r.get("content")
+            web_context = f"## {name}\nSource: web search (general)\n" + "\n".join(
+                r.get("content", "") for r in fallback[:3] if r.get("content")
             )
-            return await self._generate_web_answer(query, web_context)
+            # Pack payload for SaveToMemoryNode (general search, no wiki URL)
+            resolved_type = getattr(db_entity, "ENTITY_TYPE", "unknown").lower() if db_entity else "unknown"
+            searching_result._upsert_payload = {
+                "source": "general_search",
+                "name": name,
+                "entity_type": resolved_type,
+                "is_missing": is_missing,
+                "wiki_url": "",
+                "cleaned_content": web_context,
+                "images": [],
+            }
+            return await self._generate_web_answer(query, web_context, time_context)
 
         # Step 3b: Extract wiki page
         logger.info(f"[tavily_fallback] Step 3b — extracting wiki: {wiki_url}")
@@ -331,7 +358,7 @@ class EntityAugmentTool(BaseTool):
             logger.info(f"[tavily_fallback] Step 3b — extract OK, cleaned_len={len(cleaned)}, images={len(extract_result.images)}")
             web_context = f"## {name}\nSource: {wiki_url}\n{cleaned}"
         else:
-            logger.warning(f"[tavily_fallback] Step 3b — extract failed, falling back to search_general (no DB save)")
+            logger.warning(f"[tavily_fallback] Step 3b — extract failed, falling back to search_general")
             fallback = await service.search_general(name)
             if not fallback:
                 logger.warning(f"[tavily_fallback] search_general also returned empty for '{name}'")
@@ -340,113 +367,84 @@ class EntityAugmentTool(BaseTool):
             web_context = f"## {name}\nSource: web search\n" + "\n".join(
                 r.get("content", "") for r in fallback[:2] if r.get("content")
             )
-            return await self._generate_web_answer(query, web_context)
+            # Pack payload for SaveToMemoryNode (wiki extract failed, general search fallback)
+            resolved_type = getattr(db_entity, "ENTITY_TYPE", "unknown").lower() if db_entity else "unknown"
+            searching_result._upsert_payload = {
+                "source": "general_search",
+                "name": name,
+                "entity_type": resolved_type,
+                "is_missing": is_missing,
+                "wiki_url": wiki_url,
+                "cleaned_content": web_context,
+                "images": [],
+            }
+            return await self._generate_web_answer(query, web_context, time_context)
 
-        # Step 4: Generate answer + classify entity_type for new entities (D14)
-        # Inject a note so the LLM knows which entity is missing and must be classified.
-        llm_context = web_context
+        # Step 4: Generate answer + resolve entity_type
+        # Entity type resolution priority:
+        #   1. If entity exists in DB → use db_entity.ENTITY_TYPE
+        #   2. If missing from DB → ask LLM to classify
+        #   3. If LLM cannot determine → "unknown"
+        resolved_entity_type = ""
+        if not is_missing and db_entity is not None:
+            resolved_entity_type = getattr(db_entity, "ENTITY_TYPE", "").lower()
+        
+        llm_context = f"[LAST_UPDATED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]\n\n" + web_context
         if is_missing:
             llm_context = (
                 f"[CLASSIFICATION REQUIRED: '{name}' is NOT in the local database. "
-                f"You MUST fill entity_types[\"{name}\"] with one of: player, team, venue, referee.]\n\n"
-                + web_context
+                f"You MUST fill unknown_entities with: {{'entity_name': '{name}', 'entity_type': '<player|team|venue|referee>'}}]\n\n"
+                + llm_context
             )
+        
         logger.info(f"[tavily_fallback] Step 4 — generating answer via LLM (is_missing={is_missing})")
         prompt = get_textual_retrieval_augment_prompt_template()
         web_llm = self._llm.with_structured_output(_AugmentedAnswer)
         try:
-            web_result = await (prompt | web_llm).ainvoke({"query": query, "searching_result": llm_context})
+            web_result = await (prompt | web_llm).ainvoke({"query": query, "searching_result": llm_context, "time_context": time_context or "Unknown"})
             answer = web_result.answer if isinstance(web_result, _AugmentedAnswer) else str(web_result)
-            entity_type = web_result.entity_types.get(name, "").lower() if isinstance(web_result, _AugmentedAnswer) else ""
-            logger.info(f"[tavily_fallback] Step 4 — answer_len={len(answer)}, entity_type='{entity_type}'")
+            
+            # Only use LLM's entity_type if we don't already have one from DB
+            if not resolved_entity_type and isinstance(web_result, _AugmentedAnswer):
+                for ent in web_result.unknown_entities:
+                    if ent.entity_name.lower() == name.lower():
+                        resolved_entity_type = ent.entity_type.lower()
+                        break
         except Exception as e:
             logger.warning(f"[tavily_fallback] Step 4 — LLM failed: {e}")
             answer = web_context[:2000]
-            entity_type = ""
+        
+        # Default to "unknown" if still empty
+        if not resolved_entity_type:
+            resolved_entity_type = "unknown"
+        
+        logger.info(f"[tavily_fallback] Step 4 — answer_len={len(answer)}, entity_type='{resolved_entity_type}'")
 
-        # Step 5: Background upsert MongoDB (don't block response)
-        logger.info(f"[tavily_fallback] Step 5 — scheduling background upsert (is_missing={is_missing}, entity_type='{entity_type}')")
-        asyncio.create_task(
-            self._background_upsert(
-                name=name,
-                db_entity=db_entity,
-                is_missing=is_missing,
-                wiki_url=wiki_url,
-                cleaned=cleaned,
-                images=extract_result.images,
-                entity_type=entity_type,
-            )
-        )
+        # Pack upsert metadata into searching_result for SaveToMemoryNode to process
+        searching_result._upsert_payload = {
+            "source": "wiki_extract",
+            "name": name,
+            "entity_type": resolved_entity_type,
+            "is_missing": is_missing,
+            "wiki_url": wiki_url,
+            "cleaned_content": cleaned,
+            "images": extract_result.images,
+        }
 
         return answer
 
-    async def _generate_web_answer(self, query: str, web_context: str) -> str:
+    async def _generate_web_answer(self, query: str, web_context: str, time_context: Optional[str] = None) -> str:
         """Generate answer from web context without DB save (search_general path)."""
         prompt = get_textual_retrieval_augment_prompt_template()
         web_llm = self._llm.with_structured_output(_AugmentedAnswer)
         try:
-            result = await (prompt | web_llm).ainvoke({"query": query, "searching_result": web_context})
+            result = await (prompt | web_llm).ainvoke({"query": query, "searching_result": web_context, "time_context": time_context or "Unknown"})
             return result.answer if isinstance(result, _AugmentedAnswer) else str(result)
         except Exception as e:
             logger.warning(f"Web answer generation failed: {e}")
             return web_context[:2000]
 
-    # ------------------------------------------------------------------
-    # Background DB upsert after Tavily wiki extract
-    # ------------------------------------------------------------------
 
-    async def _background_upsert(
-        self,
-        name: str,
-        db_entity: Optional[Any],
-        is_missing: bool,
-        wiki_url: str,
-        cleaned: str,
-        images: List[str],
-        entity_type: str,
-    ) -> None:
-        """Force-replace (found entity) or insert (missing entity) in MongoDB."""
-        try:
-            import main
-            client = main.mongo_client if hasattr(main, "mongo_client") and main.mongo_client else None
-        except (ImportError, AttributeError):
-            client = None
-
-        if client is None:
-            resolver.default_resolver = resolver.Resolver(configure=False)
-            resolver.default_resolver.nameservers = ["8.8.8.8", "1.1.1.1"]
-            client = pymongo.MongoClient(settings.MONGO_SRV, server_api=ServerApi("1"))
-
-        collection = client[settings.SOCCER_DB_NAME][settings.SOCCER_COLLECTION_NAME]
-
-        try:
-            if not is_missing and db_entity is not None:
-                # Force-replace: rebuild from existing entity, overwrite content fields
-                doc = {k: v for k, v in db_entity.model_dump().items() if k != "_id" and v is not None}
-                doc.pop("INFOBOX", None)
-                doc["SUMMARY"] = extract_summary(cleaned)
-                doc["CONTENT"] = strip_summary(cleaned)
-                doc["IMAGES"] = images
-                collection.replace_one({"NAME": {"$regex": f"^{name}$", "$options": "i"}}, doc)
-                logger.info(f"[upsert] Force-replaced DB entity: {name}")
-            else:
-                # Insert new entity (missing from DB, wiki URL found)
-                if entity_type not in _ENTITY_URL_FIELD:
-                    logger.warning(f"[upsert] Unknown entity_type '{entity_type}' for '{name}', skipping insert")
-                    return
-                url_field = _ENTITY_URL_FIELD[entity_type]
-                doc = {
-                    "NAME": name,
-                    "ENTITY_TYPE": entity_type,
-                    "SUMMARY": extract_summary(cleaned),
-                    "CONTENT": strip_summary(cleaned),
-                    "IMAGES": images,
-                    url_field: wiki_url,
-                }
-                collection.insert_one(doc)
-                logger.info(f"[upsert] Inserted new DB entity: {name} ({entity_type})")
-        except Exception as e:
-            logger.error(f"[upsert] Background DB upsert failed for '{name}': {e}", exc_info=True)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -465,6 +463,8 @@ class EntityAugmentTool(BaseTool):
                 aggregated_text += f"INFOBOX: {entity.INFOBOX}\n"
             if getattr(entity, "CONTENT", None):
                 aggregated_text += f"CONTENT: {entity.CONTENT}\n"
+            if getattr(entity, "LAST_UPDATED", None):
+                aggregated_text += f"LAST_UPDATED: {entity.LAST_UPDATED}\n"
             aggregated_text += "-" * 10 + "\n\n"
 
         if searching_result.missing_entities:
@@ -497,9 +497,8 @@ class EntityAugmentTool(BaseTool):
             logger.warning(f"Failed to parse {entity_type}: {str(e)}")
             raise
 
-    @staticmethod
     @standard_cache.cache(ttl=60 * 60, validatedModel=SearchingResult)
-    def _query_database(soccer_entities: SoccerEntities) -> SearchingResult:
+    def _query_database(self, soccer_entities: SoccerEntities) -> SearchingResult:
         result = SearchingResult()
         try:
             mongo_srv = settings.MONGO_SRV

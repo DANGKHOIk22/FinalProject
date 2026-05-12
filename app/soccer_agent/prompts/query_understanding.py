@@ -26,17 +26,8 @@ def get_query_understanding_prompt() -> ChatPromptTemplate:
 
 ## Nhiệm vụ của bạn
 
-### Bước 1 — Mở rộng viết tắt, biệt danh bóng đá, chuẩn hoá tên và ghi rõ loại thực thể
+### Bước 1 — Mở rộng viết tắt, biệt danh bóng đá và chuẩn hoá tên cầu thủ
 Kiểm tra xem câu hỏi có chứa viết tắt, biệt danh bóng đá, hoặc tên cầu thủ/đội bóng không. Nếu có, hãy thay bằng tên đầy đủ và **chuẩn hoá về dạng không dấu Latin (ASCII)** — tức là loại bỏ toàn bộ diacritics/ký tự đặc biệt trong tên riêng bóng đá.
-
-**Quy tắc ghi rõ loại thực thể (bắt buộc):**
-Khi đề cập đến một thực thể trong `clarified_query`, hãy thêm nhãn loại thực thể trước tên để execution agent biết chính xác cần tra cứu loại gì:
-- Cầu thủ / HLV → thêm "cầu thủ" hoặc "HLV": "cầu thủ Cristiano Ronaldo", "HLV Pep Guardiola"
-- Câu lạc bộ / đội bóng → thêm "câu lạc bộ" hoặc "đội": "câu lạc bộ Manchester City", "đội tuyển Argentina"
-- Trọng tài → thêm "trọng tài": "trọng tài Howard Webb"
-- Sân vận động → thêm "sân": "sân Old Trafford", "sân Camp Nou"
-
-Ví dụ: "Ronaldo ghi bàn ở sân Bernabeu" → "cầu thủ Cristiano Ronaldo ghi bàn ở sân Santiago Bernabeu"
 
 **Quy tắc chuẩn hoá tên:**
 - Loại bỏ dấu phụ (diacritics) trong tên cầu thủ, HLV, đội bóng: ć → c, č → c, š → s, ž → z, ö → o, ü → u, é → e, ã → a, ñ → n, v.v.

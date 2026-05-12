@@ -17,9 +17,17 @@ class AggregatorNode:
         additional_material = ", ".join(additional_material_list) if additional_material_list else "None"
         conversation_history = state.get("conversation_history", "No previous conversation.")
         results = state.get("parallel_results", [])
-
+        
         logger.info("="*70)
         logger.info("🧠 Starting AGGREGATOR STEP")
+
+        # Bypass LLM if only 1 worker result
+        if len(results) == 1:
+            logger.info("⚡ Single worker result detected. Bypassing aggregator LLM.")
+            from langchain_core.messages import AIMessage
+            return {
+                "messages": [AIMessage(content=results[0])],
+            }
             
         if results:
             worker_results_str = "\n".join([f"Worker {i+1} finding:\n{r}\n" for i, r in enumerate(results)])
@@ -28,10 +36,11 @@ class AggregatorNode:
             
         aggregator_prompt_template = get_aggregator_prompt_template()
         aggregator_prompt = aggregator_prompt_template.invoke({
-            "user_query": state.get("claried_query") or user_query,
+            "user_query": state.get("clarified_query") or user_query,
             "additional_material": additional_material,
             "conversation_history": conversation_history,
-            "worker_results": worker_results_str
+            "worker_results": worker_results_str,
+            "time_context": state.get("time_context") or "Unknown"
         })
 
         response = await self.aggregator_llm.ainvoke(

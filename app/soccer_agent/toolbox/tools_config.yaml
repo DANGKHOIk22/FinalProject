@@ -25,6 +25,7 @@ tools:
         Examples: ["Lionel Messi"], ["Manchester City"], ["Old Trafford"], ["Howard Webb"].
       query: >
         The user's question or a focused retrieval query used to shape the final answer.
+        The query MUST be in English regardless of the user's input language.
 
   web_news_search:
     description: >
@@ -37,6 +38,7 @@ tools:
     inputs:
       query: >
         Specific news search query including the entity name and news angle.
+        The query MUST be in English regardless of the user's input language.
         Examples: "Erling Haaland injury update", "Real Madrid summer transfer news",
         "Premier League top scorer 2025".
       time_range: >
@@ -54,6 +56,7 @@ tools:
       query: >
         A natural-language description of the match to look up.
         Should include team names and the match date or season for best retrieval accuracy.
+        The query MUST be in English regardless of the user's input language.
         Example: "Arsenal vs Chelsea 2024-03-16", "Champions League final 2023".
 
   game_history_retrieval:
@@ -67,6 +70,7 @@ tools:
       query: >
         A natural-language description of the match to look up.
         Include team names and date/season.
+        The query MUST be in English regardless of the user's input language.
         Example: "goals scored in Man United vs Liverpool 2024-04-07".
 
   choice_selection:
@@ -89,6 +93,7 @@ tools:
         Path or URL to the input image to segment.
       text_prompt: >
         Text description of the objects to detect and segment (e.g. "soccer player", "ball").
+        The prompt MUST be in English regardless of the user's input language.
 
   commentary_generation:
     description: >

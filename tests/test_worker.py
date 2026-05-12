@@ -1,10 +1,10 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from langchain_core.messages import HumanMessage, AIMessage, ToolCall
-from langgraph.constants import Send
+from langgraph.types import Send
 
 from app.soccer_agent.nodes.worker import WorkerNodes
-from app.schema.soccer_agent.state import PlanningOutput
+from app.schema.soccer_agent.state import UnifiedPlanningOutput
 
 @pytest.fixture
 def mock_execution_llm():
@@ -19,7 +19,14 @@ def worker_nodes(mock_execution_llm):
 
 def test_trigger_workers_no_tools(worker_nodes):
     state = {
-        "planning_output": PlanningOutput(need_call_tools=False, tool_chains=[]),
+        "planning_output": UnifiedPlanningOutput(
+            clarified_query="Hello",
+            is_ambiguous=False,
+            clarifying_questions=[],
+            need_call_tools=False,
+            tool_chains=[],
+            sub_queries=[]
+        ),
         "messages": [HumanMessage(content="Hello")]
     }
     config = {}
@@ -29,7 +36,10 @@ def test_trigger_workers_no_tools(worker_nodes):
 
 def test_trigger_workers_with_tools(worker_nodes):
     state = {
-        "planning_output": PlanningOutput(
+        "planning_output": UnifiedPlanningOutput(
+            clarified_query="Hello",
+            is_ambiguous=False,
+            clarifying_questions=[],
             need_call_tools=True, 
             tool_chains=[["tool1"], ["tool2"]],
             sub_queries=["q1", "q2"]

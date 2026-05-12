@@ -39,6 +39,10 @@ class WebNewsSearchInput(BaseModel):
             "'month' = last 30 days (background context)."
         ),
     )
+    time_context: Optional[str] = Field(
+        default=None,
+        description="Current date and time for temporal reasoning."
+    )
 
 
 class WebNewsSearchTool(BaseTool):
@@ -70,6 +74,7 @@ class WebNewsSearchTool(BaseTool):
         self,
         query: str,
         time_range: Literal["day", "week", "month"] = "week",
+        time_context: Optional[str] = None,
         _run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> Tuple[str, List[dict]]:
         service = _get_tavily()
@@ -81,6 +86,10 @@ class WebNewsSearchTool(BaseTool):
                 f"An error occurred while searching for news: {str(e)}.",
                 [],
             )
+
+        # Sort results by published_date descending
+        # Tavily results typically have published_date in "YYYY-MM-DDTHH:MM:SS" format or empty
+        results.sort(key=lambda x: x.get("published_date") or "", reverse=True)
 
         if not results:
             return f"No recent news found for: {query}", []
