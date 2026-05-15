@@ -36,7 +36,7 @@ class UnifiedPlanningNode:
             "manually_emit_tool_call",
             data={
                 "id": str(uuid.uuid4()),
-                "name": "unified_planning",
+                "name": "tool_chain_planning",
                 "args": {"query": user_query[:50] + "..."}
             },
             config=config
