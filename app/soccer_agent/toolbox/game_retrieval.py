@@ -3,6 +3,8 @@ import logging
 from dataclasses import dataclass
 from typing import List, Type, Optional, Literal, Annotated, Union, Any, Tuple
 
+from app.soccer_agent.toolbox._config_loader import tool_description
+
 from pydantic import BaseModel, Field, PrivateAttr
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.output_parsers import PydanticOutputParser
@@ -32,10 +34,12 @@ logger = logging.getLogger(__name__)
 # ==========================================
 class GameQueryInput(BaseModel):
     query: str = Field(description="Câu hỏi hoặc truy vấn của người dùng về trận đấu.")
+    time_context: Optional[str] = Field(default=None, description="Bối cảnh thời gian hiện tại.")
 
 
 class GameHistoryInput(BaseModel):
     query: str = Field(description="Câu hỏi hoặc truy vấn của người dùng về trận đấu.")
+    time_context: Optional[str] = Field(default=None, description="Bối cảnh thời gian hiện tại.")
     execution_agent_state: Annotated[dict, InjectedState] = Field(
         description="Trạng thái hiện tại của execution agent. Nếu tool trước là commentary_generation, artifact sẽ là List[Annotation]."
     )
@@ -217,7 +221,7 @@ class GameInfoRetrievalTool(BaseTool):
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
 
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(description=tool_description("game_info_retrieval"))
         self._llm = get_llm("retrieval-augment")
         self._collection = _get_collection()
         self._finder = _GameFinder(self._llm, self._collection)
@@ -234,6 +238,7 @@ class GameInfoRetrievalTool(BaseTool):
     def _run(
         self,
         query: str,
+        time_context: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, Optional[str]]:
         run_tree = get_current_run_tree()
@@ -258,6 +263,7 @@ class GameInfoRetrievalTool(BaseTool):
             response: ToolOutput = (get_game_info_retrieval_prompt_template() | llm_structured).invoke({
                 "query": query,
                 "context": context,
+                "time_context": time_context or "Unknown"
             })  # type: ignore
             logger.info(f"✅ game_info_retrieval: game_id={result.game_id} | answer={response.answer[:200]}")
             return response.answer, result.game_id
@@ -289,7 +295,7 @@ class GameHistoryRetrievalTool(BaseTool):
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
 
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(description=tool_description("game_history_retrieval"))
         self._llm = get_llm("retrieval-augment")
         self._collection = _get_collection()
         self._finder = _GameFinder(self._llm, self._collection)
@@ -356,6 +362,7 @@ class GameHistoryRetrievalTool(BaseTool):
         self,
         query: str,
         execution_agent_state: Annotated[dict, InjectedState],
+        time_context: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, Optional[str]]:
         run_tree = get_current_run_tree()
@@ -374,6 +381,7 @@ class GameHistoryRetrievalTool(BaseTool):
             response: ToolOutput = (get_game_history_retrieval_prompt_template() | llm_structured).invoke({
                 "query": query,
                 "context": history_context,
+                "time_context": time_context or "Unknown"
             })  # type: ignore
             logger.info(f"✅ game_history_retrieval: game_id={game_id} | answer={response.answer[:200]}")
             return response.answer, game_id

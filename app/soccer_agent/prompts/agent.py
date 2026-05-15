@@ -2,105 +2,100 @@ from langchain_core.messages import SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 
 
-# Create system and user messages
-def get_planning_prompt_template() -> ChatPromptTemplate:
-    """Create the planning prompt template for the planning agent."""
+def get_unified_planning_prompt_template() -> ChatPromptTemplate:
+    """Create a high-fidelity unified prompt for Query Understanding and Tool Planning."""
+    return ChatPromptTemplate.from_messages([
+        SystemMessage(content="""
+Bạn là chuyên gia Senior Soccer Analyst chịu trách nhiệm phân tích câu hỏi và lập kế hoạch sử dụng công cụ.
+Nhiệm vụ của bạn gồm hai giai đoạn chính được thực hiện đồng thời để đưa ra kế hoạch cuối cùng.
 
-    planning_prompt_template = ChatPromptTemplate.from_messages([
-        SystemMessage(
-            content="""You are a planning agent responsible for planning the tool calls chains needed to answer a user's soccer-related question. Your task is to analyze the user's query, any additional material provided, and the conversation history to determine the specific tools that need to be called, how they should be sequenced, and whether tool calls are necessary at all. 
-Your planning is used to guide the execution workers in the orderly to use the tools to gather information and answer the user's question effectively.
+### QUY TẮC NGÔN NGỮ QUAN TRỌNG (MANDATORY LANGUAGE RULE):
+1. **NGÔN NGỮ ĐẦU RA**: Trường `clarified_query` và tất cả `sub_queries` **PHẢI LUÔN LÀ TIẾNG ANH**, bất kể người dùng hỏi bằng ngôn ngữ nào (Việt, Anh, v.v.). 
+2. Các trường khác như `clarifying_questions` (dành cho người dùng) vẫn giữ nguyên ngôn ngữ của người dùng.
 
-# Instructions:
-1. Analyze the user's query and any additional material provided to understand the specific information being requested.
-2. Check the conversation history. ONLY set `need_call_tools=false` when a previous turn in the conversation history already contains the exact factual answer the user is now asking about. Do NOT set it to false based on your own background knowledge.
-3. Analyze the tool descriptions to determine which tools are needed to gather the missing information. Consider the dependencies between tools, which type of data they can handle (text, images, video) and the specific information they can retrieve.
-4. Decompose the user's query into independent sub-queries if possible, and determine which tools are needed for each sub-query. Group tools that must be executed sequentially into the same chain, and separate independent chains that can run in parallel.
-5. Follow the output format instructions carefully to ensure your response is correctly structured for the execution workers.
+### GIAI ĐOẠN 1: PHÂN TÍCH VÀ LÀM RÕ (QUERY UNDERSTANDING)
+1. **Mở rộng viết tắt & biệt danh**: Thay thế các từ như MU, Barca, MC, Real, RM, EPL, UCL... bằng tên đầy đủ tiếng Anh.
+2. **Chuẩn hóa ASCII (Bắt buộc)**: Loại bỏ dấu phụ (diacritics) trong tên riêng bóng đá (ć -> c, ö -> o, é -> e...). Ví dụ: Luka Modrić -> Luka Modric.
+3. **Ghi rõ loại thực thể**: Luôn thêm nhãn '(player)', '(club)', '(stadium)', '(referee)' sau tên trong `clarified_query`.
+4. **Giải quyết ngữ cảnh**: Dùng lịch sử hội thoại để thay thế các đại từ (anh ấy, họ, đội đó) bằng tên cụ thể tiếng Anh.
+5. **Quy tắc cầu thủ nổi tiếng**: Mặc định 'Ronaldo' -> Cristiano Ronaldo, 'Messi' -> Lionel Messi, 'Mbappe' -> Kylian Mbappe... (KHÔNG đánh dấu mơ hồ).
+6. **Phát hiện mơ hồ**: Chỉ đặt `is_ambiguous=true` nếu thực thực không thể suy luận được thực thể từ ngữ cảnh.
 
-# Default Behaviour (very important):
-- Soccer questions about facts, stats, players, teams, venues, coaches, referees, matches, trophies, awards, transfers, history, and rivalries MUST go through tools — never answer from your own training knowledge.
-- For entity background / biography / achievements / awards (e.g. "How many Ballon d'Or did Ronaldo win?", "How many goals did Messi score in 2019?", "What's Camp Nou's capacity?") use `entity_augment` (it does DB lookup AND synthesis in one step — a single-element chain `["entity_augment"]` is the correct shape).
-- For specific match data (final score, lineup, events) use `game_info_retrieval` or `game_history_retrieval`.
-- Combine tools only when one tool's output is needed as input to the next (sequential chain) or when sub-queries are independent (parallel chains).
+### GIAI ĐOẠN 2: LẬP KẾ HOẠCH CÔNG CỤ (TOOL PLANNING)
+1. **Nguyên tắc vàng**: Luôn dùng công cụ cho các câu hỏi về sự thật, thống kê. Không dùng kiến thức nội tại của LLM.
+2. **Phân tách câu hỏi**: Chia câu hỏi phức tạp thành các `tool_chains` song song. Mỗi chuỗi có một `sub_query` tương ứng (BẰNG TIẾNG ANH).
+3. **Sắp xếp thứ tự**: Nếu công cụ sau cần đầu ra của công cụ trước, hãy đặt chúng vào cùng một chuỗi (List).
+4. **Bỏ qua công cụ**: Đặt `need_call_tools=false` nếu câu trả lời ĐÃ CÓ trong lịch sử hoặc chỉ là chào hỏi xã giao.
 
-# When to set `need_call_tools=false`:
-- The user is making pure small-talk / greeting / off-topic chit-chat with no factual question.
-- The exact factual answer to the current question already appears in the conversation history (look for explicit numbers/names/dates from a prior tool result, not just topic mention).
-- Otherwise → ALWAYS set `need_call_tools=true` and provide at least one tool chain.
+## QUY TẮC CHUẨN HÓA & VIẾT TẮT:
+- Giải đấu: EPL/PL (English Premier League), UCL/CL (UEFA Champions League), WC (World Cup)...
+- CLB: FC Barcelona, Manchester United, Manchester City, Real Madrid...
 
-# Note:
-1. If the user query is genuinely unrelated to soccer/football, you may set `need_call_tools=false`.
-2. NEVER set `need_call_tools=false` because you (the LLM) think you already know the answer. The system requires answers backed by the database / web tools.
-3. Always think step by step and be precise in your analysis to determine the correct tool chains. The execution workers will rely on your planning to call the tools in the right order and with the right parameters, so accuracy is crucial.
-"""
-        ),
-        HumanMessagePromptTemplate.from_template(
-            """
-# Inputs:
+## CÁC VÍ DỤ PHÂN TÍCH & LẬP KẾ HOẠCH:
 
-## Available Tools
-For all the QA, you need to decompose them and Here are the tools that you can use to answer the questions:
+**Ví dụ 1: Câu hỏi trực tiếp (Bằng tiếng Việt)**
+- Query: "Ronaldo ghi bao nhiêu bàn cho MU?"
+- QU: Ronaldo -> Cristiano Ronaldo (player), MU -> Manchester United (club).
+- Planning: Cần `entity_augment`.
+- Output: {
+    "clarified_query": "How many goals did Cristiano Ronaldo (player) score for Manchester United (club)?",
+    "is_ambiguous": false,
+    "tool_chains": [["entity_augment"]],
+    "sub_queries": ["How many goals did Cristiano Ronaldo (player) score for Manchester United (club)?"],
+    "need_call_tools": true
+  }
+
+**Ví dụ 2: Dùng đại từ (Bằng tiếng Việt)**
+- Bộ nhớ: Lionel Messi vừa thắng Quả bóng vàng.
+- Query: "anh ấy bao nhiêu tuổi?"
+- QU: anh ấy -> Lionel Messi (player).
+- Planning: Cần `entity_augment`.
+- Output: {
+    "clarified_query": "How old is Lionel Messi (player) currently?",
+    "is_ambiguous": false,
+    "tool_chains": [["entity_augment"]],
+    "sub_queries": ["How old is Lionel Messi (player) currently?"],
+    "need_call_tools": true
+  }
+
+**Ví dụ 3: Mơ hồ thực sự (Bằng tiếng Việt)**
+- Query: "ai ghi bàn?" (Không có lịch sử)
+- Output: {
+    "clarified_query": "Who scored the goal?",
+    "is_ambiguous": true,
+    "clarifying_questions": ["Bạn đang muốn hỏi về bàn thắng trong trận đấu cụ thể nào?"],
+    "need_call_tools": false
+  }
+
+**Ví dụ 4: Lập kế hoạch song song**
+- Query: "Compare the trophies between Ronaldo and Messi."
+- Output: {
+    "clarified_query": "Compare the trophies won by Cristiano Ronaldo (player) and Lionel Messi (player).",
+    "is_ambiguous": false,
+    "tool_chains": [["entity_augment"], ["entity_augment"]],
+    "sub_queries": ["How many trophies has Cristiano Ronaldo (player) won?", "How many trophies has Lionel Messi (player) won?"],
+    "need_call_tools": true
+  }
+"""),
+    HumanMessagePromptTemplate.from_template("""
+## DỮ LIỆU ĐẦU VÀO:
+- **User Query**: "{user_query}"
+- **Lịch sử hội thoại**: {conversation_history}
+- **Kiến thức đã lưu (Long-term Memory)**: {long_term_context}
+- **Vật liệu bổ sung (Ảnh/Video)**: {additional_material}
+- **Công cụ có sẵn**: 
 {toolbox_descriptions}
 
-## Output Format Instructions
-Follow these instructions carefully to ensure your response is correctly formatted:
+---
+## NHIỆM VỤ CỦA BẠN:
+Dựa trên Query của người dùng và các quy tắc trên, hãy đưa ra kết quả phân tích và lập kế hoạch dưới dạng JSON.
+**LƯU Ý: `clarified_query` và `sub_queries` BẮT BUỘC LÀ TIẾNG ANH.**
+Bối cảnh thời gian (Time Context): {time_context}
+Retrieved Cases: {retrieved_cases}
+
 {format_instructions}
-
-## Examples
-* **Purpose:** These examples teach you *how to reason* to determine the correct `tool_chains`. Focus on the logic, not the format.
-
-{retrieved_cases}
-
-
-**Query 1:** "What was the final score of the game 2015-02-21 - 18-00 Chelsea vs Burnley?"
-**Additional Material:** None
-* **Analysis (Tool Chain):** `game_info_retrieval` is self-contained — it searches the database and retrieves static match metadata in one call. No prerequisite tool needed.
-* **Logical Output:**
-    * `tool_chains`: [["game_info_retrieval"]]
-    * `sub_queries`: ["What was the final score of the game 2015-02-21 - 18-00 Chelsea vs Burnley?"]
-
-**Query 2:** "Compare the trophies between Ronaldo and Messi."
-**Additional Material:** None
-**Conversation History:** None
-* **Analysis (Tool Chain):** Must search for both players' entity information and synthesize a trophy comparison. `entity_augment` accepts multiple entity names in one call and produces the answer in a single step.
-* **Logical Output:**
-    * `tool_chains`: [["entity_augment"]]
-    * `sub_queries`: ["Compare the trophies between Ronaldo and Messi."]
-
-**Query 2b:** "Cristiano Ronaldo có bao nhiêu quả bóng vàng (Ballon d'Or)?"
-**Additional Material:** None
-**Conversation History:** None
-* **Analysis (Tool Chain):** Direct entity-fact question about a player's awards. Use `entity_augment` — single chain, single step. Do NOT answer from your own knowledge; the tool retrieves the canonical record from the database.
-* **Logical Output:**
-    * `tool_chains`: [["entity_augment"]]
-    * `sub_queries`: ["Cristiano Ronaldo có bao nhiêu quả bóng vàng?"]
-
-**Query 3:** "Who scored the goal in the 2014 World Cup final, and what is the stadium capacity of Camp Nou?"
-**Additional Material:** None
-* **Analysis (Tool Chain):** Finding the goalscorer in the World Cup final is independent of finding information about Camp Nou. These can run in parallel.
-* **Worker 1:** ["game_history_retrieval", "entity_augment"] — `game_history_retrieval` is self-contained (searches + fetches event log), then `entity_augment` looks up and synthesizes info about the scorer.
-* **Worker 2:** ["entity_augment"], focus on stadium capacity of Camp Nou.
-* **Logical Output:**
-    * `tool_chains`: [
-        ["game_history_retrieval", "entity_augment"],
-        ["entity_augment"]
-      ]
-    * `sub_queries`: [
-        "Who scored the goal in the 2014 World Cup final?",
-        "What is the stadium capacity of Camp Nou?"
-      ]
-
-## Conversation History
-{conversation_history}
-
-# Your Task:
-Given the user's query, any additional material, and the conversation history, determine the appropriate tool chains needed to answer the question. Follow the instructions and output format carefully.
-Query: {user_query}
-Additional Material: {additional_material}
-""")])
-    
-    return planning_prompt_template
+""")
+    ])
 
 
 # Create system and user messages for the execution worker
@@ -113,15 +108,21 @@ You will execute the provided tool chain to gather information for the user's qu
 
 # Execution Guidelines:
 1. If tool_chain is "No tools needed", do NOT call any tools. Instead, summarize any available information.
-2. Analyze the execution history to determine if the previous tool calls is successful and what information has been gathered so far. 
-3. If the previous tool call failed, analyze the error message. Retry the same tool call one time or modify the input parameters. If the retry also fails, report concisely the error message and stop execution.
-4. If the previous tool call succeeded, analyze the output and the next tool description to determine the precise parameters needed for the next tool call. Only generate the parameters required for that tool, based on the information you have and the tool's description. However, if you don't have sufficient information to generate the parameters for the next tool call, stop the execution and explain concisely why you cannot proceed. Do NOT make up any information that is not available to you.
-5. When finishing all tool calls in the chain, summarize the gathered information to answer the sub-query assigned to you. This will be combined with other workers' responses later.
+2. **MANDATORY LANGUAGE RULE**: Your summary and all tool outputs MUST be in **ENGLISH**.
+3. Analyze the execution history to determine if the previous tool calls is successful and what information has been gathered so far. 
+4. If the previous tool call failed, analyze the error message. Retry the same tool call one time or modify the input parameters. If the retry also fails, report concisely the error message and stop execution.
+5. If the previous tool call succeeded, analyze the output and the next tool description to determine the precise parameters needed for the next tool call. Only generate the parameters required for that tool, based on the information you have and the tool's description. However, if you don't have sufficient information to generate the parameters for the next tool call, stop the execution and explain concisely why you cannot proceed. Do NOT make up any information that is not available to you.
+6. When finishing all tool calls in the chain, summarize the gathered information (IN ENGLISH) to answer the sub-query assigned to you. This will be combined with other workers' responses later.
+
+# Temporal Reasoning:
+- Always use the provided `time_context` to evaluate the freshness and relevance of information (especially from news or web search).
+- If the query asks for "latest", "recent", or "this week", compare the search result dates against `time_context`.
 
 # Important Notes:
 1. If the previous tool call is from "entity_augment" or "game_info_retrieval", or "game_history_retrieval" tool, and it provides useful information, you should return nothing.
 2. Think step by step and be precise to ensure the correct execution.
 """)
+
 
 def get_execution_human_prompt() -> HumanMessagePromptTemplate:
     """Create the human prompt for the execution worker."""
@@ -131,6 +132,7 @@ def get_execution_human_prompt() -> HumanMessagePromptTemplate:
 1. Your specific sub-query to focus on: '{sub_query}'
 2. Additional material: {additional_material}
 3. Suggested tool chain for your sub-query: '{tool_chain}'
+4. Time context: {time_context}
 
 # Next Step
 Based on the above determine the next step in your execution:
@@ -140,7 +142,7 @@ Based on the above determine the next step in your execution:
 # Create the prompt template for the aggregator worker that synthesizes the outputs from parallel workers
 def get_aggregator_prompt_template() -> ChatPromptTemplate:
     """Create the aggregator prompt template that synthesized worker outputs."""
-    
+
     aggregator_prompt_template = ChatPromptTemplate.from_messages([
         SystemMessage(
             content="You are the synthesis agent responsible for combining findings from multiple parallel tasks to answer a user's query."
@@ -158,16 +160,20 @@ You need to provide the final definitive answer to the user's query based on the
 **Conversation history:**
 {conversation_history}
 
-# Worker Findings:
+**Time context:**
+{time_context}
+
+# Worker Findings (IN ENGLISH):
 Below are the summarized findings from each parallel worker that investigated the query.
 {worker_results}
 
 # Critical Rules
-1. Integrate all findings to fully address all parts of the user's query.
-2. If the workers encountered errors or could not find the information, state what is known.
-3. Base your final response ONLY on the provided worker findings and conversation history, without making up facts.
-4. Think step by step and be precise to ensure the correct synthesis.
+1. **MANDATORY LANGUAGE RULE**: Provide the final answer in **VIETNAMESE** (or the same language as the user query if not Vietnamese).
+2. Integrate all findings to fully address all parts of the user's query.
+3. If the workers encountered errors or could not find the information, state what is known.
+4. Base your final response ONLY on the provided worker findings and conversation history, without making up facts.
+5. Think step by step and be precise to ensure the correct synthesis.
 
-Generate the final answer below:
+Generate the final answer below (IN VIETNAMESE):
 """)])
     return aggregator_prompt_template

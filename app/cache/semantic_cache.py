@@ -64,6 +64,55 @@ class SubQuerySemanticCache:
             
         return None
 
+    def cache(self, ttl: Optional[int] = None):
+        """
+        Decorator for semantic caching.
+        Works for async functions.
+        """
+        import functools
+        def decorator(func):
+            @functools.wraps(func)
+            async def wrapper(*args, **kwargs):
+                # Try to find a 'query' or 'user_query' in args/kwargs
+                query = kwargs.get("user_query") or kwargs.get("query")
+                if not query and args:
+                    # Heuristic: first string arg is likely the query
+                    for arg in args:
+                        if isinstance(arg, str):
+                            query = arg
+                            break
+                
+                if not query:
+                    return await func(*args, **kwargs)
+
+                # Check cache
+                cached_res = self.check(query)
+                if cached_res:
+                    # If the function returns a dict, try to parse JSON
+                    if cached_res.startswith("{") and cached_res.endswith("}"):
+                        try:
+                            import json
+                            return json.loads(cached_res)
+                        except:
+                            pass
+                    return cached_res
+
+                # Execute
+                result = await func(*args, **kwargs)
+
+                # Store (serialize if dict)
+                res_to_store = result
+                if isinstance(result, dict):
+                    import json
+                    res_to_store = json.dumps(result)
+                
+                if res_to_store:
+                    self.set(query, res_to_store)
+                
+                return result
+            return wrapper
+        return decorator
+
     def set(self, query: str, response: str, material: Optional[List[str]] = None):
         if not self.is_active or not query or not response:
             return

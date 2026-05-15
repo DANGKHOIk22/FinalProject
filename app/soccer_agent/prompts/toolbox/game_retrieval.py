@@ -9,7 +9,10 @@ def get_game_info_retrieval_prompt_template() -> ChatPromptTemplate:
     Match Information:
     {context}
 
+    Time Context: {time_context}
+
     Please provide the answer based on the match related information. Make sure your answer is evidence-based and accurate.
+    MANDATORY: Your answer MUST be in ENGLISH.
     """
     return ChatPromptTemplate.from_template(prompt_template)
 
@@ -22,6 +25,9 @@ def get_game_history_retrieval_prompt_template() -> ChatPromptTemplate:
     Match History (List of Annotations):
     {context}
 
+    Time Context: {time_context}
+
     Please provide the answer based on the match history information. Think carefully about timestamps and event sequences. Make sure your answer is evidence-based and accurate.
+    MANDATORY: Your answer MUST be in ENGLISH.
     """
     return ChatPromptTemplate.from_template(prompt_template)

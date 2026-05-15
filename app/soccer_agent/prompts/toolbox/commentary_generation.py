@@ -20,7 +20,7 @@ def get_commentary_generation_prompt_template() -> ChatPromptTemplate:
                         "type": "text",
                         "text": """### TASK
 Generate:
-1) A natural-language commentary (~500 words, concise, not repetitive) about what happens in the provided soccer video clips.
+1) A natural-language commentary (~500 words, concise, not repetitive, IN ENGLISH) about what happens in the provided soccer video clips.
 2) A list of structured event annotations.
 
 ### IMPORTANT

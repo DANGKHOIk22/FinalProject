@@ -1,7 +1,11 @@
 from pathlib import Path
 import yaml
+import litellm
 from langchain_litellm import ChatLiteLLMRouter
 from litellm import Router
+
+# Enable dropping unsupported parameters (e.g., temperature/top_p for reasoning models)
+litellm.drop_params = True
 
 _CONFIG_PATH = Path(__file__).parent / "llm_config.yaml"
 
@@ -22,14 +26,7 @@ def _get_router() -> Router:
 
 
 def get_llm(role: str = "tool") -> ChatLiteLLMRouter:
-    """Return a ChatLiteLLMRouter for the given role.
-
-    Valid roles are defined in llm_config.yaml:
-      planning   – Gemini 2.5 Flash, thinking_budget=3000
-      execution  – Gemini 2.5 Flash Lite, thinking_budget=4000
-      aggregator – Gemini 2.5 Flash, no thinking
-      tool       – Gemini 2.5 Flash Lite, shared by tools / guardrails / query-understanding
-    """
+    """Return a ChatLiteLLMRouter for the given role."""
     if role in ["retrieval-augment", "aggregator"]:
         # Enable thinking for some roles to enhance UX
         return ChatLiteLLMRouter(router=_get_router(), model_name=role,num_retries=0, streaming=True)

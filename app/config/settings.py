@@ -43,7 +43,15 @@ class Settings:
 
     # Redis Configuration
     REDIS_URL: Optional[str] = os.getenv('REDIS_URL')
-    
+
+    # Tavily Configuration — comma-separated keys for round-robin + failover.
+    # Single TAVILY_API_KEY is also accepted for backwards compatibility.
+    TAVILY_API_KEYS: list[str] = [
+        k.strip()
+        for k in (os.getenv('TAVILY_API_KEYS') or os.getenv('TAVILY_API_KEY') or '').split(',')
+        if k.strip()
+    ]
+
 
     @classmethod
     def validate(cls) -> bool:
