@@ -1,12 +1,13 @@
 import logging
 import asyncio
+from datetime import datetime
 from typing import List
 
 from langchain_core.messages import ToolMessage, AIMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph, RunnableConfig
-from langgraph.constants import Send
+from langgraph.types import Send
 from langgraph.prebuilt import ToolNode
 
 from app.schema.soccer_agent.state import AgentState, WorkerState
@@ -54,17 +55,18 @@ class WorkerNodes:
 
     def trigger_workers(self, state: AgentState, config: RunnableConfig):
         """Map worker executions for each parallel tool chain."""
-        planning_output = state.get("planning_output")
-        tool_chains = planning_output.tool_chains if planning_output else []
-        sub_queries = planning_output.sub_queries if planning_output else []
-        need_call_tools = planning_output.need_call_tools if planning_output else True
+        # Read from top-level state — always freshly written by unified_planning_node.
+        # Do NOT read from planning_output: it may be stale (from a previous turn's checkpointed state).
+        need_call_tools = state.get("need_call_tools", True)
+        tool_chains = state.get("tool_chains") or []
+        sub_queries = state.get("sub_queries") or []
         messages = state.get("messages", [])
-        clarified_query = state.get("clarified_query") or messages[-1].content if messages else ""
-        
-        # Short-circuit to aggregator if planner says no tools needed, or no chains provided
+        clarified_query = state.get("clarified_query") or (messages[-1].content if messages else "")
+
+        # Short-circuit to aggregator when no tools needed (is_ambiguous, greeting, etc.)
         if not need_call_tools or not tool_chains:
             logger.info(f"⏭️ Skipping workers (need_call_tools={need_call_tools}, tool_chains={tool_chains}). Going straight to aggregator.")
-            return "aggregator_node"
+            return "aggregator"
             
         sends = []
         for idx, chain in enumerate(tool_chains):
@@ -78,7 +80,7 @@ class WorkerNodes:
                 "tool_results_history": [],
                 "last_tool_artifact": None,
                 "parallel_results": [],
-                "time_context": state.get("time_context")
+                "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
             }
             logger.info(f"🚀 Triggering worker {idx}: sub_query='{sub_query}', chain={chain}")
             sends.append(Send("worker_graph", worker_state))
@@ -146,7 +148,7 @@ class WorkerNodes:
                 sub_query=sub_query,
                 additional_material=additional_material_str,
                 tool_chain=" -> ".join(tool_chain) if tool_chain else "No tools needed",
-                time_context=state.get("time_context") or "Unknown"
+                time_context=state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
             )
             messages = [execution_prompt]
         

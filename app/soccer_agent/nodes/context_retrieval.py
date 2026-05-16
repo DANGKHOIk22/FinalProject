@@ -42,7 +42,7 @@ class ContextRetrievalNode:
             logger.warning(f"Semantic cache error: {e}")
 
         metadata = config.get("metadata", {})
-        thread_id = metadata.get("thread_id")
+        user_id = metadata.get("user_id") or metadata.get("thread_id")
         has_media = bool(state.get("additional_material"))
 
         logger.info(f"🔍 [ContextRetrieval] Cache MISS. Searching DBs for: '{user_query[:50]}...'")
@@ -61,9 +61,9 @@ class ContextRetrievalNode:
 
         async def fetch_long_term():
             try:
-                if not thread_id: return ""
+                if not user_id: return ""
                 results = await long_term_memory_manager.retrieve_memory(
-                    user_id=thread_id,
+                    user_id=user_id,
                     query=user_query,
                     top_k=5,
                     precomputed_embedding=query_embedding

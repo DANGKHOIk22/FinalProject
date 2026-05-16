@@ -1,8 +1,16 @@
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
-import operator
 from pydantic import BaseModel, Field
 from langchain_core.messages import ToolMessage, ToolCall
 from copilotkit import CopilotKitState
+
+
+def _reset_or_add(left: list, right: list) -> list:
+    """Reducer for parallel-aggregated lists: empty right = reset, non-empty = add.
+    This lets initial_state use [] to clear stale checkpoint data between turns,
+    while still allowing concurrent workers to accumulate results via Send."""
+    if not right:
+        return []
+    return (left or []) + right
 
 # Structured output models for LLM responses
 class UnifiedPlanningOutput(BaseModel):
@@ -20,9 +28,9 @@ class AgentState(CopilotKitState):
     clarified_query: str # User query with pronouns/abbreviations resolved by QueryUnderstandingPipeline
     additional_material: Optional[List[str]] # Additional material (e.g, image/video related to the user question)
     planning_output: Optional[UnifiedPlanningOutput] # The output from the planning step, which includes tool chains and sub-queries
-    parallel_results: Annotated[List[str], operator.add] # Aggregated parallel results
-    tool_calls_history: Annotated[List[ToolCall], operator.add] # History of tool calls
-    tool_results_history: Annotated[List[ToolMessage], operator.add] # History of tool results
+    parallel_results: Annotated[List[str], _reset_or_add] # Aggregated parallel results
+    tool_calls_history: Annotated[List[ToolCall], _reset_or_add] # History of tool calls
+    tool_results_history: Annotated[List[ToolMessage], _reset_or_add] # History of tool results
     conversation_history: Optional[str] # Optional conversation history for context
     long_term_context: Optional[str] # Context retrieved from pgvector long-term memory
     retrieved_cases: Optional[List[str]] # Few-shot planning examples retrieved from case bank

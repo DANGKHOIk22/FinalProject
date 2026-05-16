@@ -67,7 +67,14 @@ class LongTermMemoryManager:
                             "SELECT embedding FROM user_long_term_memory WHERE user_id = %s AND entity_name = %s",
                             (user_id, entity_name_norm)
                         )
-                        return [np.array(row[0]) for row in cur.fetchall()]
+                        rows = cur.fetchall()
+                        result = []
+                        for row in rows:
+                            v = row[0]
+                            if isinstance(v, str):
+                                v = json.loads(v)
+                            result.append(np.array(v, dtype=np.float64))
+                        return result
             
             existing_vectors = await asyncio.to_thread(get_existing)
             
@@ -75,17 +82,25 @@ class LongTermMemoryManager:
             new_records = []
             for chunk in chunks:
                 new_vec = await self._get_embedding(chunk)
-                new_vec_np = np.array(new_vec)
+                new_vec_np = np.array(new_vec, dtype=np.float64)
                 
                 # Check similarity against ALL existing vectors for this entity
                 is_duplicate = False
                 for old_vec in existing_vectors:
-                    # Cosine Similarity = (A . B) / (||A|| * ||B||)
-                    # Since embeddings are usually normalized, just dot product
-                    similarity = np.dot(new_vec_np, old_vec) / (np.linalg.norm(new_vec_np) * np.linalg.norm(old_vec))
-                    if similarity > similarity_threshold:
-                        is_duplicate = True
-                        break
+                    try:
+                        # Ensure shapes match before dot product
+                        if new_vec_np.shape != old_vec.shape:
+                            continue
+                        # Cosine Similarity
+                        denom = (np.linalg.norm(new_vec_np) * np.linalg.norm(old_vec))
+                        if denom == 0: continue
+                        similarity = np.dot(new_vec_np, old_vec) / denom
+                        if similarity > similarity_threshold:
+                            is_duplicate = True
+                            break
+                    except Exception as e:
+                        logger.error(f"[LongTermMemory] Similarity calculation error: {e}")
+                        continue
                 
                 if not is_duplicate:
                     new_records.append((chunk, new_vec))
@@ -118,15 +133,16 @@ class LongTermMemoryManager:
             logger.error(f"[LongTermMemory] Smart upsert failed: {e}", exc_info=True)
 
     async def retrieve_memory(
-        self, 
-        user_id: str, 
-        query: str, 
-        top_k: int = 5, 
+        self,
+        user_id: str,
+        query: str,
+        top_k: int = 5,
         precomputed_embedding: Optional[List[float]] = None
     ) -> List[Dict]:
         try:
             query_embedding = precomputed_embedding if precomputed_embedding else await self._get_embedding(query)
-            
+            logger.info(f"[LongTermMemory] Retrieving top_k={top_k} for user='{user_id}', query='{query[:80]}'")
+
             def sync_retrieve():
                 with self.pool.getconn() as conn:
                     with conn.cursor(row_factory=dict_row) as cur:
@@ -143,7 +159,15 @@ class LongTermMemoryManager:
                         )
                         return cur.fetchall()
 
-            return await asyncio.to_thread(sync_retrieve)
+            rows = await asyncio.to_thread(sync_retrieve)
+            if rows:
+                logger.info(
+                    f"[LongTermMemory] Retrieved {len(rows)} chunks — "
+                    + ", ".join(f"'{r['entity_name']}' sim={r['similarity']:.3f}" for r in rows)
+                )
+            else:
+                logger.info("[LongTermMemory] No chunks found.")
+            return rows
         except Exception as e:
             logger.error(f"[LongTermMemory] Retrieval failed: {e}", exc_info=True)
             return []

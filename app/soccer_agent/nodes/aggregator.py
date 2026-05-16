@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from langgraph.graph.state import RunnableConfig
 from app.schema.soccer_agent.state import AgentState
 from app.soccer_agent.prompts.agent import get_aggregator_prompt_template
@@ -40,7 +41,7 @@ class AggregatorNode:
             "additional_material": additional_material,
             "conversation_history": conversation_history,
             "worker_results": worker_results_str,
-            "time_context": state.get("time_context") or "Unknown"
+            "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
         })
 
         response = await self.aggregator_llm.ainvoke(

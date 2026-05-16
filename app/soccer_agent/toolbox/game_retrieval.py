@@ -1,6 +1,7 @@
 import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import List, Type, Optional, Literal, Annotated, Union, Any, Tuple
 
 from app.soccer_agent.toolbox._config_loader import tool_description
@@ -263,7 +264,7 @@ class GameInfoRetrievalTool(BaseTool):
             response: ToolOutput = (get_game_info_retrieval_prompt_template() | llm_structured).invoke({
                 "query": query,
                 "context": context,
-                "time_context": time_context or "Unknown"
+                "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
             })  # type: ignore
             logger.info(f"✅ game_info_retrieval: game_id={result.game_id} | answer={response.answer[:200]}")
             return response.answer, result.game_id
@@ -381,7 +382,7 @@ class GameHistoryRetrievalTool(BaseTool):
             response: ToolOutput = (get_game_history_retrieval_prompt_template() | llm_structured).invoke({
                 "query": query,
                 "context": history_context,
-                "time_context": time_context or "Unknown"
+                "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
             })  # type: ignore
             logger.info(f"✅ game_history_retrieval: game_id={game_id} | answer={response.answer[:200]}")
             return response.answer, game_id

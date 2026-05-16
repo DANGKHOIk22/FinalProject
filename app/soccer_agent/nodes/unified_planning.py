@@ -1,8 +1,6 @@
 import logging
 import uuid
-import asyncio
 from datetime import datetime
-from typing import List
 
 from langchain_core.messages import AIMessage
 from langchain_core.output_parsers import PydanticOutputParser
@@ -27,10 +25,8 @@ class UnifiedPlanningNode:
         Combined node for Query Understanding and Tool Chain Planning.
         Reduces latency by saving one LLM round-trip.
         """
-        user_query = state.get("user_query")
-        if not user_query:
-            messages = state.get("messages", [])
-            user_query = messages[-1].content if messages else ""
+        messages = state.get("messages", [])
+        user_query = state.get("user_query") or (messages[-1].content if messages else "")
         additional_material = state.get("additional_material", [])
         conversation_history = state.get("conversation_history") or "No previous conversation."
         retrieved_cases = state.get("retrieved_cases") or "No examples available."
@@ -71,9 +67,11 @@ class UnifiedPlanningNode:
             output: UnifiedPlanningOutput = self.parser.parse(response_text)
         except Exception as e:
             logger.error(f"Failed to parse UnifiedPlanningOutput: {e}")
-            # Fallback to a safe state
             return {
                 "clarified_query": user_query,
+                "planning_output": None,
+                "tool_chains": [],
+                "sub_queries": [],
                 "need_call_tools": False
             }
 
