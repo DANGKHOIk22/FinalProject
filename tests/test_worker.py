@@ -4,7 +4,6 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolCall
 from langgraph.types import Send
 
 from app.soccer_agent.nodes.worker import WorkerNodes
-from app.schema.soccer_agent.state import UnifiedPlanningOutput
 
 @pytest.fixture
 def mock_execution_llm():
@@ -19,35 +18,27 @@ def worker_nodes(mock_execution_llm):
 
 def test_trigger_workers_no_tools(worker_nodes):
     state = {
-        "planning_output": UnifiedPlanningOutput(
-            clarified_query="Hello",
-            is_ambiguous=False,
-            clarifying_questions=[],
-            need_call_tools=False,
-            tool_chains=[],
-            sub_queries=[]
-        ),
+        "need_call_tools": False,
+        "tool_chains": [],
+        "sub_queries": [],
+        "clarified_query": "Hello",
         "messages": [HumanMessage(content="Hello")]
     }
     config = {}
-    
+
     result = worker_nodes.trigger_workers(state, config)
-    assert result == "aggregator_node"
+    assert result == "aggregator"
 
 def test_trigger_workers_with_tools(worker_nodes):
     state = {
-        "planning_output": UnifiedPlanningOutput(
-            clarified_query="Hello",
-            is_ambiguous=False,
-            clarifying_questions=[],
-            need_call_tools=True, 
-            tool_chains=[["tool1"], ["tool2"]],
-            sub_queries=["q1", "q2"]
-        ),
+        "need_call_tools": True,
+        "tool_chains": [["tool1"], ["tool2"]],
+        "sub_queries": ["q1", "q2"],
+        "clarified_query": "Hello",
         "messages": [HumanMessage(content="Hello")]
     }
     config = {}
-    
+
     result = worker_nodes.trigger_workers(state, config)
     assert isinstance(result, list)
     assert len(result) == 2
