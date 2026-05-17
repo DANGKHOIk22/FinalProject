@@ -8,7 +8,7 @@ from app.config.settings import settings
 logger = logging.getLogger(__name__)
 
 class SubQuerySemanticCache:
-    def __init__(self, threshold: float = 0.1, ttl: int = 60 * 60):
+    def __init__(self, threshold: float = 0.05, ttl: int = 60 * 60):
         self.threshold = threshold
         try:
             self.embeddings = GoogleGenerativeAIEmbeddings(

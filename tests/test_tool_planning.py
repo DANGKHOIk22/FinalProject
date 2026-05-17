@@ -11,9 +11,8 @@ def mock_planning_llm():
     mock_response = MagicMock()
     # PydanticOutputParser looks for a string. 
     # We need to ensure response.content or response.text is a valid JSON string.
-    json_content = '{"clarified_query": "test query clarified", "is_ambiguous": false, "clarifying_questions": [], "need_call_tools": true, "tool_chains": [["tool1"]], "sub_queries": ["query1"]}'
-    
-    # Configure the mock response to return the JSON string for both content and text
+    json_content = '{"clarified_query": "test query clarified", "need_call_tools": true, "planned_chains": [{"chain": ["tool1"], "sub_query": "query1", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null}]}'
+
     mock_response.content = json_content
     mock_response.text = json_content
     
@@ -46,6 +45,8 @@ async def test_unified_planning(mock_dispatch, planning_node):
     # So we check if it succeeded
     assert "planning_output" in result, f"Planning failed. Result was: {result}"
     assert result["planning_output"].need_call_tools is True
-    assert result["planning_output"].tool_chains == [["tool1"]]
+    assert result["tool_chains"] == [["tool1"]]
+    assert result["sub_queries"] == ["query1"]
     assert result["clarified_query"] == "test query clarified"
+    assert result["pending_clarifications"] == []
     planning_node.planning_llm.ainvoke.assert_called_once()

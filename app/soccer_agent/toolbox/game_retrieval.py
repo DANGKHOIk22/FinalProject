@@ -15,6 +15,7 @@ from pymongo import MongoClient
 from pymongo.collection import Collection
 from dns import resolver
 
+from app.config.config import GAME_FALLBACK_TOP_K
 from app.config.settings import settings
 from app.schema.match import Annotation, MatchInfo
 from app.soccer_agent.factory.llm_provider import get_llm
@@ -26,6 +27,44 @@ from app.soccer_agent.prompts.toolbox.game_search import (
     get_extraction_prompt_template,
     get_match_selection_prompt_template,
 )
+from app.soccer_agent.services.tavily_service import TavilyService
+
+_tavily: Optional[TavilyService] = None
+
+def _get_tavily() -> TavilyService:
+    global _tavily
+    if _tavily is None:
+        _tavily = TavilyService()
+    return _tavily
+
+
+def _format_news_fallback(results: list, top_k: int, answer: Optional[str] = None) -> str:
+    """Format Tavily search_news results into a readable string, sorted newest first.
+
+    If ``answer`` (Tavily's synthesised summary) is provided it is prepended as a
+    top-level block so the LLM sees the most concise signal first.
+    """
+    items = sorted(results, key=lambda x: x.get("published_date") or "", reverse=True)[:top_k]
+    if not items and not answer:
+        return "No relevant match information found via web search."
+    lines = ["[Web search fallback — match not found in local database]"]
+    if answer:
+        lines.append(f"\nTavily summary: {answer}")
+    for i, r in enumerate(items, 1):
+        title = r.get("title", "N/A")
+        url = r.get("url", "")
+        pub = r.get("published_date", "")
+        content = r.get("content", "").strip()[:600]
+        lines.append(f"\n--- Result {i} ---")
+        lines.append(f"Title: {title}")
+        if pub:
+            lines.append(f"Published: {pub}")
+        if url:
+            lines.append(f"Source: {url}")
+        lines.append(content)
+    return "\n".join(lines)
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +143,9 @@ class _GameFinder:
         self._llm = llm
         self._collection = collection
         self._parser = PydanticOutputParser(pydantic_object=MatchInfo)
+        self.last_time_range: str = "month"
 
-    def find(self, query: str) -> _FindResult:
+    def find(self, query: str, time_context: Optional[str] = None) -> _FindResult:
         """
         Return a discriminated result:
           _GameFound     — match located, game_id available
@@ -113,17 +153,19 @@ class _GameFinder:
           _GameSearchError — unexpected failure (network, LLM, parse error)
         """
         try:
-            info = self._extract(query)
+            info = self._extract(query, time_context)
+            self.last_time_range = info.time_range
             candidates = self._candidates(info)
             return self._select(candidates, info, query)
         except Exception as e:
             logger.error(f"_GameFinder error: {e}", exc_info=True)
             return _GameSearchError(detail=str(e))
 
-    def _extract(self, query: str) -> MatchInfo:
+    def _extract(self, query: str, time_context: Optional[str] = None) -> MatchInfo:
         prompt = get_extraction_prompt_template()
         return (prompt | self._llm | self._parser).invoke({
             "question": query,
+            "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
             "format_instructions": self._parser.get_format_instructions(),
         })
 
@@ -245,7 +287,7 @@ class GameInfoRetrievalTool(BaseTool):
         run_tree = get_current_run_tree()
         try:
             logger.info(f"🔎 GameInfoRetrieval searching: {query}")
-            result = self._finder.find(query)
+            result = self._finder.find(query, time_context)
 
             if isinstance(result, _GameSearchError):
                 error_msg = f"Error in game_info_retrieval search: {result.detail}"
@@ -275,6 +317,59 @@ class GameInfoRetrievalTool(BaseTool):
             if run_tree:
                 run_tree.end(error=error_msg)
             return f"An error occurred while retrieving game info. Details: {str(e)}. Please try again or stop the execution.", None
+
+    async def _arun(
+        self,
+        query: str,
+        time_context: Optional[str] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Tuple[str, Optional[str]]:
+        """Async version with Tavily fallback when match not found in DB."""
+        run_tree = get_current_run_tree()
+        try:
+            logger.info(f"🔎 GameInfoRetrieval (async) searching: {query}")
+            result = self._finder.find(query, time_context)
+
+            if isinstance(result, _GameSearchError):
+                error_msg = f"Error in game_info_retrieval search: {result.detail}"
+                logger.error(error_msg)
+                if run_tree:
+                    run_tree.end(error=error_msg)
+                return f"An error occurred while searching for the game: {result.detail}", None
+
+            if isinstance(result, _GameNotFound):
+                logger.info(f"⚡ game_info_retrieval DB miss — falling back to Tavily news search")
+                tavily_answer, news = await _get_tavily().search_news(
+                    f"{query} match result score lineup",
+                    time_range=self._finder.last_time_range
+                )
+                news_text = _format_news_fallback(news, GAME_FALLBACK_TOP_K, answer=tavily_answer)
+                llm_structured = self._llm.with_structured_output(ToolOutput)
+                response: ToolOutput = await (get_game_info_retrieval_prompt_template() | llm_structured).ainvoke({  # type: ignore
+                    "query": query,
+                    "context": news_text,
+                    "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+                })
+                return response.answer, news_text
+
+            # _GameFound
+            logger.info(f"📄 Fetching metadata for game_id: {result.game_id}")
+            context = self._fetch_metadata(result.game_id)
+            llm_structured = self._llm.with_structured_output(ToolOutput)
+            response: ToolOutput = (get_game_info_retrieval_prompt_template() | llm_structured).invoke({
+                "query": query,
+                "context": context,
+                "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+            })  # type: ignore
+            logger.info(f"✅ game_info_retrieval: game_id={result.game_id} | answer={response.answer[:200]}")
+            return response.answer, result.game_id
+
+        except Exception as e:
+            error_msg = f"Error in game_info_retrieval: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            if run_tree:
+                run_tree.end(error=error_msg)
+            return f"An error occurred while retrieving game info: {str(e)}", None
 
 
 # ==========================================
@@ -393,3 +488,55 @@ class GameHistoryRetrievalTool(BaseTool):
             if run_tree:
                 run_tree.end(error=error_msg)
             return f"An error occurred while retrieving game history. Details: {str(e)}. Please try again or stop the execution.", None
+
+    async def _arun(
+        self,
+        query: str,
+        execution_agent_state: Annotated[dict, InjectedState],
+        time_context: Optional[str] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Tuple[str, Optional[str]]:
+        """Async version with Tavily fallback (match report) when match not found in DB."""
+        run_tree = get_current_run_tree()
+        try:
+            last_artifact = execution_agent_state.get("last_tool_artifact")
+            artifact_preview = (
+                last_artifact if isinstance(last_artifact, str)
+                else f"[{len(last_artifact)} annotations]" if isinstance(last_artifact, list)
+                else "None — will search"
+            )
+            logger.info(f"📖 GameHistoryRetrieval (async) artifact: {artifact_preview}")
+
+            try:
+                history_context, game_id = self._resolve_history_context(query, last_artifact)
+            except ValueError:
+                # _GameNotFound path — fallback to Tavily match report search
+                logger.info("⚡ game_history_retrieval DB miss — falling back to Tavily news search")
+                tavily_answer, news = await _get_tavily().search_news(
+                    f"{query} match report events goals cards substitutions",
+                    time_range=self._finder.last_time_range
+                )
+                news_text = _format_news_fallback(news, GAME_FALLBACK_TOP_K, answer=tavily_answer)
+                llm_structured = self._llm.with_structured_output(ToolOutput)
+                response: ToolOutput = await (get_game_history_retrieval_prompt_template() | llm_structured).ainvoke({  # type: ignore
+                    "query": query,
+                    "context": news_text,
+                    "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+                })
+                return response.answer, news_text
+
+            llm_structured = self._llm.with_structured_output(ToolOutput)
+            response: ToolOutput = (get_game_history_retrieval_prompt_template() | llm_structured).invoke({
+                "query": query,
+                "context": history_context,
+                "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+            })  # type: ignore
+            logger.info(f"✅ game_history_retrieval: game_id={game_id} | answer={response.answer[:200]}")
+            return response.answer, history_context
+
+        except Exception as e:
+            error_msg = f"Error in game_history_retrieval: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            if run_tree:
+                run_tree.end(error=error_msg)
+            return f"An error occurred while retrieving game history: {str(e)}", None

@@ -1,3 +1,4 @@
+from typing import Literal
 from pydantic import BaseModel, Field
 
 class MatchInfo(BaseModel):
@@ -12,6 +13,16 @@ class MatchInfo(BaseModel):
     score: str = Field(description="Tỷ số dạng X - X, hoặc unknown", default="unknown")
     team1: str = Field(description="Tên đội 1 (giữ nguyên tên gốc)", default="unknown")
     team2: str = Field(description="Tên đội 2 (giữ nguyên tên gốc, nếu không có để unknown)", default="unknown")
+    time_range: Literal["day", "week", "month", "year"] = Field(
+        default="month",
+        description=(
+            "Phạm vi thời gian phù hợp để tìm kiếm tin tức nếu không có trong DB. "
+            "day: hôm nay/hôm qua/today/yesterday. "
+            "week: tuần này/tuần trước/this week/last week. "
+            "month: tháng này/tháng trước/gần đây/this month/last month/recently. "
+            "year: mùa giải/năm nay/năm ngoái/this season/last season/this year/last year."
+        )
+    )
 
 class Annotation(BaseModel):
     """Thông tin chú thích cho một tình huống cụ thể trong trận đấu."""

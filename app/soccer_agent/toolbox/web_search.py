@@ -30,13 +30,31 @@ class WebNewsSearchInput(BaseModel):
             "'Premier League results this week'."
         )
     )
-    time_range: Literal["day", "week", "month"] = Field(
-        default="week",
+    time_range: Literal["day", "week", "month", "year"] = Field(
+        default="month",
         description=(
-            "Recency filter for news results. "
-            "'day' = last 24 hours (breaking news), "
-            "'week' = last 7 days (recent news, default), "
-            "'month' = last 30 days (background context)."
+            "Recency filter based on the temporal scope of the user query. "
+            "'day': hôm nay / hôm qua / today / yesterday / breaking news. "
+            "'week': tuần này / tuần trước / this week / last week / recent days. "
+            "'month': tháng này / tháng trước / gần đây / recently / this month / last month (default). "
+            "'year': mùa giải / năm nay / năm ngoái / this season / last season / this year / last year."
+        ),
+    )
+    exact_match: bool = Field(
+        default=False,
+        description=(
+            "When True, wraps the query in quotes for exact phrase matching. "
+            "Use when the user asks about a very specific team name, player name, "
+            "or match title and broad results are likely to be noisy."
+        ),
+    )
+    start_date: Optional[str] = Field(
+        default=None,
+        description=(
+            "Start date filter in YYYY-MM-DD format (with leading zeros, e.g. '2026-05-03'). "
+            "When provided, overrides time_range. "
+            "Use when the user specifies a concrete date or date range start "
+            "(e.g. 'ngày 3/5/2026' → '2026-05-03'). Leave None for relative ranges."
         ),
     )
     time_context: Optional[str] = Field(
@@ -65,21 +83,27 @@ class WebNewsSearchTool(BaseTool):
     def _run(
         self,
         query: str,
-        time_range: Literal["day", "week", "month"] = "week",
+        time_range: Literal["day", "week", "month", "year"] = "week",
+        exact_match: bool = False,
+        start_date: Optional[str] = None,
         _run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, List[dict]]:
-        return asyncio.run(self._arun(query, time_range))
+        return asyncio.run(self._arun(query, time_range, exact_match, start_date))
 
     async def _arun(
         self,
         query: str,
-        time_range: Literal["day", "week", "month"] = "week",
+        time_range: Literal["day", "week", "month", "year"] = "week",
+        exact_match: bool = False,
+        start_date: Optional[str] = None,
         time_context: Optional[str] = None,
         _run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> Tuple[str, List[dict]]:
         service = _get_tavily()
         try:
-            results = await service.search_news(query=query, time_range=time_range)
+            tavily_answer, results = await service.search_news(
+                query=query, time_range=time_range, start_date=start_date, exact_match=exact_match
+            )
         except Exception as e:
             logger.error(f"web_news_search failed: {e}", exc_info=True)
             return (
@@ -88,13 +112,14 @@ class WebNewsSearchTool(BaseTool):
             )
 
         # Sort results by published_date descending
-        # Tavily results typically have published_date in "YYYY-MM-DDTHH:MM:SS" format or empty
         results.sort(key=lambda x: x.get("published_date") or "", reverse=True)
 
-        if not results:
+        if not results and not tavily_answer:
             return f"No recent news found for: {query}", []
 
         lines = [f'[web_news_search results for: "{query}" | time_range={time_range}]']
+        if tavily_answer:
+            lines.append(f"\nSummary: {tavily_answer}")
         for i, r in enumerate(results, 1):
             title = r.get("title", "")
             url = r.get("url", "")

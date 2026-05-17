@@ -140,6 +140,7 @@ class SoccerAgent:
                     "tool_chains": [],
                     "sub_queries": [],
                     "need_call_tools": True,
+                    "pending_clarifications": [],
                     "tool_calls_history": [],
                     "tool_results_history": [],
                     "last_tool_artifact": None,
