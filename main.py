@@ -1,13 +1,8 @@
 from contextlib import asynccontextmanager
 import logging
-import os
 import uvicorn
-
-# Suppress broken OTel resource detector registered by azure-* packages
-logging.getLogger("opentelemetry.sdk.resources").setLevel(logging.CRITICAL)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from ag_ui_langgraph import add_langgraph_fastapi_endpoint
 from copilotkit import LangGraphAGUIAgent
 from langfuse import get_client
 from langchain_core.runnables import RunnableConfig
@@ -30,6 +25,7 @@ from app.soccer_agent.memory.checkpointer import init_checkpointer, close_checkp
 
 # Chỉ import router chat và user
 from app.api.chat import router as chat_router
+from app.api.chat import add_custom_copilotkit_endpoint
 from app.api.user import router as user_router
 
 # Cấu hình logging đơn giản thay vì structlog
@@ -43,6 +39,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 logging.getLogger("LiteLLM Router").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
 # Global variables for database connections
 mongo_client = None
 qdrant_client = None
@@ -124,7 +121,7 @@ async def lifespan(app: FastAPI):
             config = RunnableConfig(callbacks=[langfuse_handler])
 
             # Create LangGraph Endpoint for Copilotkit Integration
-            add_langgraph_fastapi_endpoint(
+            add_custom_copilotkit_endpoint(
                 app=app,
                 agent=LangGraphAGUIAgent(
                     name="SoccerAgent",

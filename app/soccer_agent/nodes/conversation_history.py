@@ -71,7 +71,8 @@ class ConversationHistoryNode:
         """
         metadata = config.get("metadata", {})
         thread_id = metadata.get("thread_id", str(uuid.uuid4()))
-
+        user_id = config.get("configurable", {}).get("user_id")
+        
         # --- Emit tool call for rendering this step in UI ---
         await adispatch_custom_event(
             "manually_emit_tool_call",
