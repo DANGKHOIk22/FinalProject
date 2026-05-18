@@ -48,10 +48,12 @@ async def chat_endpoint(request: ChatRequest, soccer_agent=Depends(get_agent_ser
 
 # --- Endpoint for Copilotkit Chatbot UI --- 
 # This custom endpoint is created by imitate 'from ag_ui_langgraph import add_langgraph_fastapi_endpoint'
-def add_custom_copilotkit_endpoint(app: FastAPI, agent: LangGraphAGUIAgent, path: str = "/"):
-    from app.api.user import get_current_user
+def get_copilotkit_router(agent: LangGraphAGUIAgent) -> APIRouter:
+    from app.api.deps import get_current_user
     
-    @app.post(path)
+    copilotkit_router = APIRouter()
+    
+    @copilotkit_router.post("/")
     async def langgraph_agent_endpoint(
         input_data: RunAgentInput, 
         request: Request,
@@ -78,7 +80,7 @@ def add_custom_copilotkit_endpoint(app: FastAPI, agent: LangGraphAGUIAgent, path
             media_type=encoder.get_content_type()
         )
 
-    @app.get(f"{path}/health")
+    @copilotkit_router.get("/health")
     def health():
         return {
             "status": "ok",
@@ -86,3 +88,5 @@ def add_custom_copilotkit_endpoint(app: FastAPI, agent: LangGraphAGUIAgent, path
                 "name": agent.name,
             }
         }
+        
+    return copilotkit_router

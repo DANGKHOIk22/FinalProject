@@ -44,6 +44,11 @@ class Settings:
     # Redis Configuration
     REDIS_URL: Optional[str] = os.getenv('REDIS_URL')
 
+    # JWT Configuration
+    JWT_SECRET_KEY: Optional[str] = os.getenv('JWT_SECRET_KEY')
+    JWT_ALGORITHM: str = os.getenv('JWT_ALGORITHM', 'HS256')
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv('JWT_ACCESS_TOKEN_EXPIRE_MINUTES', 10080)) # 60 * 24 * 7 =7 days
+
     # Tavily Configuration — comma-separated keys for round-robin + failover.
     # Single TAVILY_API_KEY is also accepted for backwards compatibility.
     TAVILY_API_KEYS: list[str] = [
@@ -90,9 +95,14 @@ class Settings:
             raise ValueError("CLIP_ENDPOINT_KEY is required but not set")
         
 
-        #Validate Redis settings
-        if not cls.REDIS_URL:
-            raise ValueError("REDIS_URL is required but not set")
+        # #Validate Redis settings
+        # if not cls.REDIS_URL:
+        #     raise ValueError("REDIS_URL is required but not set")
+            
+        # Validate JWT settings
+        if not cls.JWT_SECRET_KEY:
+            raise ValueError("The JWT_SECRET_KEY is not added to the .env file, you should add it with a 64-character hex string to .env. For example: 4a2c9f8b1d7e6c3a5b0f8e9d2c1b3a4f6e7d8c9b0a1f2e3d4c5b6a7f8e9d0c1b")
+            
         return True
     
     
@@ -100,5 +110,6 @@ class Settings:
 
 # Create a singleton instance
 settings = Settings()
+settings.validate()
 
 

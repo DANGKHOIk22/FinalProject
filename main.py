@@ -25,7 +25,7 @@ from app.soccer_agent.memory.checkpointer import init_checkpointer, close_checkp
 
 # Chỉ import router chat và user
 from app.api.chat import router as chat_router
-from app.api.chat import add_custom_copilotkit_endpoint
+from app.api.chat import get_copilotkit_router
 from app.api.user import router as user_router
 
 # Cấu hình logging đơn giản thay vì structlog
@@ -121,15 +121,17 @@ async def lifespan(app: FastAPI):
             config = RunnableConfig(callbacks=[langfuse_handler])
 
             # Create LangGraph Endpoint for Copilotkit Integration
-            add_custom_copilotkit_endpoint(
-                app=app,
-                agent=LangGraphAGUIAgent(
-                    name="SoccerAgent",
-                    graph=agent_service.graph, 
-                    config=config
+            app.include_router(
+                get_copilotkit_router(
+                    agent=LangGraphAGUIAgent(
+                        name="SoccerAgent",
+                        graph=agent_service.graph, 
+                        config=config
+                    )
                 ),
-                path="/soccer_agent/copilotkit"
-            ) 
+                prefix="/soccer_agent/copilotkit",
+                tags=["CopilotKit"]
+            )
         else:
             logger.warning("⚠️ DASHSCOPE_API_KEY not set, skipping SoccerAgent initialization")
             agent_service = None
