@@ -186,7 +186,7 @@ class SaveToMemoryNode:
 
         metadata = config.get("metadata", {})
         thread_id = metadata.get("thread_id", str(uuid.uuid4()))
-        user_id = metadata.get("user_id") or thread_id  # user_id for cross-session long-term memory
+        user_id = config.get("configurable", {}).get("user_id")  # user_id for cross-session long-term memory
 
         # --- 1. Save Clean Conversation History ---
         last_user_message = None
