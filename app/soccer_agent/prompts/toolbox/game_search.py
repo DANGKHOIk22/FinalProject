@@ -25,9 +25,18 @@ def get_extraction_prompt_template() -> ChatPromptTemplate:
 
         To be noted, if you can determine only one team, please assign the team to team1 and leave team2 as 'unknown'. If any information is missing or uncertain, write 'unknown'. You have to use the exactly same name of teams as provided in the input text. Do not output any other words.
         For other attributes, if any information is missing or uncertain, write 'unknown'. As for date, you should record in the form of xxxx-xx-xx if you can get the clear date; Meanwhile, as for year, month, day, you need capture as more information point to this game as possible, including year, month, and day, and record them in numbers.
-        
+
+        IMPORTANT — use the current date/time context below to resolve relative time expressions (e.g. "yesterday", "last week", "last month", "last season"):
+        Current date/time: {time_context}
+
+        Also set time_range based on the temporal scope of the query:
+        - "day"   → hôm nay / hôm qua / today / yesterday
+        - "week"  → tuần này / tuần trước / this week / last week
+        - "month" → tháng này / tháng trước / gần đây / recently / this month / last month (default)
+        - "year"  → mùa giải / năm nay / năm ngoái / this season / last season / this year / last year
+
         {format_instructions}
-        
+
         The sentence is: "{question}"
         """
         )

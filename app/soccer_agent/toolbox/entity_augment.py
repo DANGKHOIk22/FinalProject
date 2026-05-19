@@ -120,11 +120,18 @@ _QUERY_TYPE_LABELS: list[tuple[str, str]] = [
 
 
 def _detect_entity_type(entity_name: str, query: str) -> str:
-    """Return SoccerEntities field name by looking for type labels before the entity name in query."""
+    """Return SoccerEntities field name by looking for type labels in query.
+
+    Checks two patterns:
+    - "cầu thủ lionel messi" — label BEFORE name (Vietnamese/English prefix)
+    - "lionel messi (player)"  — label/type AFTER name in parentheses
+    """
     q = query.lower()
     name = entity_name.lower()
     for label, entity_type in _QUERY_TYPE_LABELS:
         if f"{label} {name}" in q:
+            return entity_type
+        if f"{name} ({label})" in q:
             return entity_type
     return "unknown"
 
@@ -227,6 +234,9 @@ class EntityAugmentTool(BaseTool):
         time_context: Optional[str] = None,
         _run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> Tuple[str, SearchingResult]:
+        if not time_context:
+            time_context = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+
         run_tree = get_current_run_tree()
         try:
             if not entity_names:
@@ -454,17 +464,16 @@ class EntityAugmentTool(BaseTool):
     def _aggregate_searching_results(searching_result: SearchingResult) -> str:
         aggregated_text = ""
         for entity in searching_result.found_entities:
+            last_updated = getattr(entity, "LAST_UPDATED", None)
+            last_updated_str = last_updated or "Not available (data may be outdated — treat as potentially stale)"
             aggregated_text += "-" * 10 + "\n"
-            aggregated_text += f"INFORMATION ABOUT:  {entity.NAME}:\n"
-            aggregated_text += f"(ENTITY TYPE: {entity.ENTITY_TYPE})\n"
+            aggregated_text += f"INFORMATION ABOUT: {entity.NAME} (ENTITY TYPE: {entity.ENTITY_TYPE}) | LAST_UPDATED: {last_updated_str}\n"
             if getattr(entity, "SUMMARY", None):
                 aggregated_text += f"SUMMARY: {entity.SUMMARY}\n"
             if getattr(entity, "INFOBOX", None):
                 aggregated_text += f"INFOBOX: {entity.INFOBOX}\n"
             if getattr(entity, "CONTENT", None):
                 aggregated_text += f"CONTENT: {entity.CONTENT}\n"
-            if getattr(entity, "LAST_UPDATED", None):
-                aggregated_text += f"LAST_UPDATED: {entity.LAST_UPDATED}\n"
             aggregated_text += "-" * 10 + "\n\n"
 
         if searching_result.missing_entities:

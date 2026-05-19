@@ -8,10 +8,8 @@ def get_textual_retrieval_augment_prompt_template() -> ChatPromptTemplate:
 
     retrieval_augment_prompt_template = ChatPromptTemplate.from_messages([
         SystemMessage(
-            "You are a helpful assistant that answers user requests on soccer/football topics by using the information provided. Ensure your answers are accurate and relevant."
-        ),
-        HumanMessagePromptTemplate.from_template(
-            """### Context
+            """You are a helpful assistant that answers user requests on soccer/football topics by using the information provided. Ensure your answers are accurate and relevant.
+            ###Context
             After synthesizing the information related to the entities identified in the user's query, your role is to compile that raw information into a complete and accurate final answer.
 
             ### INPUT FORMAT
@@ -36,6 +34,10 @@ def get_textual_retrieval_augment_prompt_template() -> ChatPromptTemplate:
             3. **unknown_entities**: A list of objects for entities that are missing or need classification. Each object must have:
                 - `entity_name`: The name of the entity.
                 - `entity_type`: One of: 'player', 'team', 'venue', 'referee', or 'unknown'.
+            """
+        ),
+        HumanMessagePromptTemplate.from_template(
+            """### 
 
             ### USER QUERY
             {query}

@@ -144,7 +144,7 @@ class SaveToMemoryNode:
     # 3. Long-term Memory (pgvector deduplication)
     # ------------------------------------------------------------------
 
-    async def _background_upsert_longterm(self, thread_id: str, payload: Dict[str, Any]) -> None:
+    async def _background_upsert_longterm(self, user_id: str, payload: Dict[str, Any]) -> None:
         """Sync entity wiki content to Long-term Memory with smart deduplication."""
         name = payload.get("name", "")
         cleaned = payload.get("cleaned_content", "")
@@ -156,7 +156,7 @@ class SaveToMemoryNode:
 
         try:
             await long_term_memory_manager.upsert_memory_smart(
-                user_id=thread_id,
+                user_id=user_id,
                 entity_name=name,
                 content=cleaned,
                 metadata={
@@ -186,6 +186,7 @@ class SaveToMemoryNode:
 
         metadata = config.get("metadata", {})
         thread_id = metadata.get("thread_id", str(uuid.uuid4()))
+        user_id = metadata.get("user_id") or thread_id  # user_id for cross-session long-term memory
 
         # --- 1. Save Clean Conversation History ---
         last_user_message = None
@@ -210,28 +211,83 @@ class SaveToMemoryNode:
             )
 
         # --- 2. Process Tool Results ---
+        logger.debug(f"[SaveMemory] tool_calls={len(tool_calls_history)}, tool_results={len(tool_results_history)}")
         if tool_calls_history:
             for i, tool_call in enumerate(tool_calls_history):
                 tool_name = tool_call.get("name")
+                logger.debug(f"[SaveMemory] Processing tool[{i}]: {tool_name}")
                 if i >= len(tool_results_history):
+                    logger.warning(f"[SaveMemory] No tool_result at index {i}, skipping")
                     continue
 
                 tool_msg = tool_results_history[i]
 
-                # Case A: entity_augment — check for _upsert_payload in artifact
+                # Case A: entity_augment — always save tool result to pgvector
                 if tool_name == "entity_augment":
                     artifact = getattr(tool_msg, "artifact", None)
-                    if artifact and hasattr(artifact, "_upsert_payload") and artifact._upsert_payload:
-                        payload = artifact._upsert_payload
+                    logger.debug(f"[SaveMemory] entity_augment artifact={type(artifact).__name__ if artifact else 'None'}")
+
+                    # Normalize: artifact can be SearchingResult or dict after checkpoint serde
+                    def _get(obj, key, default=None):
+                        if obj is None: return default
+                        if isinstance(obj, dict): return obj.get(key, default)
+                        return getattr(obj, key, default)
+
+                    upsert_payload = _get(artifact, "_upsert_payload")
+                    found_entities = _get(artifact, "found_entities", [])
+                    
+                    if upsert_payload:
+                        payload = upsert_payload
+                        source = payload.get("source", "unknown")
+                        logger.info(f"[SaveMemory] 📝 Upsert payload: source={source}, entity='{payload.get('name')}'")
                         
                         # Only upsert Mongo when we have fresh wiki data
-                        if payload.get("source") == "wiki_extract":
-                            if artifact.found_entities:
-                                payload["db_entity_data"] = artifact.found_entities[0].model_dump()
+                        if source == "wiki_extract":
+                            if found_entities:
+                                ent = found_entities[0]
+                                payload["db_entity_data"] = ent.model_dump() if hasattr(ent, "model_dump") else ent
                             asyncio.create_task(self._background_upsert_mongo(payload))
                         
-                        # Always upsert pgvector (with deduplication)
-                        asyncio.create_task(self._background_upsert_longterm(thread_id, payload))
+                        # Save wiki/search content to pgvector
+                        asyncio.create_task(self._background_upsert_longterm(user_id, payload))
+                    else:
+                        # DB was sufficient — save full entity data to pgvector
+                        if found_entities:
+                            for entity in found_entities:
+                                if isinstance(entity, dict):
+                                    entity_name = entity.get("NAME", "unknown")
+                                    summary = entity.get("SUMMARY", "")
+                                    content = entity.get("CONTENT", "")
+                                    entity_type = entity.get("ENTITY_TYPE", "unknown")
+                                else:
+                                    entity_name = entity.NAME or "unknown"
+                                    summary = entity.SUMMARY or ""
+                                    content = entity.CONTENT or ""
+                                    entity_type = entity.ENTITY_TYPE or "unknown"
+
+                                parts = []
+                                if summary: parts.append(summary)
+                                if content:
+                                    parts.append(content if isinstance(content, str) else str(content))
+                                full_content = "\n".join(parts)
+                                
+                                if full_content and len(full_content) > 50:
+                                    asyncio.create_task(
+                                        long_term_memory_manager.upsert_memory_smart(
+                                            user_id=user_id,
+                                            entity_name=entity_name,
+                                            content=full_content,
+                                            metadata={
+                                                "source": "entity_augment_db",
+                                                "entity_type": entity_type,
+                                                "timestamp": datetime.now().isoformat()
+                                            }
+                                        )
+                                    )
+                                    logger.info(f"[SaveMemory] 💾 Saved entity '{entity_name}' to pgvector (len={len(full_content)})")
+                        else:
+                            logger.debug(f"[SaveMemory] No found_entities in artifact, skipping pgvector")
+
 
                 # Case B: web_news_search
                 elif tool_name == "web_news_search":
@@ -241,7 +297,7 @@ class SaveToMemoryNode:
                             if isinstance(res, dict) and res.get("content"):
                                 asyncio.create_task(
                                     long_term_memory_manager.upsert_memory_smart(
-                                        user_id=thread_id,
+                                        user_id=user_id,
                                         entity_name="news",
                                         content=f"Title: {res.get('title', 'N/A')}\nContent: {res.get('content')}",
                                         metadata={

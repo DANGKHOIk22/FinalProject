@@ -8,7 +8,7 @@ from app.config.settings import settings
 logger = logging.getLogger(__name__)
 
 class SubQuerySemanticCache:
-    def __init__(self, threshold: float = 0.1, ttl: int = 60 * 60):
+    def __init__(self, threshold: float = 0.05, ttl: int = 60 * 60):
         self.threshold = threshold
         try:
             self.embeddings = GoogleGenerativeAIEmbeddings(
@@ -44,7 +44,7 @@ class SubQuerySemanticCache:
             
         # Format the material list to string to match on filter
         material_str = ", ".join(material) if material else "None"
-        logger.info(f"🔍 Checking Semantic cache for sub-query: '{query}' with material: '{material_str}'")
+        logger.debug(f"Checking Semantic cache for sub-query: '{query}' with material: '{material_str}'")
         
         try:
             filter_condition = Tag("material") == material_str
@@ -58,7 +58,7 @@ class SubQuerySemanticCache:
                 logger.info(f"🎯 Semantic cache HIT for query: '{query}'")
                 return docs[0][0].metadata.get("response")
                     
-            logger.info(f"⏳ Semantic cache MISS for query: '{query}'")
+            logger.debug(f"Semantic cache MISS for query: '{query}'")
         except Exception as e:
             logger.error(f"Semantic cache lookup error: {e}")
             
@@ -127,7 +127,7 @@ class SubQuerySemanticCache:
                 texts=[query],
                 metadatas=[metadata]
             )
-            logger.info(f"💾 Saved worker result to Semantic cache for query: '{query}' with material: '{material_str}'")
+            logger.debug(f"Saved worker result to Semantic cache for query: '{query}' with material: '{material_str}'")
         except Exception as e:
             logger.error(f"Semantic cache update error: {e}")
 

@@ -68,19 +68,6 @@ _BM25_FILLER_DOCS: list[list[str]] = [
 ]
 
 # Default soccer-news domains for ``search_news`` — overridable per call.
-_DEFAULT_NEWS_DOMAINS: tuple[str, ...] = (
-    "bbc.com",
-    "skysports.com",
-    "goal.com",
-    "espn.com",
-    "uefa.com",
-    "transfermarkt.com",
-    "premierleague.com",
-    "bundesliga.com",
-    "laliga.com",
-    "fifa.com",
-    "theathletic.com",
-)
 
 T = TypeVar("T")
 
@@ -398,34 +385,50 @@ class TavilyService:
         self,
         query: str,
         time_range: str = "week",
+        start_date: Optional[str] = None,
+        exact_match: bool = False,
         max_results: int = 20,
-        include_domains: Optional[Iterable[str]] = None,
         score_threshold: float = 0.5,
-    ) -> List[dict]:
-        """Search recent soccer news via Tavily ``topic="news"``."""
+    ) -> tuple[Optional[str], List[dict]]:
+        """Search recent soccer news via Tavily ``topic="news"``.
+
+        Returns ``(answer, results)`` where ``answer`` is Tavily's synthesised
+        summary (from ``include_answer="advanced"``) and ``results`` is the list
+        of matching articles. ``answer`` is ``None`` when Tavily didn't produce one.
+
+        When start_date (YYYY-MM-DD) is provided, time_range is ignored per Tavily API rules.
+        When exact_match is True, the query is wrapped in quotes for exact phrase matching.
+        """
+        search_query = f'"{query}"' if exact_match else query
+        kwargs: dict = dict(
+            query=search_query,
+            topic="news",
+            max_results=max_results,
+            search_depth="advanced",
+            include_answer="advanced",
+            chunks_per_source=5,
+        )
+        if start_date:
+            kwargs["start_published_date"] = start_date
+        else:
+            kwargs["time_range"] = time_range
 
         async def _call(client):
-            return await client.search(
-                query=query,
-                topic="news",
-                time_range=time_range,
-                max_results=max_results,
-                search_depth="advanced",
-                include_domains=list(include_domains or _DEFAULT_NEWS_DOMAINS),
-                chunks_per_source=5,
-                
-            )
+            return await client.search(**kwargs)
 
         try:
             response = await self._call_with_failover(_call)
         except Exception as e:
             logger.warning(f"[TavilyService] search_news failed for {query!r}: {e}")
-            return []
-        return [
+            return None, []
+
+        answer: Optional[str] = response.get("answer") or None
+        results = [
             r
             for r in (response.get("results", []) or [])
             if (r.get("score") or 0.0) >= score_threshold
         ]
+        return answer, results
 
     async def search_general(self, query: str, max_results: int = 5) -> List[dict]:
         """Domain-less fallback search — used when extraction fails entirely."""

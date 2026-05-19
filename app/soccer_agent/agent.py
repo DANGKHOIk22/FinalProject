@@ -116,10 +116,11 @@ class SoccerAgent:
 
     async def run(self, request: ChatRequest) -> str:
         """Execute the agent for a given request with tracing and observability."""
-        session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, request.user_id))
+        # thread_id isolates per-session LangGraph state; user_id is for cross-session long-term memory
+        thread_id = request.session_id or str(uuid.uuid4())
         config = RunnableConfig(
-            configurable={"thread_id": session_id},
-            metadata={"thread_id": session_id, "user_id": request.user_id},
+            configurable={"thread_id": thread_id},
+            metadata={"thread_id": thread_id, "user_id": request.user_id},
         )
         
         langfuse = get_client()
@@ -135,15 +136,17 @@ class SoccerAgent:
                     "user_query": request.user_query,
                     "clarified_query": "",
                     "additional_material": request.additional_material or [],
+                    "planning_output": None,
                     "tool_chains": [],
                     "sub_queries": [],
+                    "need_call_tools": True,
+                    "pending_clarifications": [],
                     "tool_calls_history": [],
                     "tool_results_history": [],
                     "last_tool_artifact": None,
                     "conversation_history": "",
                     "long_term_context": "",
                     "parallel_results": [],
-                    "need_call_tools": True,
                     "time_context": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
                 

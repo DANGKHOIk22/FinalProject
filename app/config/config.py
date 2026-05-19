@@ -34,6 +34,12 @@ SESSION_MEMORY_TOKEN_THRESHOLD = 12600  # len(text) // 4 ≈ số token
 SESSION_MEMORY_RECENT_KEEP = 5         # tin nhắn giữ verbatim sau khi vượt ngưỡng
 SESSION_MEMORY_REDIS_TTL = 86400       # TTL Redis key (giây) = 24 giờ
 
+# Planning — per-chain confidence gate
+PLANNING_CONFIDENCE_THRESHOLD: float = 0.5
+
+# Game tools — Tavily fallback result count when DB has no match
+GAME_FALLBACK_TOP_K: int = 10
+
 
 
 
