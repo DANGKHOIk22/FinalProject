@@ -95,9 +95,9 @@ class Settings:
             raise ValueError("CLIP_ENDPOINT_KEY is required but not set")
         
 
-        # #Validate Redis settings
-        # if not cls.REDIS_URL:
-        #     raise ValueError("REDIS_URL is required but not set")
+        #Validate Redis settings
+        if not cls.REDIS_URL:
+            raise ValueError("REDIS_URL is required but not set")
             
         # Validate JWT settings
         if not cls.JWT_SECRET_KEY:
