@@ -74,15 +74,21 @@ class ConversationHistoryNode:
         user_id = config.get("configurable", {}).get("user_id")
         
         # --- Emit tool call for rendering this step in UI ---
-        await adispatch_custom_event(
-            "manually_emit_tool_call",
-            data={
-                "id": str(uuid.uuid4()),
-                "name": "understand_user_message",
-                "args": {}
-            },
-            config=config
-        )
+        try:
+            await adispatch_custom_event(
+                "manually_emit_tool_call",
+                data={
+                    "id": str(uuid.uuid4()),
+                    "name": "understand_user_message",
+                    "args": {}
+                },
+                config=config
+            )
+        except RuntimeError as e:
+            logger.warning(
+                f"Failed to dispatch custom event: {e}. "
+                "This is expected if running outside a LangChain/LangGraph run context (e.g., in unit tests)."
+            )
         # --- Flags for tracing metadata ---
         loading_history_status = "failed" # "success"/"failed"
         load_from_cache = False # True: This question has already stored in cache, just load from cache database

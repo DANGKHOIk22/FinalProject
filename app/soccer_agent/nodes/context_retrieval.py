@@ -43,7 +43,7 @@ class ContextRetrievalNode:
             logger.warning(f"Semantic cache error: {e}")
 
         metadata = config.get("metadata", {})
-        thread_id = thread_id = metadata.get("thread_id", str(uuid.uuid4()))
+        thread_id = metadata.get("thread_id", str(uuid.uuid4()))
         user_id = config.get("configurable", {}).get("user_id")
         has_media = bool(state.get("additional_material"))
 
