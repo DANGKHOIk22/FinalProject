@@ -30,16 +30,8 @@ class Settings:
     DEEPFACE_HOME: Optional[str] = os.path.join(PROJECT_PATH, os.getenv('DEEPFACE_HOME', './temporary/cache'))
     
     # Endpoint Configuration
-    DEEPFACE_ENDPOINT_URI: Optional[str] = os.getenv('DEEPFACE_ENDPOINT_URI') 
-    DEEPFACE_ENDPOINT_KEY: Optional[str] = os.getenv('DEEPFACE_ENDPOINT_KEY')
     INSIGHTFACE_ENDPOINT_URI: Optional[str] = os.getenv('INSIGHTFACE_ENDPOINT_URI')
     INSIGHTFACE_ENDPOINT_KEY: Optional[str] = os.getenv('INSIGHTFACE_ENDPOINT_KEY')
-    GROUNDINGDINO_ENDPOINT_URI: Optional[str] = os.getenv('GROUNDINGDINO_ENDPOINT_URI')
-    GROUNDINGDINO_ENDPOINT_KEY: Optional[str] = os.getenv('GROUNDINGDINO_ENDPOINT_KEY')
-    CLIP_ENDPOINT_URI: Optional[str] = os.getenv('CLIP_ENDPOINT_URI')
-    CLIP_ENDPOINT_KEY: Optional[str] = os.getenv('CLIP_ENDPOINT_KEY')
-    CLIP_GROUNDINGDINO_ENDPOINT_URI: Optional[str] = os.getenv('CLIP_GROUNDINGDINO_ENDPOINT_URI')
-    CLIP_GROUNDINGDINO_ENDPOINT_KEY: Optional[str] = os.getenv('CLIP_GROUNDINGDINO_ENDPOINT_KEY')
 
     # Redis Configuration
     REDIS_URL: Optional[str] = os.getenv('REDIS_URL')
@@ -48,6 +40,7 @@ class Settings:
     JWT_SECRET_KEY: Optional[str] = os.getenv('JWT_SECRET_KEY')
     JWT_ALGORITHM: str = os.getenv('JWT_ALGORITHM', 'HS256')
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv('JWT_ACCESS_TOKEN_EXPIRE_MINUTES', 10080)) # 60 * 24 * 7 =7 days
+
 
     # Tavily Configuration — comma-separated keys for round-robin + failover.
     # Single TAVILY_API_KEY is also accepted for backwards compatibility.
@@ -77,22 +70,10 @@ class Settings:
             raise ValueError("QDRANT_COLLECTION_NAME is required but not set")
         
         # Validate endpoint settings
-        if not cls.DEEPFACE_ENDPOINT_URI:
-            raise ValueError("DEEPFACE_ENDPOINT_URI is required but not set")
-        if not cls.DEEPFACE_ENDPOINT_KEY:
-            raise ValueError("DEEPFACE_ENDPOINT_KEY is required but not set")
         if not cls.INSIGHTFACE_ENDPOINT_URI:
             raise ValueError("INSIGHTFACE_ENDPOINT_URI is required but not set")
         if not cls.INSIGHTFACE_ENDPOINT_KEY:
             raise ValueError("INSIGHTFACE_ENDPOINT_KEY is required but not set")
-        if not cls.GROUNDINGDINO_ENDPOINT_URI:
-            raise ValueError("GROUNDINGDINO_ENDPOINT_URI is required but not set")
-        if not cls.GROUNDINGDINO_ENDPOINT_KEY:
-            raise ValueError("GROUNDINGDINO_ENDPOINT_KEY is required but not set")
-        if not cls.CLIP_ENDPOINT_URI:
-            raise ValueError("CLIP_ENDPOINT_URI is required but not set")
-        if not cls.CLIP_ENDPOINT_KEY:
-            raise ValueError("CLIP_ENDPOINT_KEY is required but not set")
         
 
         #Validate Redis settings
