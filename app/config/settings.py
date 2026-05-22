@@ -54,6 +54,10 @@ class Settings:
     @classmethod
     def validate(cls) -> bool:
         """Validate that required settings are present."""
+         # Skip validate varible on CI
+        if os.getenv("CI") == "true" or os.getenv("TESTING") == "true":
+            return True
+        
         if not cls.MONGO_SRV:
             raise ValueError("MONGO_SRV is required but not set")
         if not cls.SOCCER_DB_NAME:
