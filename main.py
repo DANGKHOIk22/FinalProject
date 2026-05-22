@@ -27,6 +27,7 @@ from app.soccer_agent.memory.checkpointer import init_checkpointer, close_checkp
 from app.api.chat import router as chat_router
 from app.api.chat import get_copilotkit_router
 from app.api.user import router as user_router
+from app.api.upload import router as upload_router
 
 # Cấu hình logging đơn giản thay vì structlog
 logging.basicConfig(
@@ -196,6 +197,7 @@ app.add_middleware(
 # Đăng ký chat và user router
 app.include_router(chat_router, tags=["Soccer Chat Agent"])
 app.include_router(user_router, prefix="/user", tags=["User"])
+app.include_router(upload_router, tags=["Upload"])
 
 
 # --- 5. Helper Functions để truy cập preloaded models ---

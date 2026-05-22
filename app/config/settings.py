@@ -41,6 +41,9 @@ class Settings:
     JWT_ALGORITHM: str = os.getenv('JWT_ALGORITHM', 'HS256')
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv('JWT_ACCESS_TOKEN_EXPIRE_MINUTES', 10080)) # 60 * 24 * 7 =7 days
 
+    # Azure Configuration
+    AZURE_STORAGE_ACCOUNT_URL: str = os.getenv('AZURE_STORAGE_ACCOUNT_URL', 'https://socceragentws6807459471.blob.core.windows.net')
+    AZURE_CONTAINER_NAME: str = os.getenv('AZURE_CONTAINER_NAME', 'chat-uploads')
 
     # Tavily Configuration — comma-separated keys for round-robin + failover.
     # Single TAVILY_API_KEY is also accepted for backwards compatibility.
