@@ -205,8 +205,8 @@ class SaveToMemoryNode:
             asyncio.create_task(
                 self._background_save_memory(
                     session_id=thread_id,
-                    user_query=last_user_message.content,
-                    final_response=last_ai_message.content
+                    user_query=last_user_message.text,
+                    final_response=last_ai_message.text
                 )
             )
 

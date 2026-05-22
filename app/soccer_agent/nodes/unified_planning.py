@@ -25,7 +25,7 @@ class UnifiedPlanningNode:
         dispatchable (non-ambiguous) vs pending_clarifications (ambiguous).
         """
         messages = state.get("messages", [])
-        user_query = state.get("user_query") or (messages[-1].content if messages else "")
+        user_query = state.get("user_query") or (messages[-1].text if messages else "")
         additional_material = state.get("additional_material", [])
         conversation_history = state.get("conversation_history") or "No previous conversation."
         retrieved_cases = state.get("retrieved_cases") or "No examples available."

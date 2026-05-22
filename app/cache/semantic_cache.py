@@ -14,7 +14,7 @@ class SubQuerySemanticCache:
             self.embeddings = GoogleGenerativeAIEmbeddings(
                 model="gemini-embedding-001",
                 output_dimensionality=768,
-                google_api_key=settings.GOOGLE_API_KEY,
+                api_key=settings.GOOGLE_API_KEY,
                 task_type="RETRIEVAL_QUERY"
             )
             config = RedisConfig(

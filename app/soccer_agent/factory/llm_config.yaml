@@ -10,10 +10,8 @@ model_list:
 
   - model_name: planning-backup
     litellm_params:
-      model: gemini/gemini-3.1-flash-lite-preview
+      model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
-      temperature: 1.0
-      top_p: 0.95
       max_completion_tokens: 10000
       thinking_level: high
       stream: false
@@ -30,10 +28,8 @@ model_list:
 
   - model_name: execution-backup
     litellm_params:
-      model: gemini/gemini-3.1-flash-lite-preview
+      model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
-      temperature: 1.0
-      top_p: 0.95
       max_completion_tokens: 5000
       thinking_level: low
       stream: false
@@ -50,10 +46,8 @@ model_list:
 
   - model_name: retrieval-augment-backup
     litellm_params:
-      model: gemini/gemini-3.1-flash-lite-preview
+      model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
-      temperature: 1.0
-      top_p: 0.95
       max_completion_tokens: 10000
       thinking_level: low
       stream: true
@@ -69,10 +63,8 @@ model_list:
 
   - model_name: aggregator-backup
     litellm_params:
-      model: gemini/gemini-3.1-flash-lite-preview
+      model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
-      temperature: 1.0
-      top_p: 0.95
       max_completion_tokens: 50000
       thinking_level: low
       stream: true
@@ -91,7 +83,6 @@ model_list:
     litellm_params:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
-      temperature: 0.2
 
 router_settings:
   fallbacks:
