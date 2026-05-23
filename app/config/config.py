@@ -1,7 +1,8 @@
 import os
+from pathlib import Path
 
-# Project root
-PROJECT_PATH = os.getcwd()  # Đường dẫn tuyệt đối đến thư mục dự án
+# Project root — anchored to this file's location, not os.getcwd()
+PROJECT_PATH = str(Path(__file__).parent.parent.parent)
 
 # Temporary / artifact folders
 TEMPORARY_DIR = os.path.join(PROJECT_PATH, "temporary")

@@ -151,7 +151,8 @@ class SoccerAgent:
                     "conversation_history": "",
                     "long_term_context": "",
                     "parallel_results": [],
-                    "time_context": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    "time_context": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "video_id": request.video_id,
                 }
                 
                 # Execute LangGraph

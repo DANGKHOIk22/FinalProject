@@ -58,7 +58,23 @@ class UnifiedPlanningNode:
                 "This is expected if running outside a LangChain/LangGraph run context (e.g., in unit tests)."
             )
 
-        # Construct the prompt using the template
+        video_current_time = state.get("video_current_time")
+        video_id = state.get("video_id")
+        if video_id is None:
+            import json
+            for ctx_item in state.get("copilotkit", {}).get("context", []):
+                raw = ctx_item.value if hasattr(ctx_item, "value") else ctx_item.get("value")
+                value = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else None
+                if isinstance(value, dict) and value.get("video_id"):
+                    video_id = value["video_id"]
+                    video_current_time = value.get("current_time", video_current_time)
+                    break
+        video_context = (
+            f"HLS video_id={video_id}, current_time={video_current_time}s"
+            if video_id is not None
+            else "None"
+        )
+
         prompt_template = get_unified_planning_prompt_template()
         prompt_value = prompt_template.invoke({
             "user_query_msg": [messages[-1]] if messages else [],
@@ -68,6 +84,7 @@ class UnifiedPlanningNode:
             "retrieved_cases": retrieved_cases,
             "long_term_context": state.get("long_term_context") or "No relevant long-term memory found.",
             "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "video_context": video_context,
             "format_instructions": self.parser.get_format_instructions()
         })
         prompt_messages = prompt_value.to_messages()

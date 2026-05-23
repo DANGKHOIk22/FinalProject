@@ -54,9 +54,9 @@ class SubQuerySemanticCache:
                 filter=filter_condition,
                 distance_threshold = self.threshold
             )
-            if docs:
-                logger.info(f"🎯 Semantic cache HIT for query: '{query}'")
-                return docs[0][0].metadata.get("response")
+            # if docs:
+            #     logger.info(f"🎯 Semantic cache HIT for query: '{query}'")
+            #     return docs[0][0].metadata.get("response")
                     
             logger.debug(f"Semantic cache MISS for query: '{query}'")
         except Exception as e:
@@ -132,4 +132,4 @@ class SubQuerySemanticCache:
             logger.error(f"Semantic cache update error: {e}")
 
 # Global instance with proximity threshold
-semantic_cache = SubQuerySemanticCache(threshold=0.15, ttl=60 * 60)
+semantic_cache = SubQuerySemanticCache(threshold=0.15, ttl=1)

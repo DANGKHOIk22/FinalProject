@@ -1,8 +1,10 @@
-# CLAUDE.md - Soccer Agent Project Guide
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-This is a **Soccer Agent** application - an intelligent AI-powered chatbot that answers soccer-related questions using a multi-agent architecture built with LangGraph. The system can handle complex queries about soccer matches, players, teams, and analyze video/image content.
+**Soccer Agent** — an AI-powered chatbot that answers soccer-related questions using a parallel multi-agent architecture built with LangGraph. Handles complex queries about matches, players, teams, and can analyze video/image content.
 
 ### Core Technology Stack
 - **Framework**: FastAPI (Python 3.11)
@@ -39,20 +41,12 @@ FinalProject/
 │   │   ├── match.py           # Match data models
 │   │   └── soccerwiki_entities.py  # Entity schemas
 │   └── soccer_agent/          # Core agent implementation
-│       ├── agent.py           # Main SoccerAgent orchestrator (LangGraph Builder)
+│       ├── agent.py           # Main SoccerAgent class (LangGraph)
 │       ├── factory/           # Agent factory patterns
 │       ├── memory/            # Conversation & system memory
 │       │   ├── chat_history.py # PostgreSQL integration
 │       │   ├── session_memory.py # History summarization & Redis cache
 │       │   └── query_understanding.py # Pronoun resolution pipeline
-│       ├── nodes/             # LangGraph Nodes
-│       │   ├── conversation_history.py
-│       │   ├── user_message_understanding.py
-│       │   ├── case_retrieval.py
-│       │   ├── tool_planning.py
-│       │   ├── worker.py
-│       │   ├── aggregator.py
-│       │   └── memory_saving.py
 │       ├── prompts/           # LLM prompts
 │       └── toolbox/           # Agent tools
 ├── scripts/
@@ -64,46 +58,41 @@ FinalProject/
 
 ## Key Components
 
-### 1. Agent Architecture (`app/soccer_agent/`)
+### 1. Agent Architecture (`app/soccer_agent/agent.py`)
 
-The **SoccerAgent** implements a parallel multi-worker architecture using LangGraph. The main `agent.py` acts as an orchestrator, while the actual node logic is split into `app/soccer_agent/nodes/` for better maintainability.
+The **SoccerAgent** implements a parallel multi-worker architecture using LangGraph:
 
 #### State Management
-- **AgentState**: Parent state containing user query, `claried_query` (pronoun-resolved query), tool chains, parallel results, `recent_msgs_for_qu`, and `effective_memory`.
-- **WorkerState**: Individual worker state for parallel tool execution.
+- **AgentState**: Parent state containing user query, `claried_query` (pronoun-resolved query), tool chains, parallel results
+- **WorkerState**: Individual worker state for parallel tool execution
 
-#### Agent Flow & Node Files
-1. **Conversation History** (`nodes/conversation_history.py`): Retrieves chat history from Postgres/Redis. Determines if memory needs summarization.
-2. **Query Understanding** (`nodes/user_message_understanding.py`): Resolves pronouns/abbreviations and handles domain jargon. Detects ambiguity and can short-circuit to ask clarifying questions.
-3. **Case Retrieval** (`nodes/case_retrieval.py`): Pulls few-shot planning examples from CaseBank/Redis.
-4. **Planning Node** (`nodes/tool_planning.py`): Analyzes `claried_query`, checks history, plans parallel tool chains (`PlanningOutput`).
-5. **Worker Graph** (`nodes/worker.py`): Contains the execution subgraph:
-   - **Cache Node** (`_check_cache_node`): Checks Semantic Cache for similar previous queries to bypass execution.
-   - **Worker Dispatch** (`trigger_workers`): Dispatches sub-queries to parallel workers via `Send` commands; uses `claried_query` as fallback.
-   - **Execution Workers** (`_execution_node`): Each executes a tool chain independently; supports Thinking models.
-6. **Aggregator Node** (`nodes/aggregator.py`): Synthesizes parallel results into a final definitive response.
-7. **Memory Saving** (`nodes/memory_saving.py`): Asynchronously saves structured tool summaries and final response to PostgreSQL and Session Memory.
+#### Agent Flow
+1. **Query Understanding** (`QueryUnderstandingPipeline`): Resolves pronouns/abbreviations and handles domain jargon. Detects ambiguity and can short-circuit to ask clarifying questions.
+2. **Planning Node** (`_tool_chain_planning`): Analyzes `claried_query`, checks history, plans parallel tool chains (`PlanningOutput`).
+3. **Cache Node** (`_check_cache_node`): Checks Semantic Cache for similar previous queries to bypass execution.
+4. **Worker Dispatch** (`_trigger_workers`): Dispatches sub-queries to parallel workers via `Send` commands; uses `claried_query` as fallback.
+5. **Execution Workers** (`_execution_node`): Each executes a tool chain independently; supports Thinking models with a thinking budget.
+6. **Aggregator Node** (`_aggregator_node`): Synthesizes parallel results into a final definitive response; uses `claried_query` as effective user query.
 
-#### Key Orchestrator Methods (`agent.py`)
-- `run(request: ChatRequest)` - Main entry point. Initializes state, updates tracing, and invokes the graph.
-- `_build_graph()` - Compiles the parent state graph with edges between the injected Node classes.
+#### Key Methods
+- `run(request: ChatRequest)` - Main entry point. Handles memory loading, query clarification, graph execution, and background memory saving.
+- `_tool_chain_planning()` - Query decomposition, pronoun resolution, and tool chain planning.
+- `_worker_node()` / `_execution_node()` - Individual tool chain execution.
+- `_aggregator_node()` - Result aggregation.
+- `_trigger_workers()` - Dispatches to workers or direct response.
+- `_build_tool_summary_for_memory()` - Formats tool details for saving into conversation memory.
+- `_background_save_memory()` - Asynchronously saves results to PostgreSQL and updates Session Memory.
 
-
-### 2. Toolbox (`app/soccer_agent/toolbox/`)
+### Toolbox (`app/soccer_agent/toolbox/`)
 
 Available tools for the agent:
 
 #### Text/Knowledge Tools
-- **entity_augment** (`entity_augment.py`): Merged replacement for the old `textual_entity_search` + `textual_retrieval_augment` two-step chain. Accepts `entity_names: List[str]` + `query: str`. Internally:
-  1. Detects entity type from Vietnamese/English type labels in `query` (e.g. "câu lạc bộ", "cầu thủ", "coach", "stadium") to build a typed `SoccerEntities` for a precise MongoDB query.
-  2. Falls back to `unknown` (unfiltered name-only search) when no label matches.
-  3. Name matching uses `_name_regex_variants()` which strips FC/AFC/CF/SC suffixes so "Manchester City FC" matches "Manchester City" in DB.
-  4. If DB answer is insufficient (`has_sufficient_info=False`), runs Tavily fallback: wiki extract → clean markdown → LLM answer. Background-upserts result to MongoDB via `asyncio.create_task`.
-  5. If no wiki URL found → `search_general`, no DB save.
-  - **Input rule**: entity_names must be core names only — no FC/AFC/CF/SC suffixes, no type labels.
-- **web_news_search** (`web_search.py`): Search recent soccer news via Tavily. Use for transfers, injuries, live results, upcoming fixtures. Inputs: `query`, `time_range` (day/week/month).
-- **game_history_retrieval**: Get historical match event log (goals, cards, substitutions).
-- **game_info_retrieval**: Get match metadata (score, lineup, venue, attendance).
+- **textual_entity_search**: Search for soccer entities (players, teams, coaches)
+- **textual_retrieval_augment**: RAG-based retrieval from knowledge base
+- **game_history_retrieval**: Get historical match data
+- **game_info_retrieval**: Get specific match information
+- **game_search**: Search matches by criteria
 
 #### Visual Tools
 - **segment**: Segment images to detect objects (uses GroundingDINO)
@@ -113,10 +102,6 @@ Available tools for the agent:
 
 #### Utility Tools
 - **choice_selection**: Select best option from choices
-
-#### New Services (`app/soccer_agent/services/`)
-- **`tavily_service.py`** (`TavilyService`): Wraps all Tavily calls. Key methods: `find_wiki_url(name)`, `extract_wiki(url)` (full page, no query), `search_news(query, time_range)`, `search_general(query)`. Supports multi-key pool via `TAVILY_API_KEYS` env var (comma-separated) with round-robin + 429 failover.
-- **`content_cleaner.py`**: `clean_wiki_markdown(raw)` strips nav/citations/refs; `extract_summary(md)` returns intro paragraph after `# Title` heading.
 
 ### 3. Memory System (`app/soccer_agent/memory/`)
 
@@ -155,34 +140,20 @@ Response:
 Required environment variables in `.env`:
 
 ```env
-# LLM API Keys
-GOOGLE_API_KEY=your_gemini_api_key
-DASHSCOPE_API_KEY=your_dashscope_key (optional)
+# LLM
+GOOGLE_API_KEY=
+DASHSCOPE_API_KEY=          # Required — SoccerAgent is None without it; /chat returns 503
 
-# MongoDB (Entity Storage)
-MONGO_SRV=mongodb+srv://...
+# Databases
+MONGO_SRV=
 SOCCER_DB_NAME=SoccerWikiDemo
 SOCCER_COLLECTION_NAME=EntityInformation
-
-# Qdrant (Vector DB)
-QDRANT_URL=https://your-qdrant-instance
-QDRANT_API_KEY=your_api_key
-QDRANT_COLLECTION_NAME=your_collection
-
-# PostgreSQL (Conversation History)
-POSTGRES_DATABASE_URL=postgresql://user:pass@host:port/db
-
-# Azure ML Endpoints (Computer Vision)
-DEEPFACE_ENDPOINT_URI=https://...
-DEEPFACE_ENDPOINT_KEY=...
-GROUNDINGDINO_ENDPOINT_URI=https://...
-GROUNDINGDINO_ENDPOINT_KEY=...
-CLIP_ENDPOINT_URI=https://...
-CLIP_ENDPOINT_KEY=...
-CLIP_GROUNDINGDINO_ENDPOINT_URI=https://...
-CLIP_GROUNDINGDINO_ENDPOINT_KEY=...
-
-# Redis Configuration
+QDRANT_URL=
+QDRANT_API_KEY=
+QDRANT_COLLECTION_NAME=
+QDRANT_CASE_BANK_COLLECTION_NAME=planning_case_bank
+QDRANT_HLS_COLLECTION_NAME=hls_frame_index
+POSTGRES_DATABASE_URL=
 REDIS_URL=redis://localhost:6379/0
 
 # Tavily (web search + wiki extract fallback)
@@ -202,9 +173,7 @@ DEEPFACE_HOME=./temporary/cache
 - **Messages**: Individual chat messages (managed by langchain-postgres)
 
 ### MongoDB Collections
-- **EntityInformation**: Soccer entities (players, teams, coaches, venues, referees)
-  - New schema (post-migration): `NAME`, `ENTITY_TYPE`, `<TYPE>_URL`, `SUMMARY` (intro paragraph), `CONTENT` (full cleaned markdown string), `IMAGES` (list of URLs). `INFOBOX` field removed.
-  - `CONTENT` field is `Union[str, Dict]` in Pydantic schemas for backward compatibility with old documents that still store a dict.
+- **EntityInformation**: Soccer entities (players, teams, coaches, competitions)
 
 ### Qdrant Collections
 - Vector embeddings for semantic search
@@ -341,7 +310,7 @@ print(result["agent_response"])
 
 4. **Memory Management**: Conversation history saved to PostgreSQL via `CustomSystemPromptMemory`. Each turn stores: tool usage summary (name + args + response + artifact per step) + final response as a single assistant message.
 
-5. **Pronoun Resolution (`claried_query`)**: Managed by `QueryUnderstandingPipeline` before graph entry. It resolves pronouns/abbreviations using recent context and Session Memory. The resolved query is used by workers and the aggregator. The QU prompt also rewrites entity mentions with type labels (e.g. "câu lạc bộ Manchester City", "cầu thủ Ronaldo") so downstream tools know the entity type.
+5. **Pronoun Resolution (`claried_query`)**: Managed by `QueryUnderstandingPipeline` before graph entry. It resolves pronouns/abbreviations using recent context and Session Memory. The resolved query is used by workers and the aggregator.
 
 6. **Thinking Models**: The agent utilizes Gemini 2.0/2.5 Thinking models with specific `thinking_budget` (3000-4000) for complex reasoning during planning and execution.
 
@@ -351,21 +320,7 @@ print(result["agent_response"])
 
 9. **Error Handling**: Most errors are caught and logged. Check `logger.error()` calls for debugging. Worker timeouts are set to 120 seconds.
 
-10. **Configuration Priority**: Environment variables > `settings.py` > `config.py` defaults
-
-11. **entity_augment tool** (replaces old `textual_entity_search` + `textual_retrieval_augment` chain):
-    - Planning LLM must pass **one entity per chain** — use parallel chains for multiple entities.
-    - `entity_names` must be **core names only** (no FC/AFC/CF/SC/SSC suffixes, no type labels).
-    - Entity type is conveyed via the `query` / sub-query text using Vietnamese or English type labels ("câu lạc bộ X", "cầu thủ X", "coach X", "stadium X"). The tool parses this to issue a typed MongoDB query.
-    - Tavily fallback is **internal** — the planning LLM does not need to know about it.
-    - Background `asyncio.create_task` upserts wiki content to MongoDB after a Tavily fetch; does not block the response.
-
-12. **Planning prompt entity conventions** (`app/soccer_agent/prompts/agent.py`):
-    - Sub-queries for `entity_augment` must include type label: `"cầu thủ Ronaldo"`, `"câu lạc bộ Manchester City"`, `"sân Old Trafford"`.
-    - No FC/AFC/CF/SC suffixes in sub-queries.
-    - `current_date` is injected so the LLM can reason about recency.
-
-13. **MongoDB fuzzy name matching**: `_name_regex_variants()` in `entity_augment.py` builds `$or` queries with suffix-stripped variants so "Manchester City FC" finds "Manchester City" in the DB.
+7. **Configuration Priority**: Environment variables > `settings.py` > `config.py` defaults
 
 ## Contact & Support
 
@@ -376,7 +331,7 @@ For questions about this codebase, review:
 
 ---
 
-**Last Updated**: 2026-05-11
+**Last Updated**: 2026-04-05
 **Python Version**: 3.11+
 **Framework Version**: FastAPI 0.118.2, LangGraph (latest)
 

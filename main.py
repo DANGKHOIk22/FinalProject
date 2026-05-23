@@ -207,11 +207,9 @@ app.add_middleware(
 )
 
 # --- 4. Đăng ký Router ---
-# Đăng ký chat và user router
 app.include_router(chat_router, tags=["Soccer Chat Agent"])
 app.include_router(user_router, prefix="/user", tags=["User"])
 app.include_router(upload_router, tags=["Upload"])
-
 
 # --- 5. Helper Functions để truy cập preloaded models ---
 def get_mongo_client():

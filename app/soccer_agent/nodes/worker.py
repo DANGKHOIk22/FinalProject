@@ -55,6 +55,18 @@ class WorkerNodes:
 
     def trigger_workers(self, state: AgentState, config: RunnableConfig):
         """Map worker executions for each parallel tool chain."""
+        video_id = state.get("video_id")
+        video_current_time = state.get("video_current_time")
+        if video_id is None:
+            import json
+            for ctx_item in state.get("copilotkit", {}).get("context", []):
+                raw = ctx_item.value if hasattr(ctx_item, "value") else ctx_item.get("value")
+                value = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else None
+                if isinstance(value, dict) and value.get("video_id"):
+                    video_id = value["video_id"]
+                    video_current_time = value.get("current_time", video_current_time)
+                    break
+        logger.info(f"[trigger_workers] video_id={video_id!r}, video_current_time={video_current_time!r}")
         # Read from top-level state — always freshly written by unified_planning_node.
         # Do NOT read from planning_output: it may be stale (from a previous turn's checkpointed state).
         need_call_tools = state.get("need_call_tools", True)
@@ -66,6 +78,7 @@ class WorkerNodes:
         # Short-circuit to aggregator when no tools needed (is_ambiguous, greeting, etc.)
         if not need_call_tools or not tool_chains:
             logger.info(f"⏭️ Skipping workers (need_call_tools={need_call_tools}, tool_chains={tool_chains}). Going straight to aggregator.")
+            return "aggregator"
             return "aggregator"
             
         sends = []
@@ -80,7 +93,9 @@ class WorkerNodes:
                 "tool_results_history": [],
                 "last_tool_artifact": None,
                 "parallel_results": [],
-                "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+                "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "video_id": video_id,
+                "video_current_time": video_current_time,
             }
             logger.info(f"🚀 Triggering worker {idx}: sub_query='{sub_query}', chain={chain}")
             sends.append(Send("worker_graph", worker_state))
@@ -131,9 +146,11 @@ class WorkerNodes:
         tool_calls_history = state.get("tool_calls_history", [])
         tool_results_history = state.get("tool_results_history", [])
         messages = state.get("messages", [])
+        video_id = state.get("video_id")
+        video_current_time = state.get("video_current_time")
 
         logger.info(f"🔧 Running TOOL EXECUTION STEP: Step {len(tool_calls_history)}")
-        
+
         last_artifact = state.get("last_tool_artifact")
         last_tool_message = None
         if messages and isinstance(messages[-1], ToolMessage):
@@ -148,7 +165,9 @@ class WorkerNodes:
                 sub_query=sub_query,
                 additional_material=additional_material_str,
                 tool_chain=" -> ".join(tool_chain) if tool_chain else "No tools needed",
-                time_context=state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+                time_context=state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+                video_id=video_id or "None",
+                video_current_time=str(video_current_time) if video_current_time is not None else "None",
             )
             messages = [execution_prompt]
         

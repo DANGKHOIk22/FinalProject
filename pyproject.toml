@@ -53,6 +53,7 @@ dependencies = [
     "pyjwt>=2.12.1",
     "azure-storage-blob>=12.28.0",
     "python-multipart>=0.0.29",
+    "fastembed>=0.4.0",
 ]
 
 [tool.pytest.ini_options]
