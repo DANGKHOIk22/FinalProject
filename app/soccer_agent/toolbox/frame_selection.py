@@ -1,13 +1,12 @@
 import os
 import re
 import logging
-from collections import defaultdict
 from typing import Type, List, Optional, Literal, Tuple
 from pydantic import BaseModel, Field, PrivateAttr
 from langchain_core.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langsmith import get_current_run_tree
-from dashscope import MultiModalEmbedding
+import dashscope
 from fastembed import SparseTextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -62,7 +61,6 @@ class FrameSelectionTool(BaseTool):
     output_dir: str = os.path.join(PROJECT_PATH, "temporary", "frames")
 
     _dashscope_api_key: str = PrivateAttr("")
-    _embedding_model: str = PrivateAttr("tongyi-embedding-vision-flash")
     _bm25: SparseTextEmbedding = PrivateAttr()
 
     def __init__(self):
@@ -70,46 +68,51 @@ class FrameSelectionTool(BaseTool):
         os.makedirs(self.output_dir, exist_ok=True)
         self._dashscope_api_key = settings.DASHSCOPE_API_KEY or ""
         if not self._dashscope_api_key:
-            raise ValueError("DASHSCOPE_API_KEY is not configured in environment variables.")
+            raise ValueError("DASHSCOPE_API_KEY is not configured.")
+        self._bm25 = SparseTextEmbedding(model_name="Qdrant/bm25")
+        logger.info("FrameSelectionTool initialized (DashScope + BM25 ready)")
 
-        # Test connectivity with a simple request
-        try:
-            logger.info("✅ DashScope API is configured for Qwen3-VL-Embedding")
-        except Exception as exc:
-            logger.warning("Error initializing DashScope: %s", exc)
+    # ── Text preprocessing (must match IncrementalSegmentIndexer) ────────────
 
-    def _select_random_frame(self, video_path: str) -> Optional[str]:
-        """Chọn ngẫu nhiên 1 frame nếu CLIP thất bại."""
-        try:
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                logger.error(f"Cannot open video for random selection: {video_path}")
-                return None
-            
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            if total_frames <= 0:
-                return None
-            
-            random_frame_idx = random.randint(0, total_frames - 1)
-            cap.set(cv2.CAP_PROP_POS_FRAMES, random_frame_idx)
-            
-            ret, frame = cap.read()
-            cap.release()
-            
-            if not ret:
-                return None
-            
-            # Save frame
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_filename = f"FRAME_RANDOM_{timestamp}.jpg"
-            output_path = os.path.join(self.output_dir, output_filename)
-            
-            cv2.imwrite(output_path, frame)
-            logger.info(f"Random frame saved at: {output_path}")
-            return output_path
-            
-        except Exception as e:
-            logger.error(f"Error in random frame selection: {e}")
+    def _preprocess_text(self, text: str) -> str:
+        text = text.lower()
+        text = re.sub(r'[^\w\s]', '', text)
+        return text
+
+    # ── Embedding helpers ─────────────────────────────────────────────────────
+
+    def _embed_text(self, text: str) -> List[float]:
+        cleaned = self._preprocess_text(text)
+        response = MultiModalEmbedding.call(
+            api_key=self._dashscope_api_key,
+            model=self._embedding_model,
+            input=[{"text": cleaned}],
+        )
+        if response.status_code != 200:
+            raise ValueError(f"DashScope text embedding failed: {response.message}")
+        return response.output["embeddings"][0]["embedding"]
+
+    def _embed_sparse(self, text: str) -> SparseVector:
+        cleaned = self._preprocess_text(text)
+        result = list(self._bm25.embed([cleaned]))[0]
+        return SparseVector(
+            indices=result.indices.tolist(),
+            values=result.values.tolist(),
+        )
+
+    # ── Temporal filter ───────────────────────────────────────────────────────
+
+    def _build_timestamp_filter(self, inp: FrameSelectionInput) -> Optional[FieldCondition]:
+        if inp.intent == "current" and inp.current_time is not None:
+            ts_range = Range(gte=max(0.0, inp.current_time - 10), lte=inp.current_time)
+        elif inp.intent == "recent" and inp.current_time is not None:
+            ts_range = Range(gte=max(0.0, inp.current_time - 60), lte=inp.current_time)
+        elif inp.intent == "specific" and inp.time_start is not None:
+            ts_range = Range(
+                gte=inp.time_start,
+                lte=inp.time_end if inp.time_end is not None else inp.time_start + 30,
+            )
+        else:
             return None
         return FieldCondition(key="timestamp", range=ts_range)
 
@@ -148,8 +151,9 @@ class FrameSelectionTool(BaseTool):
         transcript_hits = client.query_points(
             collection_name=settings.QDRANT_HLS_COLLECTION_NAME,
             prefetch=[
-                Prefetch(query=query_vec,  using="dense_text", filter=chunk_filter("transcript"), limit=top_k),
-                Prefetch(query=sparse_vec, using="sparse",     filter=chunk_filter("transcript"), limit=top_k),
+                Prefetch(query=query_vec,  using="dense_image", filter=base_filter, limit=top_k),
+                Prefetch(query=query_vec,  using="dense_text",  filter=base_filter, limit=top_k),
+                Prefetch(query=sparse_vec, using="sparse",      filter=base_filter, limit=top_k),
             ],
             query=FusionQuery(fusion=Fusion.RRF),
             limit=top_k,
