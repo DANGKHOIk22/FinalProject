@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 from langchain_core.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langsmith import get_current_run_tree
-import dashscope
+from dashscope import MultiModalEmbedding
 from fastembed import SparseTextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -61,6 +61,7 @@ class FrameSelectionTool(BaseTool):
     output_dir: str = os.path.join(PROJECT_PATH, "temporary", "frames")
 
     _dashscope_api_key: str = PrivateAttr("")
+    _embedding_model: str = PrivateAttr("tongyi-embedding-vision-flash")
     _bm25: SparseTextEmbedding = PrivateAttr()
 
     def __init__(self):
