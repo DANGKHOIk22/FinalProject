@@ -1,12 +1,8 @@
 import os
 import re
 import logging
-import random
-import cv2
-import numpy as np
-from datetime import datetime
-from typing import Type, List, Optional, Literal, Tuple, Union
-from PIL import Image
+from collections import defaultdict
+from typing import Type, List, Optional, Literal, Tuple
 from pydantic import BaseModel, Field, PrivateAttr
 from langchain_core.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
@@ -31,20 +27,35 @@ logger = logging.getLogger(__name__)
 # ==========================================
 
 class FrameSelectionInput(BaseModel):
-    query: str = Field(description="Description of the desired frame to be selected from the video. This should be a concise text prompt. For example, 'A soccer player scoring a goal' or 'A goalkeeper making a save'.")
-    material: List[str] = Field(description="List of video file paths. Usually contains only one element.")
-    
+    query: str = Field(description="Description of the desired frame to be selected from the video.")
+    video_id: Optional[str] = Field(default=None, description="HLS streaming video ID. Required for frame retrieval from Qdrant.")
+    current_time: Optional[float] = Field(default=None, description="Current video playback position in seconds.")
+    intent: Literal["current", "recent", "specific", "none"] = Field(
+        default="none",
+        description=(
+            "Temporal intent extracted from the query: "
+            "current=last 10s from current_time, "
+            "recent=last 60s from current_time, "
+            "specific=extract exact time or range from query text, "
+            "none=no temporal filter."
+        ),
+    )
+    time_start: Optional[float] = Field(default=None, description="Start of temporal filter in seconds from video start. Used when intent=specific.")
+    time_end: Optional[float] = Field(default=None, description="End of temporal filter in seconds from video start. Used when intent=specific.")
+
+
+# ==========================================
+# 2. Tool
+# ==========================================
+
 class FrameSelectionTool(BaseTool):
     name: str = "frame_selection"
-    description: str = """
-    Given a description query and a video of soccer game, the tool selects the frame that best matches the prompt 
-    and saves that frame as an image. This image is crucial for subsequent visual analysis steps.
-    Input: A text prompt describing the scene and a video file path.
-    Output: The file path of the saved image frame.
-    """
-    args_schema: Type[BaseModel] = FrameSelectionInput #type: ignore
-    
-    # Trả về cả Content (Text) và Artifact (File Path)
+    description: str = (
+        "Selects the most relevant frame(s) for a given query from an HLS video. "
+        "Supports temporal filtering (current=last 10s, recent=last 60s, specific=time extracted from query). "
+        "Returns frame file paths appended to additional_material for downstream visual analysis tools."
+    )
+    args_schema: Type[BaseModel] = FrameSelectionInput  # type: ignore
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
 
     project_path: str = PROJECT_PATH
@@ -100,80 +111,87 @@ class FrameSelectionTool(BaseTool):
         except Exception as e:
             logger.error(f"Error in random frame selection: {e}")
             return None
+        return FieldCondition(key="timestamp", range=ts_range)
 
-    def _preprocess_video(
-        self,
-        video_path: str,
-        desired_fps: int = 1,
-        shortest_edge: int = 224,
-        jpeg_quality: int = 100,
-        max_frames: int = 1500,
-    ) -> Tuple[List[Image.Image], List[str]]:
-        """Preprocess video: extract frames, resize, and save as temporary files.
+    # ── Qdrant two-call query + Python score merge ────────────────────────────
 
-        :param video_path: Path to the input video file.
-        :param desired_fps: Target frames per second to sample from the video.
-        :param shortest_edge: The size of the shortest edge after resizing.
-        :param jpeg_quality: Quality of JPEG compression (1-100).
-        :param max_frames: Maximum number of frames to process.
-        :return: A tuple containing a list of original PIL Images and a list of temporary frame file paths.
-        """
+    def _query_qdrant(self, inp: FrameSelectionInput, top_k: int = 5) -> Tuple[str, Optional[List[str]]]:
+        if not settings.QDRANT_URL or not settings.QDRANT_API_KEY:
+            return "Qdrant is not configured.", None
 
-        # Open video file with OpenCV
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise FileNotFoundError(f"Cannot open video: {video_path}")
+        client = QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
 
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        query_vec = self._embed_text(inp.query)
+        sparse_vec = self._embed_sparse(inp.query)
+        timestamp_condition = self._build_timestamp_filter(inp)
 
-        # Calculate new dimensions while maintaining aspect ratio
-        min_dimension = min(width, height) if (width and height) else shortest_edge
-        scale_factor = shortest_edge / min_dimension
-        new_width = int(width * scale_factor) if width else shortest_edge
-        new_height = int(height * scale_factor) if height else shortest_edge
-        new_width = new_width if new_width % 2 == 0 else new_width - 1
-        new_height = new_height if new_height % 2 == 0 else new_height - 1
-        if new_width <= 0 or new_height <= 0:
-            new_width = new_height = max(2, shortest_edge)
+        def chunk_filter(chunk_type: str) -> Filter:
+            conditions = [
+                FieldCondition(key="video_id", match=MatchValue(value=inp.video_id)),
+                FieldCondition(key="chunk_type", match=MatchValue(value=chunk_type)),
+            ]
+            if timestamp_condition:
+                conditions.append(timestamp_condition)
+            return Filter(must=conditions)
 
-        frame_skip = max(1, int(round(fps / desired_fps))) if fps and desired_fps > 0 else 1
-        logger.info(f"Frame skip calculated: {frame_skip} (fps: {fps}, desired_fps: {desired_fps})")
+        # Call 1: cross-modal image search (text query → vision multi-vectors, MAX_SIM)
+        image_hits = client.query_points(
+            collection_name=settings.QDRANT_HLS_COLLECTION_NAME,
+            query=query_vec,
+            using="dense_image",
+            query_filter=chunk_filter("image"),
+            limit=top_k,
+            with_payload=True,
+        ).points
 
-        # Extract and process frames
-        frame_count = 0
-        original_frames: List[Image.Image] = []
-        temp_frame_paths: List[str] = []
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Call 2: transcript search — RRF over dense_text + BM25 sparse
+        transcript_hits = client.query_points(
+            collection_name=settings.QDRANT_HLS_COLLECTION_NAME,
+            prefetch=[
+                Prefetch(query=query_vec,  using="dense_text", filter=chunk_filter("transcript"), limit=top_k),
+                Prefetch(query=sparse_vec, using="sparse",     filter=chunk_filter("transcript"), limit=top_k),
+            ],
+            query=FusionQuery(fusion=Fusion.RRF),
+            limit=top_k,
+            with_payload=True,
+        ).points
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+        # Merge scores by segment_index; only keep segments that have an image point
+        scores: dict = defaultdict(float)
+        image_payloads: dict = {}
 
-            if frame_count % frame_skip == 0:
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_original = Image.fromarray(rgb_frame)
-                original_frames.append(pil_original)
+        for hit in image_hits:
+            seg = (hit.payload or {}).get("segment_index")
+            if seg is not None:
+                scores[seg] += hit.score
+                image_payloads[seg] = (hit.payload or {}).get("frame_paths", [])
 
-                # Save resized frame to temporary file
-                resized_frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-                rgb_resized = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
-                pil_resized = Image.fromarray(rgb_resized)
+        for hit in transcript_hits:
+            seg = (hit.payload or {}).get("segment_index")
+            if seg is not None:
+                scores[seg] += hit.score
 
-                temp_filename = f"FRAME_TEMP_{timestamp}_{frame_count}.jpg"
-                temp_path = os.path.join(self.output_dir, temp_filename)
-                pil_resized.save(temp_path, format="JPEG", quality=jpeg_quality, optimize=True)
-                temp_frame_paths.append(temp_path)
+        top_segments = sorted(
+            (seg for seg in scores if seg in image_payloads),
+            key=lambda s: scores[s],
+            reverse=True,
+        )[:top_k]
 
-                if max_frames and len(temp_frame_paths) >= max_frames:
-                    break
+        frame_paths = [p for seg in top_segments for p in image_payloads[seg]]
+        logger.info(f"Frame selection found {frame_paths} for query '{inp.query}' with intent '{inp.intent}' in video '{inp.video_id}'")
 
-            frame_count += 1
-        logger.info(f"Total frames processed: {len(temp_frame_paths)}")
-        cap.release()
-        return original_frames, temp_frame_paths
+        if not frame_paths:
+            return f"No frames found for video '{inp.video_id}'.", None
+
+        paths_str = "\n".join(f"  {p}" for p in frame_paths)
+        msg = (
+            f"Retrieved {len(frame_paths)} frame(s) from video '{inp.video_id}'.\n"
+            f"Frames:\n{paths_str}\n"
+            "Continue to call next tool to analyze the extracted frames."
+        )
+        return msg, frame_paths
+
+    # ── Entry point ───────────────────────────────────────────────────────────
 
     def _run(
         self,
