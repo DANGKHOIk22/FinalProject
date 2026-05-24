@@ -1,11 +1,13 @@
-import os
 import logging
-import uvicorn
 from fastapi import APIRouter, HTTPException,Depends
-from pydantic import BaseModel, Field
-from typing import List, Optional
 from app.soccer_agent.agent import get_agent_service
 from app.schema.chat import ChatRequest
+from ag_ui.encoder import EventEncoder
+from ag_ui.core.types import RunAgentInput
+from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, Depends, Request
+from copilotkit import LangGraphAGUIAgent
+
 logger = logging.getLogger(__name__)
 # --- FastAPI App ---
 router = APIRouter()
@@ -42,3 +44,49 @@ async def chat_endpoint(request: ChatRequest, soccer_agent=Depends(get_agent_ser
             status_code=500,
             detail=f"An error occurred during agent execution: {str(e)}"
         )
+
+
+# --- Endpoint for Copilotkit Chatbot UI --- 
+# This custom endpoint is created by imitate 'from ag_ui_langgraph import add_langgraph_fastapi_endpoint'
+def get_copilotkit_router(agent: LangGraphAGUIAgent) -> APIRouter:
+    from app.api.deps import get_current_user
+    
+    copilotkit_router = APIRouter()
+    
+    @copilotkit_router.post("/")
+    async def langgraph_agent_endpoint(
+        input_data: RunAgentInput, 
+        request: Request,
+        current_user = Depends(get_current_user)
+    ):
+        accept_header = request.headers.get("accept")
+        encoder = EventEncoder(accept=accept_header)
+        
+        request_agent = agent.clone()
+        
+        # Add user_id to RunnableConfig to be used in LangGraph nodes
+        if request_agent.config is None:
+            request_agent.config = {}
+        if "configurable" not in request_agent.config:
+            request_agent.config["configurable"] = {}
+        request_agent.config["configurable"]["user_id"] = current_user.id
+
+        async def event_generator():
+            async for event in request_agent.run(input_data):
+                yield encoder.encode(event)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type=encoder.get_content_type()
+        )
+
+    @copilotkit_router.get("/health")
+    def health():
+        return {
+            "status": "ok",
+            "agent": {
+                "name": agent.name,
+            }
+        }
+        
+    return copilotkit_router

@@ -30,19 +30,17 @@ class Settings:
     DEEPFACE_HOME: Optional[str] = os.path.join(PROJECT_PATH, os.getenv('DEEPFACE_HOME', './temporary/cache'))
     
     # Endpoint Configuration
-    DEEPFACE_ENDPOINT_URI: Optional[str] = os.getenv('DEEPFACE_ENDPOINT_URI') 
-    DEEPFACE_ENDPOINT_KEY: Optional[str] = os.getenv('DEEPFACE_ENDPOINT_KEY')
     INSIGHTFACE_ENDPOINT_URI: Optional[str] = os.getenv('INSIGHTFACE_ENDPOINT_URI')
     INSIGHTFACE_ENDPOINT_KEY: Optional[str] = os.getenv('INSIGHTFACE_ENDPOINT_KEY')
-    GROUNDINGDINO_ENDPOINT_URI: Optional[str] = os.getenv('GROUNDINGDINO_ENDPOINT_URI')
-    GROUNDINGDINO_ENDPOINT_KEY: Optional[str] = os.getenv('GROUNDINGDINO_ENDPOINT_KEY')
-    CLIP_ENDPOINT_URI: Optional[str] = os.getenv('CLIP_ENDPOINT_URI')
-    CLIP_ENDPOINT_KEY: Optional[str] = os.getenv('CLIP_ENDPOINT_KEY')
-    CLIP_GROUNDINGDINO_ENDPOINT_URI: Optional[str] = os.getenv('CLIP_GROUNDINGDINO_ENDPOINT_URI')
-    CLIP_GROUNDINGDINO_ENDPOINT_KEY: Optional[str] = os.getenv('CLIP_GROUNDINGDINO_ENDPOINT_KEY')
 
     # Redis Configuration
     REDIS_URL: Optional[str] = os.getenv('REDIS_URL')
+
+    # JWT Configuration
+    JWT_SECRET_KEY: Optional[str] = os.getenv('JWT_SECRET_KEY')
+    JWT_ALGORITHM: str = os.getenv('JWT_ALGORITHM', 'HS256')
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv('JWT_ACCESS_TOKEN_EXPIRE_MINUTES', 10080)) # 60 * 24 * 7 =7 days
+
 
     # Tavily Configuration — comma-separated keys for round-robin + failover.
     # Single TAVILY_API_KEY is also accepted for backwards compatibility.
@@ -56,6 +54,10 @@ class Settings:
     @classmethod
     def validate(cls) -> bool:
         """Validate that required settings are present."""
+         # Skip validate varible on CI
+        if os.getenv("CI") == "true" or os.getenv("TESTING") == "true":
+            return True
+        
         if not cls.MONGO_SRV:
             raise ValueError("MONGO_SRV is required but not set")
         if not cls.SOCCER_DB_NAME:
@@ -72,27 +74,20 @@ class Settings:
             raise ValueError("QDRANT_COLLECTION_NAME is required but not set")
         
         # Validate endpoint settings
-        if not cls.DEEPFACE_ENDPOINT_URI:
-            raise ValueError("DEEPFACE_ENDPOINT_URI is required but not set")
-        if not cls.DEEPFACE_ENDPOINT_KEY:
-            raise ValueError("DEEPFACE_ENDPOINT_KEY is required but not set")
         if not cls.INSIGHTFACE_ENDPOINT_URI:
             raise ValueError("INSIGHTFACE_ENDPOINT_URI is required but not set")
         if not cls.INSIGHTFACE_ENDPOINT_KEY:
             raise ValueError("INSIGHTFACE_ENDPOINT_KEY is required but not set")
-        if not cls.GROUNDINGDINO_ENDPOINT_URI:
-            raise ValueError("GROUNDINGDINO_ENDPOINT_URI is required but not set")
-        if not cls.GROUNDINGDINO_ENDPOINT_KEY:
-            raise ValueError("GROUNDINGDINO_ENDPOINT_KEY is required but not set")
-        if not cls.CLIP_ENDPOINT_URI:
-            raise ValueError("CLIP_ENDPOINT_URI is required but not set")
-        if not cls.CLIP_ENDPOINT_KEY:
-            raise ValueError("CLIP_ENDPOINT_KEY is required but not set")
         
 
         #Validate Redis settings
         if not cls.REDIS_URL:
             raise ValueError("REDIS_URL is required but not set")
+            
+        # Validate JWT settings
+        if not cls.JWT_SECRET_KEY:
+            raise ValueError("The JWT_SECRET_KEY is not added to the .env file, you should add it with a 64-character hex string to .env. For example: 4a2c9f8b1d7e6c3a5b0f8e9d2c1b3a4f6e7d8c9b0a1f2e3d4c5b6a7f8e9d0c1b")
+            
         return True
     
     
@@ -100,5 +95,6 @@ class Settings:
 
 # Create a singleton instance
 settings = Settings()
+settings.validate()
 
 

@@ -27,6 +27,7 @@ jobs:
 
     env:
       POSTGRES_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/soccer_agent_test
+      CI: true
 
     steps:
       - uses: actions/checkout@v4

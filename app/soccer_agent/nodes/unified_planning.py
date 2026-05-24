@@ -31,16 +31,21 @@ class UnifiedPlanningNode:
         retrieved_cases = state.get("retrieved_cases") or "No examples available."
 
         toolbox_descriptions = "\n".join([f"- {t.name}: {t.description}" for t in self.tools])
-
-        await adispatch_custom_event(
-            "manually_emit_tool_call",
-            data={
-                "id": str(uuid.uuid4()),
-                "name": "unified_planning",
-                "args": {"query": user_query[:50] + "..."}
-            },
-            config=config
-        )
+        try:
+            await adispatch_custom_event(
+                "manually_emit_tool_call",
+                data={
+                    "id": str(uuid.uuid4()),
+                    "name": "tool_chain_planning",
+                    "args": {"query": user_query[:50] + "..."}
+                },
+                config=config
+            )
+        except RuntimeError as e:
+            logger.warning(
+                f"Failed to dispatch custom event: {e}. "
+                "This is expected if running outside a LangChain/LangGraph run context (e.g., in unit tests)."
+            )
 
         prompt_template = get_unified_planning_prompt_template()
         prompt = prompt_template.invoke({

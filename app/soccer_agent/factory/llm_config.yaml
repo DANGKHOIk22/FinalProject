@@ -8,6 +8,16 @@ model_list:
       reasoning_effort: high
       stream: false
 
+  - model_name: planning-backup
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite-preview
+      api_key: os.environ/GOOGLE_API_KEY
+      temperature: 1.0
+      top_p: 0.95
+      max_completion_tokens: 10000
+      thinking_level: high
+      stream: false
+
   # ── Execution: iterative tool calling inside workers ─────────────────────────
   - model_name: execution
     litellm_params:
@@ -16,6 +26,16 @@ model_list:
       temperature: 0.5
       top_p: 0.95
       max_completion_tokens: 5000
+      stream: false
+
+  - model_name: execution-backup
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite-preview
+      api_key: os.environ/GOOGLE_API_KEY
+      temperature: 1.0
+      top_p: 0.95
+      max_completion_tokens: 5000
+      thinking_level: low
       stream: false
 
   # ── Retrieval-Augment: retrieve and augment information ─────────────────────
@@ -28,6 +48,16 @@ model_list:
       max_completion_tokens: 10000
       stream: true
 
+  - model_name: retrieval-augment-backup
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite-preview
+      api_key: os.environ/GOOGLE_API_KEY
+      temperature: 1.0
+      top_p: 0.95
+      max_completion_tokens: 10000
+      thinking_level: low
+      stream: true
+
   # ── Aggregator: synthesise parallel worker results ───────────────────────────
   - model_name: aggregator
     litellm_params:
@@ -35,6 +65,16 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
       max_completion_tokens: 50000
       reasoning_effort: medium
+      stream: true
+
+  - model_name: aggregator-backup
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite-preview
+      api_key: os.environ/GOOGLE_API_KEY
+      temperature: 1.0
+      top_p: 0.95
+      max_completion_tokens: 50000
+      thinking_level: low
       stream: true
 
   # ── Tool: shared by tools, query-understanding pipeline, guardrails ───────────
@@ -55,8 +95,8 @@ model_list:
 
 router_settings:
   fallbacks:
-    - planning: [gemini-backup]
-    - execution: [gemini-backup]
-    - retrieval-augment: [gemini-backup]
-    - aggregator: [gemini-backup]
+    - planning: [planning-backup]
+    - execution: [execution-backup]
+    - retrieval-augment: [retrieval-augment-backup]
+    - aggregator: [aggregator-backup]
     - tool: [gemini-backup]

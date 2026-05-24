@@ -2,6 +2,7 @@ import logging
 import asyncio
 import json
 from datetime import datetime
+import uuid
 from langgraph.graph.state import RunnableConfig
 from app.schema.soccer_agent.state import AgentState
 from app.soccer_agent.memory.long_term_memory import long_term_memory_manager
@@ -42,7 +43,8 @@ class ContextRetrievalNode:
             logger.warning(f"Semantic cache error: {e}")
 
         metadata = config.get("metadata", {})
-        user_id = metadata.get("user_id") or metadata.get("thread_id")
+        thread_id = metadata.get("thread_id", str(uuid.uuid4()))
+        user_id = config.get("configurable", {}).get("user_id")
         has_media = bool(state.get("additional_material"))
 
         logger.info(f"🔍 [ContextRetrieval] Cache MISS. Searching DBs for: '{user_query[:50]}...'")

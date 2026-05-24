@@ -5,6 +5,7 @@ from langfuse import get_client
 
 from langgraph.graph.state import RunnableConfig
 from langchain_core.messages import HumanMessage
+from langchain_core.callbacks.manager import adispatch_custom_event
 from app.schema.soccer_agent.state import AgentState
 from app.soccer_agent.memory.chat_history import get_postgres_memory
 from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
@@ -70,7 +71,24 @@ class ConversationHistoryNode:
         """
         metadata = config.get("metadata", {})
         thread_id = metadata.get("thread_id", str(uuid.uuid4()))
-
+        user_id = config.get("configurable", {}).get("user_id")
+        
+        # --- Emit tool call for rendering this step in UI ---
+        try:
+            await adispatch_custom_event(
+                "manually_emit_tool_call",
+                data={
+                    "id": str(uuid.uuid4()),
+                    "name": "understand_user_message",
+                    "args": {}
+                },
+                config=config
+            )
+        except RuntimeError as e:
+            logger.warning(
+                f"Failed to dispatch custom event: {e}. "
+                "This is expected if running outside a LangChain/LangGraph run context (e.g., in unit tests)."
+            )
         # --- Flags for tracing metadata ---
         loading_history_status = "failed" # "success"/"failed"
         load_from_cache = False # True: This question has already stored in cache, just load from cache database
