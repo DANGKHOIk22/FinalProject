@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from app.api.deps import get_current_user
 from app.config.settings import settings
 from azure.identity import ClientSecretCredential
-from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas
+from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas, ContentSettings
 import datetime
 import uuid
 import os
@@ -55,7 +55,9 @@ async def upload_image(
         # 3. Tải tệp lên Blob Storage
         blob_client = container_client.get_blob_client(blob_name)
         content = await file.read()
-        blob_client.upload_blob(content, overwrite=True)
+        blob_client.upload_blob(content, 
+                                overwrite=True,
+                                content_settings=ContentSettings(content_type=file.content_type))
 
         # 4. Sinh User Delegation SAS URL có thời hạn 30 phút
         delegation_start_time = datetime.datetime.now(datetime.timezone.utc)
