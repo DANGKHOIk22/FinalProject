@@ -54,9 +54,9 @@ class SubQuerySemanticCache:
                 filter=filter_condition,
                 distance_threshold = self.threshold
             )
-            # if docs:
-            #     logger.info(f"🎯 Semantic cache HIT for query: '{query}'")
-            #     return docs[0][0].metadata.get("response")
+            if docs:
+                logger.info(f"🎯 Semantic cache HIT for query: '{query}'")
+                return docs[0][0].metadata.get("response")
                     
             logger.debug(f"Semantic cache MISS for query: '{query}'")
         except Exception as e:

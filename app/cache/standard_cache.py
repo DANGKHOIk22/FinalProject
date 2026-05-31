@@ -60,16 +60,16 @@ class StandardCache:
             logger.warning(f"Redis not available for key: {key}, error: {e}")
             return None, None
 
-        # if cached_result:
-        #     logger.info(f"🎯 Standard Cache HIT for [{module_name}.{func_name}] -> Skipping function execution.")
-        #     data = self.deserialize(cached_result)
-        #     if validatedModel:
-        #         try:
-        #             data = validatedModel(**data)
-        #         except Exception as e:
-        #             logger.warning(f"Failed to validate cached data: {e}. Considering it a miss.")
-        #             return None, None
-        #     return "hit", data
+        if cached_result:
+            logger.info(f"🎯 Standard Cache HIT for [{module_name}.{func_name}] -> Skipping function execution.")
+            data = self.deserialize(cached_result)
+            if validatedModel:
+                try:
+                    data = validatedModel(**data)
+                except Exception as e:
+                    logger.warning(f"Failed to validate cached data: {e}. Considering it a miss.")
+                    return None, None
+            return "hit", data
 
         logger.debug(f"⏳ Standard Cache MISS for [{module_name}.{func_name}] -> Executing function.")
         return "miss", key
