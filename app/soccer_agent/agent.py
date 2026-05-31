@@ -31,6 +31,7 @@ from app.soccer_agent.toolbox import (
     frame_selection,
     commentary_generation,
     web_news_search,
+    entity_recognition,
 )
 
 # Nodes
