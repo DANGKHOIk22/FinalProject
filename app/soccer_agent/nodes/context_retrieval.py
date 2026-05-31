@@ -25,7 +25,7 @@ class ContextRetrievalNode:
     async def retrieve_context_node(self, state: AgentState, config: RunnableConfig) -> dict:
         # 1. Identify User Query
         messages = state.get("messages", [])
-        user_query = messages[-1].text if isinstance(messages[-1], HumanMessage) else None
+        user_query = str(messages[-1].text) if isinstance(messages[-1], HumanMessage) else None
         metadata = config.get("metadata", {})
         thread_id = metadata.get("thread_id", str(uuid.uuid4()))
         user_id = str(config.get("configurable", {}).get("user_id"))
@@ -47,7 +47,7 @@ class ContextRetrievalNode:
 
         # 2. Get Embedding ONCE
         try:
-            query_embedding = await long_term_memory_manager._get_embedding(str(user_query))
+            query_embedding = await long_term_memory_manager._get_embedding(user_query)
         except Exception as e:
             logger.error(f"Failed to get query embedding: {e}", exc_info=True)
             query_embedding = None

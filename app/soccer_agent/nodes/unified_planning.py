@@ -5,6 +5,7 @@ from datetime import datetime
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.callbacks.manager import adispatch_custom_event
 from langgraph.graph.state import RunnableConfig
+from langchain_core.messages import SystemMessage, HumanMessage
 
 from app.config.config import PLANNING_CONFIDENCE_THRESHOLD
 from app.schema.soccer_agent.state import AgentState, UnifiedPlanningOutput
@@ -25,7 +26,7 @@ class UnifiedPlanningNode:
         dispatchable (non-ambiguous) vs pending_clarifications (ambiguous).
         """
         messages = state.get("messages", [])
-        user_query = state.get("user_query") or (messages[-1].text if messages else "")
+        user_query = str(messages[-1].text) if messages else ""
         additional_material = state.get("additional_material", [])
         conversation_history = state.get("conversation_history") or "No previous conversation."
         retrieved_cases = state.get("retrieved_cases") or "No examples available."
@@ -47,8 +48,9 @@ class UnifiedPlanningNode:
                 "This is expected if running outside a LangChain/LangGraph run context (e.g., in unit tests)."
             )
 
+        # Construct the prompt using the template
         prompt_template = get_unified_planning_prompt_template()
-        prompt = prompt_template.invoke({
+        prompt_value = prompt_template.invoke({
             "user_query": user_query,
             "additional_material": ", ".join(additional_material) if additional_material else "None",
             "conversation_history": conversation_history,
@@ -58,8 +60,35 @@ class UnifiedPlanningNode:
             "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "format_instructions": self.parser.get_format_instructions()
         })
+        prompt_messages = prompt_value.to_messages()
+        
+        # Add image url to the prompt if there is any additional_material
+        if additional_material:
+            # Get image_urls from media_map based on additional_material IDs
+            media_map = state.get("media_map") or {}
+            image_urls = []
+            for image_id in additional_material:
+                sas_url = media_map.get(image_id)
+                if sas_url:
+                    image_urls.append(sas_url)
 
-        response = await self.planning_llm.ainvoke(prompt, config=config)
+
+            # If there are image URLs, we need to modify the prompt_messages to include them in the expected format
+            if image_urls:
+                text_content = prompt_messages[-1].content
+                multimodal_content = [
+                    {"type": "text", "text": text_content}
+                ]
+                for url in image_urls:
+                    multimodal_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": url
+                        }
+                    })
+                prompt_messages[-1] = HumanMessage(content=multimodal_content)  # Replace the last message with multimodal content
+
+        response = await self.planning_llm.ainvoke(prompt_messages, config=config)
         response_text = response.text if hasattr(response, 'text') else str(response.content)
 
         try:
