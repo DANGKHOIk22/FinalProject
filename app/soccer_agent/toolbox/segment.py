@@ -81,16 +81,16 @@ class SegmentTool(BaseTool):
           
     def _detect_and_segment(self, image_id: str, entities_description: str, media_registry: Any, user_id: str, thread_id: str) -> List[Dict]:
         """
-        Get segmented entities from the query using Qwen-VL.
+        Detect and segment entities across all images in a single Qwen-VL call.
 
         Args:
-            image_id: Image UUID.
+            image_path: Path to the image file.
             entities_description: Entity description to be processed.
-            media_registry: MediaRegistryService instance.
         Returns:
-            A list of dictionaries containing segmented entity information.
+            Dict mapping image_index → list of detection dicts with scaled box coordinates.
         """
-        
+        from PIL import Image as PILImage
+
         try:
             # 1. Get image dimensions
             img = media_registry.get_pil_image(user_id, thread_id, image_id)
@@ -123,7 +123,7 @@ class SegmentTool(BaseTool):
             
             # Call Qwen-VL via OpenAI client
             response = self._client.chat.completions.create(
-                model="qwen3-vl-flash-2026-01-22",
+                model="qwen-vl-max",
                 messages=[
                     {
                         "role": "system",
@@ -139,68 +139,41 @@ class SegmentTool(BaseTool):
                 ],
                 temperature=0.1,
                 top_p=0.1,
-                extra_headers={
-                    "X-DashScope-WorkSpace": "" # Optional: specify workspace if needed
-                }
+                extra_headers={"X-DashScope-WorkSpace": ""},
             )
 
-            # Extract response content
-            try:
-                content_str = response.choices[0].message.content
-                # Clean markdown JSON blocks if present
-                content_str = content_str.strip()
-                if content_str.startswith("```json"):
-                    content_str = content_str[7:]
-                if content_str.startswith("```"):
-                    content_str = content_str[3:]
-                if content_str.endswith("```"):
-                    content_str = content_str[:-3]
-                
-                detected_objects = json.loads(content_str.strip())
-                logger.debug(f"Raw detected objects from Qwen-VL: {detected_objects}")
-            except Exception as e:
-                raw_content = response.choices[0].message.content if hasattr(response, 'choices') else "N/A"
-                logger.error(f"Failed to extract or parse JSON from Qwen-VL response: {str(e)}\nRaw Response Content: {raw_content}")
-                raise Exception(f"Failed to parse model output: {str(e)}")
+            content_str = response.choices[0].message.content.strip()
+            import re as _re
+            content_str = _re.sub(r"^```[a-z]*\n?", "", content_str)
+            content_str = _re.sub(r"\n?```$", "", content_str)
+            raw_items = json.loads(content_str.strip())
 
-            if not isinstance(detected_objects, list):
-                logger.warning(f"Expected a list of detected objects, got {type(detected_objects)}. Attempting to wrap in list.")
-                detected_objects = [detected_objects]
-                
-            results_data = []
-            
-            # Map Qwen-VL `bbox_2d` output to the expected schema
-            for item in detected_objects:
+            if not isinstance(raw_items, list):
+                raw_items = [raw_items]
+
+            results: Dict[int, List[Dict]] = {}
+            for item in raw_items:
+                idx = item.get("image_index", 0)
                 bbox = item.get("bbox_2d")
                 if not bbox or len(bbox) != 4:
-                    logger.warning(f"Skipping undefined bounding box: {item}")
+                    logger.warning(f"Skipping undefined bounding box for image {idx}: {item}")
                     continue
-                    
-                # 3. Scale normalized [0, 1000] coordinates to absolute pixel coordinates
-                # Qwen-VL returns coordinates normalized to 1000
-                x_min_norm, y_min_norm, x_max_norm, y_max_norm = bbox
-                
-                x_min = (x_min_norm / 1000.0) * width
-                y_min = (y_min_norm / 1000.0) * height
-                x_max = (x_max_norm / 1000.0) * width
-                y_max = (y_max_norm / 1000.0) * height
-                
-                label = item.get("label", "extracted_object")
-                
-                results_data.append({
+                meta = image_meta[idx]
+                x_min_n, y_min_n, x_max_n, y_max_n = bbox
+                results.setdefault(idx, []).append({
                     "box": {
-                        "x_min": x_min,
-                        "y_min": y_min,
-                        "x_max": x_max,
-                        "y_max": y_max
+                        "x_min": (x_min_n / 1000.0) * meta["width"],
+                        "y_min": (y_min_n / 1000.0) * meta["height"],
+                        "x_max": (x_max_n / 1000.0) * meta["width"],
+                        "y_max": (y_max_n / 1000.0) * meta["height"],
                     },
-                    "score": 1.0, # Dummy high score for Qwen-VL deterministic detections
-                    "label": label
+                    "score": 1.0,
+                    "label": item.get("label", "extracted_object"),
                 })
 
-            logger.info(f"✅ Qwen-VL response received and scaled successfully. Found {len(results_data)} objects")
-            return results_data
-            
+            logger.info(f"✅ Qwen-VL batch response: detections for {len(results)}/{n} images")
+            return results
+
         except Exception as e:
             error_msg = f"Failed to get segmented entities: {str(e)}"
             logger.error(error_msg)

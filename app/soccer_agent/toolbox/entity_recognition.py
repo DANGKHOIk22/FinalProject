@@ -182,104 +182,113 @@ class EntityRecognitionTool(BaseTool):
     
     def _extract_entities_from_image(self, image_id: str, media_registry: Any, user_id: str, thread_id: str) -> List[Dict]:
         """
-        Extract soccer entities from image using face recognition.
-        
+        Extract soccer entities from images using face recognition.
+        Iterates image_paths in order (index 0 = highest ranked) and returns
+        as soon as the first image yields at least one Qdrant match.
+
         Args:
-            image_id: Image UUID
-            media_registry: MediaRegistryService instance
+            image_path: Path to the image file
             
         Returns:
             List of entity dictionaries with ENTITY_TYPE and NAME
         """
-        collection_name = settings.QDRANT_COLLECTION_NAME 
+        collection_name = settings.QDRANT_COLLECTION_NAME
         assert collection_name is not None, "Qdrant client is not initialized"
         assert self._qdrant_client is not None, "Qdrant client is not initialized"
         
         # Create payload for InsightFace endpoint
         payload = self._create_payload(image_id=image_id, max_faces=5, confidence_threshold=0.60, media_registry=media_registry, user_id=user_id, thread_id=thread_id)
 
-        try:
-        # Call to InsightFace endpoint
-            response: requests.Response = requests.post(
-                url=self._insight_endpoint_uri,
-                headers=self._insight_payload_header,
-                json=payload,
-                timeout=60
-            )
-        except requests.RequestException as e:
-            raise Exception(f"InsightFace endpoint request error: {str(e)}")
-        
-        response_dict: Dict = response.json()
-        # Handle response
-        if response.status_code != 200:
-            raise Exception(f"InsightFace endpoint request failed: {response.status_code} - {response.text}")
-        if response_dict.get("success", False) is False:
-            raise Exception(f"InsightFace endpoint error: {response_dict.get('error', 'Unknown error')} ")
-
-        results = response_dict.get("result") or []
-        logger.info(f"✅ InsightFace endpoint response received successfully. There are {len(results)} results")
-        # Print out each result for debugging
-        for idx, res in enumerate(results):
-            logger.info(f"Result {idx+1}: bbox={res.get('bbox', [])}, Confidence: {res.get('det_score', 0.0)}")
-        
-        # Search entities in Qdrant
-        detected_faces = results
-        soccer_entities = []
-        for idx, detected_face in enumerate(detected_faces):
-            detected_face_embedding = detected_face.get("embedding", [])
-            if not detected_face_embedding:
-                logger.info("Face %d has empty embedding; skipping", idx + 1)
+            try:
+                # Call to InsightFace endpoint
+                response: requests.Response = requests.post(
+                    url=self._insight_endpoint_uri,
+                    headers=self._insight_payload_header,
+                    json=payload,
+                    timeout=60
+                )
+            except requests.RequestException as e:
+                logger.warning(f"InsightFace request error for {image_path}: {str(e)}; trying next image")
                 continue
 
-            search_result = self._qdrant_client.query_points(
-                collection_name=collection_name,
-                query=detected_face_embedding,
-                limit=7,
-                score_threshold=0.5,
-                with_vectors=True
-            )
-            
-            # Dictionary storing information for each entity
-            candidates = defaultdict(lambda: {"ENTITY_TYPE": None, "max_score": 0, "count": 0, "score_list": []})
-            
-            # Voting
-            for point in search_result.points:
-                entity_name = point.payload['NAME']
-                point_vectors = point.vector
-                if not point_vectors:
+            response_dict: Dict = response.json()
+            # Handle response
+            if response.status_code != 200:
+                logger.warning(f"InsightFace request failed for {image_path}: {response.status_code}; trying next image")
+                continue
+            if response_dict.get("success", False) is False:
+                logger.warning(f"InsightFace error for {image_path}: {response_dict.get('error', 'Unknown error')}; trying next image")
+                continue
+
+            results = response_dict.get("result") or []
+            logger.info(f"✅ InsightFace response for {image_path}: {len(results)} face(s) detected")
+            for idx, res in enumerate(results):
+                logger.info(f"Result {idx+1}: bbox={res.get('bbox', [])}, Confidence: {res.get('det_score', 0.0)}")
+
+            # Search entities in Qdrant
+            soccer_entities = []
+            for idx, detected_face in enumerate(results):
+                detected_face_embedding = detected_face.get("embedding", [])
+                if not detected_face_embedding:
+                    logger.info("Face %d has empty embedding; skipping", idx + 1)
                     continue
-                match_count = 0
-                for sub_vector in point_vectors:
-                    score = self.cosine_similarity(detected_face_embedding, sub_vector)
-                    if score >= THRESHOLD:
-                        candidates[entity_name]["score_list"].append(score)
-                        match_count += 1
-                # Update candidate info
-                candidates[entity_name]["count"] = match_count
-                candidates[entity_name]["ENTITY_TYPE"] = point.payload.get("ENTITY_TYPE")
-                candidates[entity_name]["max_score"] = point.score
-            
-            # Final Score (Re-ranking)
-            ranked_candidates = []
-            for entity_name, data in candidates.items():
-                final_score = (0.55 * data["max_score"]) + (0.45 * data["count"] / 20) + (0.1 * np.mean(data["score_list"]))
-                ranked_candidates.append((entity_name, final_score, data["max_score"], data["count"]))
-            
-            # Sort in descending order by Final Score
-            ranked_candidates.sort(key=lambda x: x[1], reverse=True)
-            
-            if not ranked_candidates:
-                raise ValueError("Can't find any matching entities in the database.")
-            
-            if ranked_candidates[0]:
+
+                search_result = self._qdrant_client.query_points(
+                    collection_name=collection_name,
+                    query=detected_face_embedding,
+                    limit=7,
+                    score_threshold=0.1,
+                    with_vectors=True
+                )
+
+                # Dictionary storing information for each entity
+                candidates = defaultdict(lambda: {"ENTITY_TYPE": None, "max_score": 0, "count": 0, "score_list": []})
+
+                # Voting
+                for point in search_result.points:
+                    entity_name = point.payload['NAME']
+                    logger.info(f"Face {idx+1}: Found candidate entity '{entity_name}' with score {point.score}")
+                    point_vectors = point.vector
+                    if not point_vectors:
+                        continue
+                    match_count = 0
+                    for sub_vector in point_vectors:
+                        score = self.cosine_similarity(detected_face_embedding, sub_vector)
+                        if score >= THRESHOLD:
+                            candidates[entity_name]["score_list"].append(score)
+                            match_count += 1
+                    # Update candidate info
+                    candidates[entity_name]["count"] = match_count
+                    candidates[entity_name]["ENTITY_TYPE"] = point.payload.get("ENTITY_TYPE")
+                    candidates[entity_name]["max_score"] = point.score
+
+                # Final Score (Re-ranking)
+                ranked_candidates = []
+                for entity_name, data in candidates.items():
+                    final_score = (0.55 * data["max_score"]) + (0.45 * data["count"] / 20) + (0.1 * np.mean(data["score_list"]))
+                    ranked_candidates.append((entity_name, final_score, data["max_score"], data["count"]))
+
+                # Sort in descending order by Final Score
+                ranked_candidates.sort(key=lambda x: x[1], reverse=True)
+
+                if not ranked_candidates:
+                    logger.info(f"Face {idx+1}: no Qdrant candidates found; skipping face")
+                    continue
+
                 soccer_entities.append({
                     "ENTITY_TYPE": candidates[ranked_candidates[0][0]]["ENTITY_TYPE"],
                     "NAME": ranked_candidates[0][0]
                 })
                 logger.info(f"Face {idx+1}: Matched to {ranked_candidates[0]}")
-        found_entity_names = [f"{e['NAME']} ({e['ENTITY_TYPE']})" for e in soccer_entities]
-        logger.info(f"Using voting and re-ranking, recognized: {', '.join(found_entity_names)}")
-        return soccer_entities
+
+            if soccer_entities:
+                found_entity_names = [f"{e['NAME']} ({e['ENTITY_TYPE']})" for e in soccer_entities]
+                logger.info(f"Image {image_path}: recognized {', '.join(found_entity_names)}; returning early")
+                return soccer_entities
+
+            logger.info(f"Image {image_path}: no entities recognized; trying next image")
+
+        return []
     
     def _parse_entity_result(self, entity_data: dict) -> Optional[PlayerSchema | RefereeSchema | VenueSchema | TeamSchema]:
         """
