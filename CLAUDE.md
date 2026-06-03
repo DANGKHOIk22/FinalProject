@@ -40,7 +40,7 @@ User Query
       ├─ need_call_tools=False → aggregator (direct response from history)
       └─ need_call_tools=True  → worker_graph (LangGraph Send → N parallel worker subgraphs)
             worker subgraph:
-              → check_cache_node  (Redis semantic cache, threshold >0.9 cosine similarity)
+              → check_cache_node  (Redis semantic cache, cosine threshold=0.15)
                   ├─ cache hit → END (skip execution)
                   └─ miss    → execution_node (LLM + tool calls, loops until done)
                                    └─ tool_node (ToolNode executes one tool per cycle)
@@ -50,7 +50,7 @@ User Query
 
 **Critical**: Workers and aggregator always use `clarified_query`, never `user_query`. Set by `unified_planning` after pronoun resolution.
 
-**`unified_planning` also reads `video_id` / `video_current_time`** from `AgentState` or from the CopilotKit context blob (JSON under `state.copilotkit.context`) if not set on state directly. Chains with confidence below `PLANNING_CONFIDENCE_THRESHOLD` (`app/config/config.py`) are moved to `pending_clarifications` instead of being dispatched.
+**`unified_planning` also reads `video_id` / `video_current_time`** from `AgentState` or from the CopilotKit context blob (JSON under `state.copilotkit.context`) if not set on state directly. All planned chains are dispatched regardless of confidence — the `PLANNING_CONFIDENCE_THRESHOLD` ambiguity check is currently disabled (commented out in `unified_planning.py`).
 
 **Streaming UI events**: `unified_planning` emits a `manually_emit_tool_call` custom LangGraph event (via `adispatch_custom_event`) so the frontend CopilotKit adapter can render planning progress in real time.
 
@@ -101,7 +101,7 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 
 **`SoccerAgent` is `None` at startup if `DASHSCOPE_API_KEY` is missing.** `/chat` returns 503 — not a bug.
 
-**Semantic cache lives inside the worker subgraph**, not the main graph. Cache hits skip `execution_node` entirely.
+**Semantic cache lives inside the worker subgraph**, not the main graph. Cache reads (`check()`) are currently disabled (hit-return logic commented out in `app/cache/semantic_cache.py`) — cache writes still work so results accumulate. Standard cache (`app/cache/standard_cache.py`) reads are also currently disabled. Re-enable by uncommenting the `if cached_result:` blocks. Semantic cache uses `gemini-embedding-001` (768-dim) via `GOOGLE_API_KEY`.
 
 **Celery on Windows requires `-P solo`.** The default prefork pool is POSIX-only.
 

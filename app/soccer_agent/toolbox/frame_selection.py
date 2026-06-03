@@ -1,25 +1,23 @@
 import os
-import re
 import logging
-from typing import Type, List, Optional, Literal, Tuple
+import random
+import cv2
+import numpy as np
+from datetime import datetime
+from typing import Type, List, Optional, Literal, Tuple, Union
+from PIL import Image
 from pydantic import BaseModel, Field, PrivateAttr
 from langchain_core.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langsmith import get_current_run_tree
 import dashscope
-from fastembed import SparseTextEmbedding
-from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    Filter, FieldCondition, MatchValue, Range,
-    Prefetch, FusionQuery, Fusion, SparseVector,
-)
+from dashscope import MultiModalEmbedding
 from app.config import settings
 from app.config.config import PROJECT_PATH
 from langgraph.prebuilt import ToolRuntime
 import uuid
 
 logger = logging.getLogger(__name__)
-
 
 # ==========================================
 # 1. Input Schema
@@ -52,8 +50,8 @@ class FrameSelectionTool(BaseTool):
     name: str = "frame_selection"
     description: str = (
         "Selects the most relevant frame(s) for a given query from an HLS video. "
-        "Supports temporal filtering (current=last 10s, recent=last 60s, specific=time extracted from query). "
-        "Returns frame file paths appended to additional_material for downstream visual analysis tools."
+        "Returns frame paths as a tool artifact accessible to the next tool in the chain. "
+        "Does not modify additional_material."
     )
     args_schema: Type[BaseModel] = FrameSelectionInput  # type: ignore
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
@@ -62,63 +60,62 @@ class FrameSelectionTool(BaseTool):
     output_dir: str = os.path.join(PROJECT_PATH, "temporary", "frames")
 
     _dashscope_api_key: str = PrivateAttr("")
-    _bm25: SparseTextEmbedding = PrivateAttr()
+    _embedding_model: str = PrivateAttr("qwen3-vl-embedding")
 
     def __init__(self):
         super().__init__()
         os.makedirs(self.output_dir, exist_ok=True)
+        self._initialize_dashscope()
+
+    def _initialize_dashscope(self) -> None:
+        """Initialize DashScope API for Qwen3-VL-Embedding."""
         self._dashscope_api_key = settings.DASHSCOPE_API_KEY or ""
+
         if not self._dashscope_api_key:
-            raise ValueError("DASHSCOPE_API_KEY is not configured.")
-        self._bm25 = SparseTextEmbedding(model_name="Qdrant/bm25")
-        logger.info("FrameSelectionTool initialized (text-embedding-v4 + BM25 ready)")
+            raise ValueError("DASHSCOPE_API_KEY is not configured in environment variables.")
 
-    # ── Text preprocessing (must match IncrementalSegmentIndexer) ────────────
+        # Test connectivity with a simple request
+        try:
+            logger.info("✅ DashScope API is configured for Qwen3-VL-Embedding")
+        except Exception as exc:
+            logger.warning("Error initializing DashScope: %s", exc)
 
-    def _preprocess_text(self, text: str) -> str:
-        text = text.lower()
-        text = re.sub(r'[^\w\s]', '', text)
-        return text
-
-    # ── Embedding helpers ─────────────────────────────────────────────────────
-
-    def _embed_text(self, text: str) -> List[float]:
-        cleaned = self._preprocess_text(text)
-        dashscope.base_http_api_url = "https://dashscope-intl.aliyuncs.com/api/v1"
-        response = dashscope.TextEmbedding.call(
-            api_key=self._dashscope_api_key,
-            model="text-embedding-v4",
-            input=cleaned,
-        )
-        if response.status_code != 200:
-            raise ValueError(f"DashScope text embedding failed: {response.message}")
-        return response.output["embeddings"][0]["embedding"]
-
-    def _embed_sparse(self, text: str) -> SparseVector:
-        cleaned = self._preprocess_text(text)
-        result = list(self._bm25.embed([cleaned]))[0]
-        return SparseVector(
-            indices=result.indices.tolist(),
-            values=result.values.tolist(),
-        )
-
-    # ── Temporal filter ───────────────────────────────────────────────────────
-
-    def _build_timestamp_filter(self, inp: FrameSelectionInput) -> Optional[FieldCondition]:
-        if inp.intent == "current" and inp.current_time is not None:
-            ts_range = Range(gte=max(0.0, inp.current_time - 10), lte=inp.current_time)
-        elif inp.intent == "recent" and inp.current_time is not None:
-            ts_range = Range(gte=max(0.0, inp.current_time - 60), lte=inp.current_time)
-        elif inp.intent == "specific" and inp.time_start is not None:
-            ts_range = Range(
-                gte=inp.time_start,
-                lte=inp.time_end if inp.time_end is not None else inp.time_start + 30,
-            )
-        else:
+    def _select_random_frame(self, video_path: str) -> Optional[str]:
+        """Chọn ngẫu nhiên 1 frame nếu CLIP thất bại."""
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                logger.error(f"Cannot open video for random selection: {video_path}")
+                return None
+            
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if total_frames <= 0:
+                return None
+            
+            random_frame_idx = random.randint(0, total_frames - 1)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, random_frame_idx)
+            
+            ret, frame = cap.read()
+            cap.release()
+            
+            if not ret:
+                return None
+            
+            # Save frame
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_filename = f"FRAME_RANDOM_{timestamp}.jpg"
+            output_path = os.path.join(self.output_dir, output_filename)
+            
+            cv2.imwrite(output_path, frame)
+            logger.info(f"Random frame saved at: {output_path}")
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Error in random frame selection: {e}")
             return None
         return FieldCondition(key="timestamp", range=ts_range)
 
-    # ── Qdrant two-call query + Python score merge ────────────────────────────
+    # ── Qdrant single RRF fusion query ────────────────────────────────────────
 
     def _query_qdrant(self, inp: FrameSelectionInput, top_k: int = 7) -> Tuple[str, Optional[List[str]]]:
         if not settings.QDRANT_URL or not settings.QDRANT_API_KEY:
@@ -130,27 +127,12 @@ class FrameSelectionTool(BaseTool):
         sparse_vec = self._embed_sparse(inp.query)
         timestamp_condition = self._build_timestamp_filter(inp)
 
-        def chunk_filter(chunk_type: str) -> Filter:
-            conditions = [
-                FieldCondition(key="video_id", match=MatchValue(value=inp.video_id)),
-                FieldCondition(key="chunk_type", match=MatchValue(value=chunk_type)),
-            ]
-            if timestamp_condition:
-                conditions.append(timestamp_condition)
-            return Filter(must=conditions)
+        conditions = [FieldCondition(key="video_id", match=MatchValue(value=inp.video_id))]
+        if timestamp_condition:
+            conditions.append(timestamp_condition)
+        base_filter = Filter(must=conditions)
 
-        # Call 1: cross-modal image search (text query → vision multi-vectors, MAX_SIM)
-        image_hits = client.query_points(
-            collection_name=settings.QDRANT_HLS_COLLECTION_NAME,
-            query=query_vec,
-            using="dense_image",
-            query_filter=chunk_filter("image"),
-            limit=top_k,
-            with_payload=True,
-        ).points
-
-        # Call 2: transcript search — RRF over dense_text + BM25 sparse
-        transcript_hits = client.query_points(
+        hits = client.query_points(
             collection_name=settings.QDRANT_HLS_COLLECTION_NAME,
             prefetch=[
                 Prefetch(query=query_vec,  using="dense_caption", filter=base_filter, limit=top_k),
@@ -162,28 +144,10 @@ class FrameSelectionTool(BaseTool):
             with_payload=True,
         ).points
 
-        # Merge scores by segment_index; only keep segments that have an image point
-        scores: dict = defaultdict(float)
-        image_payloads: dict = {}
-
-        for hit in image_hits:
-            seg = (hit.payload or {}).get("segment_index")
-            if seg is not None:
-                scores[seg] += hit.score
-                image_payloads[seg] = (hit.payload or {}).get("frame_paths", [])
-
-        for hit in transcript_hits:
-            seg = (hit.payload or {}).get("segment_index")
-            if seg is not None:
-                scores[seg] += hit.score
-
-        top_segments = sorted(
-            (seg for seg in scores if seg in image_payloads),
-            key=lambda s: scores[s],
-            reverse=True,
-        )[:top_k]
-
-        frame_paths = [p for seg in top_segments for p in image_payloads[seg]]
+        frame_paths = [
+            p for hit in hits
+            if (p := (hit.payload or {}).get("frame_path"))
+        ]
         logger.info(f"Frame selection found {frame_paths} for query '{inp.query}' with intent '{inp.intent}' in video '{inp.video_id}'")
 
         if not frame_paths:
@@ -199,31 +163,70 @@ class FrameSelectionTool(BaseTool):
 
     # ── Entry point ───────────────────────────────────────────────────────────
 
-    def _run(
+    def _call_qwen_embedding(
         self,
         query: str,
-        video_id: Optional[str] = None,
-        current_time: Optional[float] = None,
-        intent: str = "none",
-        time_start: Optional[float] = None,
-        time_end: Optional[float] = None,
-        run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> Tuple[str, Optional[List[str]]]:
+        frame_paths: List[str],
+        topk: int = 1,
+    ) -> List[int]:
+        """Call Qwen3-VL-Embedding via DashScope to select frames based on query.
+
+        :param query: Textual description to match frames against.
+        :param frame_paths: List of frame file paths (saved as temporary images).
+        :param topk: Number of top frames to return.
+        :return: List of selected frame indices (sorted by similarity, descending).
+        """
+        if not frame_paths:
+            return []
+
         try:
-            logger.info("Frame selection — query: %s, intent: %s, video: %s", query, intent, video_id)
+            # Prepare inputs: query as text, each frame as image
+            inputs: List[Union[dict, dict]] = [{"text": query}]
+            for frame_path in frame_paths:
+                if os.path.exists(frame_path):
+                    inputs.append({"image": frame_path})
 
-            if not video_id:
-                raise ValueError("video_id is required.")
+            if len(inputs) < 2:
+                logger.warning("No valid frames to process for embedding")
+                return []
 
-            inp = FrameSelectionInput(
-                query=query,
-                video_id=video_id,
-                current_time=current_time,
-                intent=intent,  # type: ignore
-                time_start=time_start,
-                time_end=time_end,
+            # Call DashScope API
+            response = MultiModalEmbedding.call(
+                api_key=self._dashscope_api_key,
+                model=self._embedding_model,
+                input=inputs  # type: ignore
             )
-            return self._query_qdrant(inp)
+
+            # Handle API response
+            if response.status_code != 200:
+                raise ValueError(f"DashScope API error: {response.message}")
+
+            # Extract embeddings
+            embeddings_output = response.output.get("embeddings", [])
+            if not embeddings_output or len(embeddings_output) < 2:
+                logger.error("DashScope returned invalid embeddings")
+                raise ValueError("Invalid embeddings from DashScope API")
+
+            # Query embedding is the first one, frame embeddings are the rest
+            # Each item in embeddings_output is a dict with "embedding" key
+            query_embedding = np.array(embeddings_output[0]["embedding"])
+            frame_embeddings = np.array([e["embedding"] for e in embeddings_output[1:]])
+
+            # Calculate cosine similarity
+            similarities = []
+            for frame_emb in frame_embeddings:
+                # Cosine similarity = dot(a, b) / (norm(a) * norm(b))
+                similarity = np.dot(query_embedding, frame_emb) / (
+                    np.linalg.norm(query_embedding) * np.linalg.norm(frame_emb) + 1e-8
+                )
+                similarities.append(similarity)
+
+            # Sort by similarity descending and get top-k indices
+            sorted_indices = np.argsort(similarities)[::-1]
+            selected_indices = sorted_indices[:min(topk, len(sorted_indices))].tolist()
+
+            logger.info(f"Selected frames: {selected_indices} with similarities: {[similarities[i] for i in selected_indices]}")
+            return selected_indices
 
         except Exception as e:
             logger.error(f"Error in Qwen embedding call: {e}")
@@ -329,9 +332,13 @@ class FrameSelectionTool(BaseTool):
             return "No suitable frames found for the query", None
 
         except Exception as e:
-            error_msg = f"Error in frame selection tool: {str(e)}"
+            error_msg = f"Error in frame selection tool: {e}"
             logger.error(error_msg)
+            # Send error to LangSmith run tree
             run_tree = get_current_run_tree()
             if run_tree:
                 run_tree.end(error=error_msg)
-            return error_msg, None
+            return f"Error during frame selection: {e}", None
+
+
+        
