@@ -1,8 +1,7 @@
 import logging
 import os
-import base64
-import requests
 import json
+import uuid
 from datetime import datetime
 
 from typing import Any, Type, Optional, List, Dict, Literal, Tuple
@@ -18,6 +17,7 @@ from langchain_core.callbacks import CallbackManagerForToolRun
 from app.config.config import SEGMENT_IMAGE_FOLDER
 from app.config import settings
 from app.soccer_agent.toolbox._config_loader import tool_description
+from langgraph.prebuilt import ToolRuntime
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -38,12 +38,12 @@ class SegmentInput(BaseModel):
                   ["the person in black uniform", "the person wearing green shirt"]
                  ]
     )
-    material: List[str] = Field(..., description="Paths to the image files")
+    image_id: str = Field(..., description="UUID of the image to segment")
 
 # --- Segment Tool ---
 class SegmentTool(BaseTool):
     name: str = "segment"
-    description: str = "Segments an image into cropped regions, each containing a detected human face. Use this when the agent needs to distinguish multiple people in a single image by visual attributes (e.g., clothing, color, face), which helps overcome the entity recognition tool's limitation of detecting all faces without differentiation. After segmentation, each cropped image can be passed to the entity recognition tool for per-face identification or attribute-based comparison. Returns the file paths of the cropped images as artifacts."
+    description: str = "Segments an image into cropped regions, each containing a detected human face. Use this when the agent needs to distinguish multiple people in a single image by visual attributes (e.g., clothing, color, face), which helps overcome the entity recognition tool's limitation of detecting all faces without differentiation. After segmentation, each cropped image can be passed to the entity recognition tool for per-face identification or attribute-based comparison. Returns the UUIDs of the cropped images."
     args_schema: Type[BaseModel] = SegmentInput # type: ignore
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     
@@ -73,25 +73,31 @@ class SegmentTool(BaseTool):
         
         logger.info("✅ Qwen-VL (DashScope International) client initialized via OpenAI SDK")
           
-    def _detect_and_segment(self, image_path: str, entities_description: List[str]) -> List[Dict]:
+    def _detect_and_segment(self, image_id: str, entities_description: List[str], media_registry: Any, user_id: str, thread_id: str) -> List[Dict]:
         """
         Get segmented entities from the query using Qwen-VL.
 
         Args:
-            image_path: Path to the image file.
+            image_id: Image UUID.
             entities_description: Entity description to be processed.
+            media_registry: MediaRegistryService instance.
         Returns:
             A list of dictionaries containing segmented entity information.
         """
         
         try:
-            # 1. Get image dimensions and encode as base64
-            from PIL import Image as PILImage
-            with PILImage.open(image_path) as img:
-                width, height = img.size
+            # 1. Get image dimensions
+            img = media_registry.get_pil_image(user_id, thread_id, image_id)
+            if not img:
+                raise ValueError(f"Could not load image {image_id}")
+            width, height = img.size
                 
-            with open(image_path, "rb") as f:
-                image_base64 = base64.b64encode(f.read()).decode("utf-8")
+            sas_url = media_registry.get_sas_url(user_id, thread_id, image_id)
+            if sas_url:
+                image_content = {"url": sas_url}
+            else:
+                image_base64 = media_registry.get_base_64(user_id, thread_id, image_id)
+                image_content = {"url": f"data:image/jpeg;base64,{image_base64}"}
             
             system_prompt = (
                 """You are a helpful assistant to detect objects in images. 
@@ -121,7 +127,7 @@ class SegmentTool(BaseTool):
                     {
                         "role": "user",
                         "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
+                            {"type": "image_url", "image_url": image_content},
                             {"type": "text", "text": user_prompt}
                         ]
                     }
@@ -242,17 +248,31 @@ class SegmentTool(BaseTool):
 
         return pil_image.crop((x1, y1, x2, y2))
 
-    def _post_proccessing_segmented_entities(self, image_path: str, segmented_entities: List[Dict]) -> List[str]:
+    def _post_proccessing_segmented_entities(
+        self, 
+        image_id: str, 
+        segmented_entities: List[Dict], 
+        media_registry: Any, 
+        user_id: str = "default_user", 
+        thread_id: str = "default_thread"
+    ) -> List[str]:
         """
         Post-process and save segmented entities as image files.
         Args:
-            image_path: Path to the original image file.
+            image_id: Image UUID.
             segmented_entities: List of segmented entity dictionaries from detection.
+            media_registry: MediaRegistryService instance.
+            user_id: The ID of the user.
+            thread_id: The ID of the session thread.
         Returns:
-            A list of file paths to the saved segmented images.
+            A list of new UUIDs to the saved segmented images.
         """
-        image = Image.open(image_path).convert("RGB")
+        image = media_registry.get_pil_image(user_id, thread_id, image_id)
         timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+
+        # Create user and thread structured output folder
+        output_dir = os.path.join(SEGMENT_IMAGE_FOLDER, user_id, thread_id)
+        os.makedirs(output_dir, exist_ok=True)
 
         segmented_paths = []
         for entity_idx, segmented_entity in enumerate(segmented_entities):
@@ -266,43 +286,73 @@ class SegmentTool(BaseTool):
             # Step 2: Refine to a single dominant face using OpenCV
             segmented_object = self._extract_largest_face(coarse_crop)
 
-            # Save segmented objects to temporary/segmented_images folder
+            # Save segmented objects to structured folder
             safe_label = label.replace(" ", "_").replace("/", "-")
             segmented_filename = f"entity_recognition_{safe_label}_{timestamp}_{entity_idx+1}.png"
-            segmented_path = os.path.join(SEGMENT_IMAGE_FOLDER, segmented_filename)
-            segmented_paths.append(segmented_path)
+            segmented_path = os.path.join(output_dir, segmented_filename)
+            new_uuid = str(uuid.uuid4())
+            media_registry.add_new_image(
+                user_id=user_id,
+                thread_id=thread_id,
+                media_uuid=new_uuid,
+                type="local",
+                path=segmented_path,
+                temporary=True
+            )
+            segmented_paths.append(new_uuid)
             segmented_object.save(segmented_path)
-            logger.info(f"✅ Cropped object saved to: {segmented_path}")
+            logger.info(f"✅ Cropped object saved to: {segmented_path} with UUID {new_uuid}")
         return segmented_paths
 
     def _run(
         self,
         query_entity_recognition_task: List[str],
-        material: List[str] = [],
+        image_id: str,
         run_manager: Optional[CallbackManagerForToolRun] = None,
+        runtime: Optional[ToolRuntime] = None,
     ) -> Tuple[str, List[str]]:
         """
         Execute the segmentation tool.
-        Returns tuple of (status_message, segmented_paths_string)
+        Returns tuple of (status_message, list of new image UUIDs)
         """
         run_tree = get_current_run_tree()
         
         try:
-            # 1. Load Image
-            image_path = material[0]  # TODO: fix to support multiple images
-            if not os.path.isfile(image_path):
-                raise FileNotFoundError(f"Material file not found: {image_path}")
-            logger.info(f"✅ Image loaded successfully from: {image_path}")
+            # --- Extract state and config values from ToolRuntime ---
+            user_id = "default_user"
+            thread_id = "default_thread"
+            media_registry = None
+            if runtime and runtime.config:
+                configurable = runtime.config.get("configurable", {})
+                user_id = str(configurable.get("user_id", user_id))
+                thread_id = str(configurable.get("thread_id", thread_id))
+                media_registry = configurable.get("media_registry")
+
+            if not media_registry:
+                raise ValueError("MediaRegistryService not found in runtime config")
+
             # 2. Detect Objects (Model)
-            segmented_entities = self._detect_and_segment(image_path=image_path, entities_description=query_entity_recognition_task)
+            segmented_entities = self._detect_and_segment(
+                image_id=image_id, 
+                entities_description=query_entity_recognition_task,
+                media_registry=media_registry,
+                user_id=user_id,
+                thread_id=thread_id
+            )
             
             # 3. Post-process and Save Segmented Objects
-            segmented_paths = self._post_proccessing_segmented_entities(image_path=image_path, segmented_entities=segmented_entities)
+            segmented_uuids = self._post_proccessing_segmented_entities(
+                image_id=image_id, 
+                segmented_entities=segmented_entities,
+                media_registry=media_registry,
+                user_id=user_id,
+                thread_id=thread_id
+            )
             
             return (
-                f"Successfully segmented objects. The tool segmented the image into: {len(segmented_paths)} parts. "
-                f"Segmented image paths: {', '.join(segmented_paths)}",
-                segmented_paths,
+                f"Successfully segmented objects. The tool segmented the image into: {len(segmented_uuids)} parts. "
+                f"Segmented image UUIDs: {', '.join(segmented_uuids)}",
+                segmented_uuids,
             )
 
         except Exception as e:
@@ -313,4 +363,4 @@ class SegmentTool(BaseTool):
                 run_tree.end(error=error_msg)
 
             # Return detailed error message to the Agent
-            return "An error occurred while segmenting the image. Try rephrase the tool input or stop the execution. Error: {error_msg}", []
+            return f"An error occurred while segmenting the image. Try rephrase the tool input or stop the execution. Error: {error_msg}", []

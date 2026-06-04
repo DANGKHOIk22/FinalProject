@@ -23,13 +23,14 @@ from app.schema.textual_entity_search import SearchingResult
 from app.schema.soccerwiki_entities import PlayerSchema, RefereeSchema, VenueSchema, TeamSchema
 from app.cache.standard_cache import standard_cache
 from app.soccer_agent.toolbox._config_loader import tool_description
+from langgraph.prebuilt import ToolRuntime
 
 
 # Setup logger
 logger = logging.getLogger(__name__)
 
 class EntityRecognitionInput(BaseModel):
-    material: List[str] = Field(..., description="Paths to image files with entity_recognition names; if omitted, defaults to all image paths.")
+    image_id: str = Field(..., description="UUID of the image  with entity_recognition names; if omitted, defaults to all image paths.")
 
 class EntityRecognitionTool(BaseTool):
     """
@@ -123,56 +124,39 @@ class EntityRecognitionTool(BaseTool):
             raise ConnectionError(f"Failed to connect to InsightFace endpoint: {response.status_code} - {response.text}")
 
     
-    def _create_payload(self, image_path: str, max_faces: int = 5, confidence_threshold: float = 0.60) -> Dict[str, Any]:
+    def _create_payload(self, image_id: str, max_faces: int = 5, confidence_threshold: float = 0.60, media_registry: Any = None, user_id: str = "default_user", thread_id: str = "default_thread") -> Dict[str, Any]:
         """
         Create payload for InsightFace endpoint.
         
-        :param image_path: Path to the image file
-        :type image_path: str
+        :param image_id: UUID to the image file
+        :type image_id: str
         :param max_faces: Maximum number of faces to detect
         :type max_faces: int
         :param confidence_threshold: Confidence threshold for face detection
         :type confidence_threshold: float
+        :param media_registry: MediaRegistryService instance
         :return: JSON payload for the request
         :rtype: Dict
         """
-        # Validate file exists and is readable
-        if not os.path.isfile(image_path):
-            error_msg = f"Image file not found: {image_path}"
-            logger.error(error_msg)
-            raise FileNotFoundError(error_msg)
-        
         try:
-            # Read image file
-            with open(image_path, "rb") as image_file:
-                image_data = image_file.read()
+            # 1. Load image to Base64 in RAM using MediaRegistryService
+            image_base64 = media_registry.get_base_64(user_id, thread_id, image_id)
+            if not image_base64:
+                raise ValueError(f"Could not load image {image_id}")
+            logger.info(f"📸 Image loaded and Base64 encoded: {image_id}")
             
-            file_size_kb = len(image_data) / 1024
-            logger.info(f"📸 Image loaded: {os.path.basename(image_path)} ({file_size_kb:.2f} KB)")
-            
-            # Validate image data is not empty
-            if not image_data:
-                error_msg = f"Image file is empty: {image_path}"
+            # 2. Get OpenCV image to validate size
+            pil_img = media_registry.get_pil_image(user_id, thread_id, image_id)
+            if pil_img is None:
+                error_msg = f"Invalid or corrupted image: {image_id}. Could not decode image."
                 logger.error(error_msg)
                 raise ValueError(error_msg)
             
-            # Validate image format by attempting to decode it locally
-            # This ensures the image is valid before sending to endpoint
-            temp_img = cv2.imdecode(np.frombuffer(image_data, dtype=np.uint8), cv2.IMREAD_COLOR)
-            if temp_img is None:
-                error_msg = f"Invalid or corrupted image file: {image_path}. Could not decode image."
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            
-            img_height, img_width = temp_img.shape[:2]
+            img_width, img_height = pil_img.size
             logger.info(f"✅ Image validated - Format: valid, Size: {img_width}x{img_height}")
-            
-            # Encode to base64
-            image_base64 = base64.b64encode(image_data).decode('utf-8')
-            logger.info(f"📦 Base64 encoded - Payload size: {len(image_base64) / 1024:.2f} KB")
         
         except Exception as e:
-            error_msg = f"Failed to process image file {image_path}: {str(e)}"
+            error_msg = f"Failed to process image {image_id}: {str(e)}"
             logger.error(error_msg)
             raise Exception(error_msg)
         
@@ -194,12 +178,13 @@ class EntityRecognitionTool(BaseTool):
     def cosine_similarity(a, b):
         return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
     
-    def _extract_entities_from_image(self, image_path: str) -> List[Dict]:
+    def _extract_entities_from_image(self, image_id: str, media_registry: Any, user_id: str, thread_id: str) -> List[Dict]:
         """
         Extract soccer entities from image using face recognition.
         
         Args:
-            image_path: Path to the image file
+            image_id: Image UUID
+            media_registry: MediaRegistryService instance
             
         Returns:
             List of entity dictionaries with ENTITY_TYPE and NAME
@@ -209,7 +194,7 @@ class EntityRecognitionTool(BaseTool):
         assert self._qdrant_client is not None, "Qdrant client is not initialized"
         
         # Create payload for InsightFace endpoint
-        payload = self._create_payload(image_path=image_path, max_faces=5, confidence_threshold=0.60)
+        payload = self._create_payload(image_id=image_id, max_faces=5, confidence_threshold=0.60, media_registry=media_registry, user_id=user_id, thread_id=thread_id)
 
         try:
         # Call to InsightFace endpoint
@@ -406,22 +391,39 @@ class EntityRecognitionTool(BaseTool):
         
         return result
     
-    def _run(self, material: List[str], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, SearchingResult]:
+    def _run(
+        self, 
+        image_id: str, 
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+        runtime: Optional[ToolRuntime] = None
+    ) -> Tuple[str, SearchingResult]:
         """
         Run the entity recognition tool.
         
         Args:
-            material: Paths to the image files
+            image_id: UUID of the image file
+            runtime: LangGraph ToolRuntime context
             
         Returns:
             String result message
         """
         try:
             # Step 1: Extract entities from image
-            for material_path in material:
-                if not os.path.isfile(material_path):
-                    raise FileNotFoundError(f"Material file not found: {material_path}. Please ask the user check the file")
-            entities = self._extract_entities_from_image(material[0]) #TODO: fix to support multiple images
+            logger.info(f"✅ Resolving image for entity recognition: {image_id}")
+            
+            user_id = "default_user"
+            thread_id = "default_thread"
+            media_registry = None
+            if runtime and runtime.config:
+                configurable = runtime.config.get("configurable", {})
+                user_id = str(configurable.get("user_id", "default_user"))
+                thread_id = str(configurable.get("thread_id", "default_thread"))
+                media_registry = configurable.get("media_registry")
+
+            if not media_registry:
+                raise ValueError("MediaRegistryService not found in runtime config")
+
+            entities = self._extract_entities_from_image(image_id, media_registry=media_registry, user_id=user_id, thread_id=thread_id)
             
             if not entities:
                 logger.info("No entities detected in image")
