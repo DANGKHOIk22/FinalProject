@@ -22,6 +22,7 @@ from app.database.db import engine
 # Import SoccerAgent (but don't initialize yet)
 from app.soccer_agent.agent import SoccerAgent
 from app.soccer_agent.memory.checkpointer import init_checkpointer, close_checkpointer
+from app.services.media_registry import MediaRegistryService
 
 # Chỉ import router chat và user
 from app.api.chat import router as chat_router
@@ -117,9 +118,21 @@ async def lifespan(app: FastAPI):
             agent_service = SoccerAgent(checkpointer=checkpointer)
             logger.info("✅ SoccerAgent initialized successfully")
 
+            # Initialize MediaRegistryService
+            media_service = MediaRegistryService(
+                redis_url=settings.UMRS_REDIS_URL,
+                azure_storage_url=settings.AZURE_STORAGE_ACCOUNT_URL,
+                azure_container_name=settings.AZURE_CONTAINER_NAME
+            )
+            app.state.media_registry = media_service
+            logger.info("✅ MediaRegistryService initialized successfully")
+
             # Create a RunnableConfig containing the Langfuse callback handler for tracing
             langfuse_handler = InlineCallbackHandler()
-            config = RunnableConfig(callbacks=[langfuse_handler])
+            config = RunnableConfig(
+                callbacks=[langfuse_handler],
+                configurable={"media_registry": media_service}
+            )
 
             # Create LangGraph Endpoint for Copilotkit Integration
             app.include_router(

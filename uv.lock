@@ -2174,23 +2174,6 @@ wheels = [
 ]
 
 [[package]]
-name = "play-with-azure-blob-storage"
-version = "0.1.0"
-source = { virtual = "temporary/play_with_azure_blob_storage" }
-dependencies = [
-    { name = "azure-identity" },
-    { name = "azure-storage-blob" },
-    { name = "python-dotenv" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "azure-identity", specifier = ">=1.25.3" },
-    { name = "azure-storage-blob", specifier = ">=12.28.0" },
-    { name = "python-dotenv", specifier = ">=1.2.2" },
-]
-
-[[package]]
 name = "pluggy"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }

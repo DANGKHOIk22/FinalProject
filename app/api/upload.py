@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request
 from app.api.deps import get_current_user
 from app.config.settings import settings
 from azure.identity import ClientSecretCredential
@@ -6,11 +6,14 @@ from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_b
 import datetime
 import uuid
 import os
+import logging
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 @router.post("/upload")
 async def upload_image(
+    request: Request,
     file: UploadFile = File(...),
     thread_id: str = Query(..., description="ID của cuộc hội thoại CopilotKit"),
     current_user = Depends(get_current_user)  # Yêu cầu xác thực người dùng qua JWT
@@ -58,6 +61,20 @@ async def upload_image(
         blob_client.upload_blob(content, 
                                 overwrite=True,
                                 content_settings=ContentSettings(content_type=file.content_type))
+        logger.info(f"Uploaded file {file.filename} to Azure Blob Storage at {blob_name}")
+        
+        # Đăng ký hình ảnh vào MediaRegistryService
+        if hasattr(request.app.state, "media_registry"):
+            media_registry = request.app.state.media_registry
+            media_registry.add_new_image(
+                user_id=current_user.id,
+                thread_id=thread_id,
+                media_uuid=blob_filename.split('.')[0],
+                type="remote",
+                path=blob_name,
+                temporary=False
+            )
+        logger.info(f"Registered media in MediaRegistryService: user_id={current_user.id}, thread_id={thread_id}")
 
         # 4. Sinh User Delegation SAS URL có thời hạn 30 phút
         delegation_start_time = datetime.datetime.now(datetime.timezone.utc)
@@ -82,6 +99,8 @@ async def upload_image(
         )
 
         sas_url = f"{blob_client.url}?{sas_token}"
+        logger.info(f"Generated SAS URL for {blob_name}: {sas_url}")
+
         return {"url": sas_url}
 
     except Exception as e:

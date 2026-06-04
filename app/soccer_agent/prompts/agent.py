@@ -1,5 +1,5 @@
 from langchain_core.messages import SystemMessage
-from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder
 
 
 def get_unified_planning_prompt_template() -> ChatPromptTemplate:
@@ -158,22 +158,24 @@ DB covers: EPL, Bundesliga, Champions League, Serie A, Ligue 1, La Liga — seas
 """),
     HumanMessagePromptTemplate.from_template("""
 ## INPUT DATA:
-- **User Query**: "{user_query}"
+- **User Query**: (The user query and any attached media are provided in the next message. additional_material contains the ids of any attached images or videos.)
+- **Additional Material (images/video)**: {additional_material}
 - **Conversation History**: {conversation_history}
 - **Long-term Memory (saved entity knowledge)**: {long_term_context}
-- **Additional Material (images/video)**: {additional_material}
+
 - **Available Tools**:
 {toolbox_descriptions}
-
+- **Time Context**: {time_context}
+- **Retrieved Cases**: {retrieved_cases}
+                                             
+## OUTPUT FORMAT:
+{format_instructions}
 ---
 ## YOUR TASK:
 Based on the user query and the rules above, produce the analysis and planning result as JSON.
 **NOTE: `clarified_query` and `sub_queries` MUST BE IN ENGLISH.**
-Time Context: {time_context}
-Retrieved Cases: {retrieved_cases}
-
-{format_instructions}
-""")
+"""),
+        MessagesPlaceholder(variable_name="user_query_msg", optional=True)
     ])
 
 
