@@ -75,7 +75,6 @@ class WorkerNodes:
                 "messages": [], # Start with empty messages for the worker;
                 "sub_query": sub_query,
                 "additional_material": state.get("additional_material", []),
-                "media_map": state.get("media_map") or {},
                 "tool_chain": chain,
                 "tool_calls_history": [],
                 "tool_results_history": [],
@@ -188,7 +187,6 @@ class WorkerNodes:
         return {
             "messages": messages + [response] if not state.get("messages") else [response], 
             "additional_material": additional_material_list,
-            "media_map": state.get("media_map"),
             "tool_calls_history": tool_calls_history,
             "tool_results_history": tool_results_history,
             "tool_chain": tool_chain,

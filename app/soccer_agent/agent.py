@@ -138,7 +138,6 @@ class SoccerAgent:
                     "user_query": request.user_query,
                     "clarified_query": "",
                     "additional_material": request.additional_material or [],
-                    "media_map": None,
                     "planning_output": None,
                     "tool_chains": [],
                     "sub_queries": [],
