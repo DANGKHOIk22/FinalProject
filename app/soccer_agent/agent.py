@@ -33,7 +33,6 @@ from app.soccer_agent.toolbox import (
 )
 
 # Nodes
-from app.soccer_agent.nodes.preprocess import PreprocessNode
 from app.soccer_agent.nodes.conversation_history import ConversationHistoryNode
 from app.soccer_agent.nodes.context_retrieval import ContextRetrievalNode
 from app.soccer_agent.nodes.unified_planning import UnifiedPlanningNode
@@ -73,7 +72,6 @@ class SoccerAgent:
         self.execution_llm_with_tools = self.execution_llm.bind_tools(self.tools) 
         
         # 4. Node Initialization
-        self.preprocess_node = PreprocessNode()
         self.history_node = ConversationHistoryNode()
         self.context_retrieval_node = ContextRetrievalNode(self.case_bank_retriever)
         self.planning_node = UnifiedPlanningNode(self.planning_llm, self.tools)
@@ -90,7 +88,6 @@ class SoccerAgent:
         workflow = StateGraph(AgentState)
 
         # Add Core Nodes
-        workflow.add_node("preprocess", self.preprocess_node.preprocess_multimedia_node)
         workflow.add_node("get_history", self.history_node.get_conversational_history)
         workflow.add_node("context_retrieval", self.context_retrieval_node.retrieve_context_node)
         workflow.add_node("unified_planning", self.planning_node.unified_planning_node)
@@ -99,12 +96,10 @@ class SoccerAgent:
         workflow.add_node("save_memory", self.memory_saving_node.save_to_memory_node)
 
         # Build Parallel Entry
-        workflow.add_edge(START, "preprocess")
         workflow.add_edge(START, "get_history")
         workflow.add_edge(START, "context_retrieval")
 
         # Sync into Planning
-        workflow.add_edge("preprocess", "unified_planning")
         workflow.add_edge("get_history", "unified_planning")
         workflow.add_edge("context_retrieval", "unified_planning")
         

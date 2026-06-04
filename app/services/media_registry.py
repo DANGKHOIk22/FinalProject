@@ -6,7 +6,7 @@ import datetime
 import io
 import logging
 from PIL import Image
-from typing import Optional
+from typing import Optional, Any
 from functools import lru_cache
 from azure.identity import ClientSecretCredential
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
@@ -158,3 +158,34 @@ class MediaRegistryService:
         buffered = io.BytesIO()
         img.save(buffered, format="JPEG")
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+    @staticmethod
+    def extract_uuids_from_message(message: Any) -> list[str]:
+        """
+        Extracts media UUIDs from a LangChain message.
+        Looks for content parts of type 'image_url' and takes the filename
+        (excluding extension) of the last segment in the URL path.
+        """
+        uuids = []
+        if not message or not hasattr(message, "content"):
+            return uuids
+            
+        content = message.content
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    image_url_obj = part.get("image_url") or {}
+                    url = image_url_obj.get("url")
+                    if url and isinstance(url, str):
+                        try:
+                            from urllib.parse import urlparse
+                            parsed = urlparse(url)
+                            path = parsed.path
+                            filename = path.split("/")[-1]
+                            uuid_str = filename.split(".")[0]
+                            if uuid_str and uuid_str not in uuids:
+                                uuids.append(uuid_str)
+                        except Exception as e:
+                            logger.error(f"Error parsing media URL in message: {e}")
+        # TODO: extract from video_url type if needed in the future
+        return uuids
