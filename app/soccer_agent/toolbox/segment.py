@@ -4,16 +4,17 @@ import json
 import uuid
 from datetime import datetime
 
-from typing import Any, Type, Optional, List, Dict, Literal, Tuple
+from typing import Any, Type, Optional, List, Dict, Literal, Tuple, Annotated
 from dotenv import load_dotenv
 import cv2
 import numpy as np
 from PIL import Image
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from langsmith import get_current_run_tree
 from langchain.tools import BaseTool
 from langchain.chat_models import BaseChatModel
 from langchain_core.callbacks import CallbackManagerForToolRun
+from langchain_core.tools import InjectedToolArg
 from app.config.config import SEGMENT_IMAGE_FOLDER
 from app.config import settings
 from app.soccer_agent.toolbox._config_loader import tool_description
@@ -23,6 +24,8 @@ from langgraph.prebuilt import ToolRuntime
 logger = logging.getLogger(__name__)
 # --- Input Schema ---
 class SegmentInput(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     query_entity_recognition_task: List[str] = Field(
         ...,
         description=(
@@ -39,6 +42,7 @@ class SegmentInput(BaseModel):
                  ]
     )
     image_id: str = Field(..., description="UUID of the image to segment")
+    runtime: Annotated[Optional[ToolRuntime], InjectedToolArg] = Field(default=None)
 
 # --- Segment Tool ---
 class SegmentTool(BaseTool):

@@ -11,12 +11,12 @@ import requests
 from dns import resolver
 from langsmith import get_current_run_tree
 from pymongo.server_api import ServerApi
-from typing import Any, Tuple, Type, Optional, Literal, List, Dict
+from typing import Any, Tuple, Type, Optional, Literal, List, Dict, Annotated
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from qdrant_client import QdrantClient, models
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
-
+from langchain_core.tools import InjectedToolArg
 from app.config.settings import settings
 from app.config.config import QDRANT_SEARCH_SCORE_THRESHOLD as THRESHOLD
 from app.schema.textual_entity_search import SearchingResult
@@ -30,7 +30,9 @@ from langgraph.prebuilt import ToolRuntime
 logger = logging.getLogger(__name__)
 
 class EntityRecognitionInput(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     image_id: str = Field(..., description="UUID of the image  with entity_recognition names; if omitted, defaults to all image paths.")
+    runtime: Annotated[Optional[ToolRuntime], InjectedToolArg] = Field(default=None)
 
 class EntityRecognitionTool(BaseTool):
     """
