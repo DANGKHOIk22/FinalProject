@@ -80,6 +80,7 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 | `choice_selection` | `choice_selection.py` | Best-option selector from a list |
 | `segment` | `segment.py` | Image segmentation via GroundingDINO endpoint |
 | `frame_selection` | `frame_selection.py` | RRF fusion query (DashScope vision + BM25) on Qdrant `hls_frame_index` |
+| `commentary_extraction` | `commentary_extraction.py` | Extracts transcript text from MongoDB by time window (`current`/`recent`/`specific`); HLS-only (requires `video_id`) |
 | `commentary_generation` | `commentary_generation.py` | Visual commentary from frame analysis |
 | `web_news_search` | `web_search.py` | Tavily web search for post-2024 or news queries |
 | ~~`entity_recognition`~~ | `entity_recognition.py` | **Commented out** — player recognition via face recognition + Qdrant |
@@ -101,7 +102,9 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 
 **`SoccerAgent` is `None` at startup if `DASHSCOPE_API_KEY` is missing.** `/chat` returns 503 — not a bug.
 
-**Semantic cache lives inside the worker subgraph**, not the main graph. Cache reads (`check()`) are currently disabled (hit-return logic commented out in `app/cache/semantic_cache.py`) — cache writes still work so results accumulate. Standard cache (`app/cache/standard_cache.py`) reads are also currently disabled. Re-enable by uncommenting the `if cached_result:` blocks. Semantic cache uses `gemini-embedding-001` (768-dim) via `GOOGLE_API_KEY`.
+**Semantic cache lives inside the worker subgraph**, not the main graph. `_check_cache_node` in `worker.py` is live — it calls `semantic_cache.check()` and short-circuits on a hit. However `check()` always returns `None` because the hit-return block is commented out inside `app/cache/semantic_cache.py` (lines 57-59). Cache writes (`set()`) still work. To enable reads, uncomment those lines. Also note: the global `semantic_cache` instance is created with `ttl=1` (1 second) — effectively disabling persistence even when reads are re-enabled. Standard cache (`app/cache/standard_cache.py`) reads are also disabled (hit block commented out in `_cache_logic`); async writes work, sync writes are commented out. Semantic cache uses `gemini-embedding-001` (768-dim) via `GOOGLE_API_KEY`.
+
+**`trigger_workers` has a duplicate `return "aggregator"` (lines 81-82 of `worker.py`).** Only the first executes; harmless but should be cleaned up.
 
 **Celery on Windows requires `-P solo`.** The default prefork pool is POSIX-only.
 
@@ -164,6 +167,7 @@ QDRANT_CASE_BANK_COLLECTION_NAME=Soccer_Case_Bank
 QDRANT_HLS_COLLECTION_NAME=hls_frame_index
 POSTGRES_DATABASE_URL=
 REDIS_URL=redis://localhost:6379/0
+TRANSCRIPTION_COLLECTION_NAME=transcription  # MongoDB collection used by commentary_extraction tool
 
 # Tavily (web search)
 TAVILY_API_KEYS=key1,key2   # Comma-separated for round-robin + 429 failover

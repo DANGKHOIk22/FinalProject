@@ -1,10 +1,10 @@
 import logging
-from typing import Literal, Optional, Type
+from typing import Annotated, Optional, Type
 
 from dns import resolver
 from langchain_core.callbacks import CallbackManagerForToolRun
-from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field, model_validator
+from langchain.tools import InjectedState, BaseTool
+from pydantic import BaseModel, Field
 from pymongo import ASCENDING, MongoClient
 
 from app.config.settings import settings
@@ -25,61 +25,40 @@ def _get_collection():
 
 
 class CommentaryExtractionInput(BaseModel):
-    intent: Literal["current", "recent", "specific"] = Field(
-        description="'current' = last 5s from current_time, 'recent' = last 15s, 'specific' = explicit start_time/end_time range"
+    start_time: float = Field(
+        description="Start of time range in seconds."
     )
-    video_id: str = Field(description="HLS video session ID")
-    current_time: Optional[float] = Field(
-        default=None,
-        description="Current playback position in seconds. Required for intent='current' or 'recent'.",
+    end_time: float = Field(
+        description="End of time range in seconds. "
     )
-    start_time: Optional[float] = Field(
-        default=None,
-        description="Start of time range in seconds. Required for intent='specific'.",
+    execution_agent_state: Annotated[dict, InjectedState] = Field(
+        description="Injected worker state — provides video_id and video_current_time."
     )
-    end_time: Optional[float] = Field(
-        default=None,
-        description="End of time range in seconds. Required for intent='specific'.",
-    )
-
-    @model_validator(mode="after")
-    def check_required_fields(self):
-        if self.intent in ("current", "recent") and self.current_time is None:
-            raise ValueError(f"'current_time' is required for intent='{self.intent}'")
-        if self.intent == "specific":
-            if self.start_time is None or self.end_time is None:
-                raise ValueError("'start_time' and 'end_time' are required for intent='specific'")
-            if self.start_time > self.end_time:
-                raise ValueError("'start_time' must be <= 'end_time'")
-        return self
 
 
 class CommentaryExtractionTool(BaseTool):
     name: str = "commentary_extraction"
     description: str = (
         "Extracts transcript text from a soccer video stored in MongoDB. "
-        "Use intent='current' for the last 5 seconds of commentary, 'recent' for the last 15 seconds, "
-        "or 'specific' with start_time and end_time (in seconds) for an explicit range. "
+        "Provide start_time and end_time in seconds — use video_current_time from agent state as reference "
+        "(e.g. current_time - 5 to current_time for recent commentary). "
         "Returns the concatenated transcript text for the requested time window."
     )
     args_schema: Type[BaseModel] = CommentaryExtractionInput  # type: ignore
 
     def _run(
         self,
-        intent: Literal["current", "recent", "specific"],
-        video_id: str,
-        current_time: Optional[float] = None,
-        start_time: Optional[float] = None,
-        end_time: Optional[float] = None,
+        start_time: float,
+        end_time: float,
+        execution_agent_state: Annotated[dict, InjectedState],
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
+        video_id = execution_agent_state.get("video_id")
+        if not video_id:
+            return "No active HLS session (video_id not found in state). This tool requires a video."
+
         try:
-            if intent == "current":
-                ts_min, ts_max = current_time - 5.0, current_time  # type: ignore[operator]
-            elif intent == "recent":
-                ts_min, ts_max = current_time - 15.0, current_time  # type: ignore[operator]
-            else:
-                ts_min, ts_max = start_time, end_time
+            ts_min, ts_max = start_time, end_time
 
             collection = _get_collection()
             docs = list(

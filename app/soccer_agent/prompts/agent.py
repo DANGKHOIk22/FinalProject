@@ -226,8 +226,7 @@ def get_execution_human_prompt() -> HumanMessagePromptTemplate:
 2. Additional material: {additional_material}
 3. Suggested tool chain for your sub-query: '{tool_chain}'
 4. Time context: {time_context}
-5. HLS video_id: {video_id} (pass this as the `video_id` argument when calling `frame_selection`)
-6. Current video playback time: {video_current_time}s (use as `current_time` for temporal filtering in `frame_selection`)
+5. Current video playback time: {video_current_time}s (use this to compute absolute start_time/end_time when calling `commentary_extraction` with intent='specific')
 
 # Next Step
 Based on the above determine the next step in your execution:
