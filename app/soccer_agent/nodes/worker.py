@@ -189,6 +189,7 @@ class WorkerNodes:
         logger.info(f"Tool chain to execute: {' -> '.join(tool_chain) if tool_chain else 'No tools needed'}")
 
         response: AIMessage = None  # type: ignore
+        execution_failed = False
         try:
             response = await self.execution_llm_with_tools.ainvoke([system_prompt] + messages, config=config) # type: ignore
         except Exception as e:
@@ -196,7 +197,8 @@ class WorkerNodes:
             logger.error(error_msg)
             logger.info("Stopping execution due to error.")
             response = AIMessage(content="The execution has been stopped due to an error. Please try again later.")
-        
+            execution_failed = True
+
         worker_result = None
         if not response.tool_calls:
             logger.info("✅ TOOL EXECUTION STEP COMPLETED FOR CHAIN")
@@ -208,8 +210,10 @@ class WorkerNodes:
                 worker_result = response.text
             else:
                 worker_result = "Worker stopped due to execution error."
+                execution_failed = True
 
-            if sub_query:
+            # Only cache successful tool-chain results — never cache failures.
+            if sub_query and worker_result and not execution_failed:
                 semantic_cache.set(
                     sub_query,
                     worker_result,
