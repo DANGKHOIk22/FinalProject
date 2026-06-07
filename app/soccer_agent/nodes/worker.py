@@ -3,7 +3,7 @@ import asyncio
 from datetime import datetime
 from typing import List
 
-from langchain_core.messages import ToolMessage, AIMessage
+from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph, RunnableConfig
@@ -55,18 +55,18 @@ class WorkerNodes:
 
     def trigger_workers(self, state: AgentState, config: RunnableConfig):
         """Map worker executions for each parallel tool chain."""
-        video_id = state.get("video_id")
+        game_id = state.get("game_id")
         video_current_time = state.get("video_current_time")
-        if video_id is None:
+        if game_id is None:
             import json
             for ctx_item in state.get("copilotkit", {}).get("context", []):
                 raw = ctx_item.value if hasattr(ctx_item, "value") else ctx_item.get("value")
                 value = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else None
-                if isinstance(value, dict) and value.get("video_id"):
-                    video_id = value["video_id"]
+                if isinstance(value, dict) and value.get("game_id"):
+                    game_id = value["game_id"]
                     video_current_time = value.get("current_time", video_current_time)
                     break
-        logger.info(f"[trigger_workers] video_id={video_id!r}, video_current_time={video_current_time!r}")
+        logger.info(f"[trigger_workers] game_id={game_id!r}, video_current_time={video_current_time!r}")
         # Read from top-level state — always freshly written by unified_planning_node.
         # Do NOT read from planning_output: it may be stale (from a previous turn's checkpointed state).
         need_call_tools = state.get("need_call_tools", True)
@@ -78,7 +78,6 @@ class WorkerNodes:
         # Short-circuit to aggregator when no tools needed (is_ambiguous, greeting, etc.)
         if not need_call_tools or not tool_chains:
             logger.info(f"⏭️ Skipping workers (need_call_tools={need_call_tools}, tool_chains={tool_chains}). Going straight to aggregator.")
-            return "aggregator"
             return "aggregator"
             
         sends = []
@@ -94,7 +93,7 @@ class WorkerNodes:
                 "last_tool_artifact": None,
                 "parallel_results": [],
                 "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "video_id": video_id,
+                "game_id": game_id,
                 "video_current_time": video_current_time,
             }
             logger.info(f"🚀 Triggering worker {idx}: sub_query='{sub_query}', chain={chain}")
@@ -146,7 +145,6 @@ class WorkerNodes:
         tool_calls_history = state.get("tool_calls_history", [])
         tool_results_history = state.get("tool_results_history", [])
         messages = state.get("messages", [])
-        video_id = state.get("video_id")
         video_current_time = state.get("video_current_time")
 
         logger.info(f"🔧 Running TOOL EXECUTION STEP: Step {len(tool_calls_history)}")
@@ -157,6 +155,24 @@ class WorkerNodes:
             last_tool_message = messages[-1]
             last_artifact = last_tool_message.artifact if hasattr(last_tool_message, 'artifact') else None
 
+        # Merge artifact paths (e.g. from frame_selection) into additional_material
+        if last_artifact and isinstance(last_artifact, list):
+            if last_tool_message and last_tool_message.name == "segment":
+                # Remove raw HLS frame paths now that segment has produced cropped images
+                additional_material_list = [p for p in additional_material_list if "hls_sessions" not in p]
+                logger.info("Cleaned HLS frame paths from additional_material after segment.")
+            new_paths = [p for p in last_artifact if isinstance(p, str) and p not in additional_material_list]
+            if new_paths:
+                additional_material_list = additional_material_list + new_paths
+                messages = messages + [HumanMessage(
+                    content=(
+                        f"The previous tool returned {len(new_paths)} path(s) which are now in additional_material: "
+                        + ", ".join(new_paths)
+                        + ". Pass ALL of them to the next tool."
+                    )
+                )]
+                logger.info(f"Merged {len(new_paths)} artifact path(s) into additional_material.")
+
         additional_material_str = ", ".join(additional_material_list) if additional_material_list else "None"
         system_prompt = get_execution_system_prompt()
         if not messages:
@@ -166,7 +182,6 @@ class WorkerNodes:
                 additional_material=additional_material_str,
                 tool_chain=" -> ".join(tool_chain) if tool_chain else "No tools needed",
                 time_context=state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
-                video_id=video_id or "None",
                 video_current_time=str(video_current_time) if video_current_time is not None else "None",
             )
             messages = [execution_prompt]
@@ -195,7 +210,13 @@ class WorkerNodes:
                 worker_result = "Worker stopped due to execution error."
 
             if sub_query:
-                semantic_cache.set(sub_query, worker_result, additional_material_list)
+                semantic_cache.set(
+                    sub_query,
+                    worker_result,
+                    additional_material_list,
+                    game_id=state.get("game_id"),
+                    current_time=state.get("video_current_time"),
+                )
 
             for message in messages:
                 if isinstance(message, AIMessage) and message.tool_calls:
@@ -220,7 +241,12 @@ class WorkerNodes:
             return {}
             
         additional_material = state.get("additional_material", [])
-        cached_result = semantic_cache.check(sub_query, additional_material)
+        cached_result = semantic_cache.check(
+            sub_query,
+            additional_material,
+            game_id=state.get("game_id"),
+            current_time=state.get("video_current_time"),
+        )
         
         if cached_result:
             logger.info("⚡ Skipping worker execution due to cache hit (>0.9 similarity).")

@@ -28,7 +28,8 @@ class Settings:
     GOOGLE_API_KEY: Optional[str] = os.getenv('GOOGLE_API_KEY')
     DASHSCOPE_API_KEY: Optional[str] = os.getenv('DASHSCOPE_API_KEY')
     SOCCER_COLLECTION_NAME: str = os.getenv('SOCCER_COLLECTION_NAME', 'EntityInformation')
-    TRANSCRIPTION_COLLECTION_NAME: str = os.getenv('TRANSCRIPTION_COLLECTION_NAME', 'transcription')
+    COMMENTARY_COLLECTION_NAME: str = os.getenv('COMMENTARY_COLLECTION_NAME', 'commentary')
+    STREAMING_GAME_COLLECTION_NAME: str = os.getenv('STREAMING_GAME_COLLECTION_NAME', 'streaming_game')
     
     # Qdrant Configuration
     QDRANT_URL: Optional[str] = os.getenv('QDRANT_URL')

@@ -14,7 +14,7 @@ class ChatRequest(BaseModel):
         None,
         description="Tài liệu bổ sung (ví dụ: đường dẫn file ảnh, video)."
     )
-    video_id: Optional[str] = Field(
+    game_id: Optional[str] = Field(
         None,
-        description="HLS video ID returned by POST /hls/sessions. Required when the user is watching a live-simulated stream and the agent should query the indexed frames."
+        description="Game ID returned by POST /hls/sessions. Required when the user is watching a live-simulated stream and the agent should query the indexed frames."
     )

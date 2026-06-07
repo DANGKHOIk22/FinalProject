@@ -1,13 +1,12 @@
 import logging
 import uuid
 from datetime import datetime
-
+from app.config.config import PLANNING_CONFIDENCE_THRESHOLD
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.callbacks.manager import adispatch_custom_event
 from langgraph.graph.state import RunnableConfig
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from app.config.config import PLANNING_CONFIDENCE_THRESHOLD
 from app.schema.soccer_agent.state import AgentState, UnifiedPlanningOutput
 from app.soccer_agent.prompts.agent import get_unified_planning_prompt_template
 
@@ -59,19 +58,19 @@ class UnifiedPlanningNode:
             )
 
         video_current_time = state.get("video_current_time")
-        video_id = state.get("video_id")
-        if video_id is None:
+        game_id = state.get("game_id")
+        if game_id is None:
             import json
             for ctx_item in state.get("copilotkit", {}).get("context", []):
                 raw = ctx_item.value if hasattr(ctx_item, "value") else ctx_item.get("value")
                 value = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else None
-                if isinstance(value, dict) and value.get("video_id"):
-                    video_id = value["video_id"]
+                if isinstance(value, dict) and value.get("game_id"):
+                    game_id = value["game_id"]
                     video_current_time = value.get("current_time", video_current_time)
                     break
         video_context = (
-            f"HLS video_id={video_id}, current_time={video_current_time}s"
-            if video_id is not None
+            f"HLS game_id={game_id}, current_time={video_current_time}s"
+            if game_id is not None
             else "None"
         )
 
@@ -111,17 +110,17 @@ class UnifiedPlanningNode:
         pending_clarifications: list = []
 
         for pc in (output.planned_chains or []):
-            # Code enforces threshold as safety net regardless of LLM's is_ambiguous flag
-            if pc.confidence < PLANNING_CONFIDENCE_THRESHOLD:
-                pc.is_ambiguous = True
-            if pc.is_ambiguous:
-                q = pc.clarifying_question or "Bạn có thể cung cấp thêm thông tin không?"
-                pending_clarifications.append(q)
-                logger.info(f"  └─ Chain AMBIGUOUS (confidence={pc.confidence:.2f}): {pc.chain} | '{pc.sub_query}' → asking: {q}")
-            else:
-                tool_chains.append(pc.chain)
-                sub_queries.append(pc.sub_query)
-                logger.info(f"  └─ Chain OK (confidence={pc.confidence:.2f}): {pc.chain} | '{pc.sub_query}'")
+            # Ambiguity check disabled — all chains are dispatched regardless of confidence
+            # if pc.confidence < PLANNING_CONFIDENCE_THRESHOLD:
+            #     pc.is_ambiguous = True
+            # if pc.is_ambiguous:
+            #     q = pc.clarifying_question or "Bạn có thể cung cấp thêm thông tin không?"
+            #     pending_clarifications.append(q)
+            #     logger.info(f"  └─ Chain AMBIGUOUS (confidence={pc.confidence:.2f}): {pc.chain} | '{pc.sub_query}' → asking: {q}")
+            # else:
+            tool_chains.append(pc.chain)
+            sub_queries.append(pc.sub_query)
+            logger.info(f"  └─ Chain OK (confidence={pc.confidence:.2f}): {pc.chain} | '{pc.sub_query}'")
 
         need_call_tools = output.need_call_tools and len(tool_chains) > 0
         logger.info(

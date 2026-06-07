@@ -48,7 +48,7 @@ class AgentState(CopilotKitState):
     effective_memory: Optional[Any]
     time_context: Optional[str]
     video_current_time: Optional[float] # Current HLS video playback position in seconds (synced from frontend)
-    video_id: Optional[str] # Active HLS streaming session ID (synced from frontend)
+    game_id: Optional[str] # Game identifier for the active HLS stream (synced from frontend)
 
 class WorkerState(CopilotKitState):
     """State for individual tool chain execution workers. It is derived from CopilotKitState, which provides 'messages' list to store the conversation history"""
@@ -60,5 +60,5 @@ class WorkerState(CopilotKitState):
     worker_result: List[str] # To store the final result of the worker's execution, which will be aggregated into the parent agent's state
     last_tool_artifact: Optional[Any]
     time_context: Optional[str] # Current date and time passed from AgentState
-    video_id: Optional[str] # HLS video ID forwarded from AgentState
+    game_id: Optional[str] # Game ID forwarded from AgentState
     video_current_time: Optional[float] # HLS playback position forwarded from AgentState
