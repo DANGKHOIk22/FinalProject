@@ -226,7 +226,9 @@ def get_execution_human_prompt() -> HumanMessagePromptTemplate:
 2. Additional material: {additional_material}
 3. Suggested tool chain for your sub-query: '{tool_chain}'
 4. Time context: {time_context}
-5. Current video playback time: {video_current_time}s (use this to compute absolute start_time/end_time when calling `commentary_extraction` with intent='specific')
+5. Current video context: game_id={game_id}.
+   - If game_id is not "None", a video is currently playing. When this sub-query is about that ongoing match (e.g. "what just happened", "who has the ball", "the current score", "this match"), set `about_current_match=true` on `game_info_retrieval` / `game_history_retrieval` to target the active video directly.
+   - When the query identifies a different match by team, league, or date, set `about_current_match=false`.
 
 # Next Step
 Based on the above determine the next step in your execution:

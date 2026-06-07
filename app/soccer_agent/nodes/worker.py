@@ -145,7 +145,6 @@ class WorkerNodes:
         tool_calls_history = state.get("tool_calls_history", [])
         tool_results_history = state.get("tool_results_history", [])
         messages = state.get("messages", [])
-        video_current_time = state.get("video_current_time")
         game_id = state.get("game_id")
 
         logger.info(f"🔧 Running TOOL EXECUTION STEP: Step {len(tool_calls_history)}")
@@ -183,7 +182,6 @@ class WorkerNodes:
                 additional_material=additional_material_str,
                 tool_chain=" -> ".join(tool_chain) if tool_chain else "No tools needed",
                 time_context=state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
-                video_current_time=str(video_current_time) if video_current_time is not None else "None",
                 game_id=str(game_id) if game_id else "None",
             )
             messages = [execution_prompt]

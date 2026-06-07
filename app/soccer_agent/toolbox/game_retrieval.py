@@ -75,11 +75,30 @@ logger = logging.getLogger(__name__)
 class GameQueryInput(BaseModel):
     query: str = Field(description="Câu hỏi hoặc truy vấn của người dùng về trận đấu.")
     time_context: Optional[str] = Field(default=None, description="Bối cảnh thời gian hiện tại.")
+    about_current_match: bool = Field(
+        default=False,
+        description=(
+            "Set True when this sub-query is about the match the user is currently watching "
+            "(e.g. 'what just happened', 'who has the ball', 'the current score', 'this match'/'this game'). "
+            "Set False when the query identifies a specific match by team, league, or date."
+        ),
+    )
+    execution_agent_state: Annotated[dict, InjectedState] = Field(
+        description="Injected worker state — provides game_id for the active HLS session."
+    )
 
 
 class GameHistoryInput(BaseModel):
     query: str = Field(description="Câu hỏi hoặc truy vấn của người dùng về trận đấu.")
     time_context: Optional[str] = Field(default=None, description="Bối cảnh thời gian hiện tại.")
+    about_current_match: bool = Field(
+        default=False,
+        description=(
+            "Set True when this sub-query is about the match the user is currently watching "
+            "(e.g. 'what just happened', 'who scored', 'this match'/'this game'). "
+            "Set False when the query identifies a specific match by team, league, or date."
+        ),
+    )
     execution_agent_state: Annotated[dict, InjectedState] = Field(
         description="Trạng thái hiện tại của execution agent. Nếu tool trước là commentary_generation, artifact sẽ là List[Annotation]."
     )
@@ -278,14 +297,33 @@ class GameInfoRetrievalTool(BaseTool):
         data.pop("comments", None)
         return json.dumps(data, indent=2, ensure_ascii=False)
 
+    def _answer_from_context(self, query: str, context: str, time_context: Optional[str]) -> str:
+        llm_structured = self._llm.with_structured_output(ToolOutput)
+        response: ToolOutput = (get_game_info_retrieval_prompt_template() | llm_structured).invoke({
+            "query": query,
+            "context": context,
+            "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+        })  # type: ignore
+        logger.info(f"✅ game_info_retrieval | answer={response.answer[:200]}")
+        return response.answer
+
     def _run(
         self,
         query: str,
+        execution_agent_state: Annotated[dict, InjectedState],
+        about_current_match: bool = False,
         time_context: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, Optional[str]]:
         run_tree = get_current_run_tree()
         try:
+            game_id = execution_agent_state.get("game_id")
+
+            # Fast path: sub-query is about the currently-playing video — skip search entirely.
+            if about_current_match and game_id:
+                logger.info(f"⚡ game_info_retrieval fast path — active video game_id={game_id}")
+                return self._answer_from_context(query, self._fetch_metadata(game_id), time_context), game_id
+
             logger.info(f"🔎 GameInfoRetrieval searching: {query}")
             result = self._finder.find(query, time_context)
 
@@ -297,19 +335,15 @@ class GameInfoRetrievalTool(BaseTool):
                 return f"An error occurred while searching for the game. Details: {result.detail}. Please try again or stop the execution.", None
 
             if isinstance(result, _GameNotFound):
+                # Safety net: an active video is a strong signal — degrade to it instead of failing.
+                if game_id:
+                    logger.info(f"↩️ game_info_retrieval search miss — falling back to active video game_id={game_id}")
+                    return self._answer_from_context(query, self._fetch_metadata(game_id), time_context), game_id
                 return result.reason, None
 
             # _GameFound
             logger.info(f"📄 Fetching metadata for game_id: {result.game_id}")
-            context = self._fetch_metadata(result.game_id)
-            llm_structured = self._llm.with_structured_output(ToolOutput)
-            response: ToolOutput = (get_game_info_retrieval_prompt_template() | llm_structured).invoke({
-                "query": query,
-                "context": context,
-                "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
-            })  # type: ignore
-            logger.info(f"✅ game_info_retrieval: game_id={result.game_id} | answer={response.answer[:200]}")
-            return response.answer, result.game_id
+            return self._answer_from_context(query, self._fetch_metadata(result.game_id), time_context), result.game_id
 
         except Exception as e:
             error_msg = f"Error in game_info_retrieval: {str(e)}"
@@ -321,12 +355,21 @@ class GameInfoRetrievalTool(BaseTool):
     async def _arun(
         self,
         query: str,
+        execution_agent_state: Annotated[dict, InjectedState],
+        about_current_match: bool = False,
         time_context: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, Optional[str]]:
-        """Async version with Tavily fallback when match not found in DB."""
+        """Async version. Fast path for the active video; Tavily fallback when no match is found and no video is active."""
         run_tree = get_current_run_tree()
         try:
+            game_id = execution_agent_state.get("game_id")
+
+            # Fast path: sub-query is about the currently-playing video — skip search entirely.
+            if about_current_match and game_id:
+                logger.info(f"⚡ game_info_retrieval (async) fast path — active video game_id={game_id}")
+                return self._answer_from_context(query, self._fetch_metadata(game_id), time_context), game_id
+
             logger.info(f"🔎 GameInfoRetrieval (async) searching: {query}")
             result = self._finder.find(query, time_context)
 
@@ -338,6 +381,10 @@ class GameInfoRetrievalTool(BaseTool):
                 return f"An error occurred while searching for the game: {result.detail}", None
 
             if isinstance(result, _GameNotFound):
+                # Safety net: an active video is a strong signal — prefer it over a web search.
+                if game_id:
+                    logger.info(f"↩️ game_info_retrieval (async) search miss — falling back to active video game_id={game_id}")
+                    return self._answer_from_context(query, self._fetch_metadata(game_id), time_context), game_id
                 logger.info(f"⚡ game_info_retrieval DB miss — falling back to Tavily news search")
                 tavily_answer, news = await _get_tavily().search_news(
                     f"{query} match result score lineup",
@@ -354,15 +401,7 @@ class GameInfoRetrievalTool(BaseTool):
 
             # _GameFound
             logger.info(f"📄 Fetching metadata for game_id: {result.game_id}")
-            context = self._fetch_metadata(result.game_id)
-            llm_structured = self._llm.with_structured_output(ToolOutput)
-            response: ToolOutput = (get_game_info_retrieval_prompt_template() | llm_structured).invoke({
-                "query": query,
-                "context": context,
-                "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
-            })  # type: ignore
-            logger.info(f"✅ game_info_retrieval: game_id={result.game_id} | answer={response.answer[:200]}")
-            return response.answer, result.game_id
+            return self._answer_from_context(query, self._fetch_metadata(result.game_id), time_context), result.game_id
 
         except Exception as e:
             error_msg = f"Error in game_info_retrieval: {str(e)}"
@@ -427,12 +466,26 @@ class GameHistoryRetrievalTool(BaseTool):
 
         return json.dumps([a.model_dump() for a in processed], indent=2, ensure_ascii=False)
 
+    @staticmethod
+    def _format_position(seconds: float) -> str:
+        s = int(seconds)
+        return f"{s // 60}:{s % 60:02d} ({s}s)"  # e.g. "45:00 (2700s)"
+
     def _resolve_history_context(
-        self, query: str, last_artifact: Union[List[Annotation], str, None]
+        self,
+        query: str,
+        last_artifact: Union[List[Annotation], str, None],
+        active_game_id: Optional[str] = None,
+        about_current_match: bool = False,
     ) -> Tuple[str, Optional[str]]:
         """
         Return (history_json, game_id).
         game_id is None when history comes from commentary_generation annotations.
+
+        Resolution precedence:
+          1. last_tool_artifact from a previous tool in the chain
+          2. the currently-playing video (when about_current_match is set)
+          3. search from the query (with the active video as a safety net on miss)
         """
         if isinstance(last_artifact, list):
             # From commentary_generation — List[Annotation], use directly
@@ -443,14 +496,23 @@ class GameHistoryRetrievalTool(BaseTool):
             # Validate it looks like a game_id (contains path separators typical of our IDs)
             if "/" in last_artifact:
                 return self._history_from_game_id(last_artifact), last_artifact
-            # Doesn't look like a game_id — fall through to search
+            # Doesn't look like a game_id — fall through
             logger.warning(f"last_tool_artifact '{last_artifact[:80]}' does not look like a game_id, searching instead.")
 
-        # No valid prior artifact — search from query
+        # Fast path: sub-query is about the currently-playing video — skip search entirely.
+        if about_current_match and active_game_id:
+            logger.info(f"⚡ game_history_retrieval fast path — active video game_id={active_game_id}")
+            return self._history_from_game_id(active_game_id), active_game_id
+
+        # Search from query
         result = self._finder.find(query)
         if isinstance(result, _GameSearchError):
             raise RuntimeError(f"Game search error: {result.detail}")
         if isinstance(result, _GameNotFound):
+            # Safety net: an active video is a strong signal — degrade to it instead of failing.
+            if active_game_id:
+                logger.info(f"↩️ game_history_retrieval search miss — falling back to active video game_id={active_game_id}")
+                return self._history_from_game_id(active_game_id), active_game_id
             raise ValueError(result.reason)
         return self._history_from_game_id(result.game_id), result.game_id
 
@@ -458,12 +520,15 @@ class GameHistoryRetrievalTool(BaseTool):
         self,
         query: str,
         execution_agent_state: Annotated[dict, InjectedState],
+        about_current_match: bool = False,
         time_context: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, Optional[str]]:
         run_tree = get_current_run_tree()
         try:
             last_artifact = execution_agent_state.get("last_tool_artifact")
+            active_game_id = execution_agent_state.get("game_id")
+            active_vct = execution_agent_state.get("video_current_time")
             artifact_preview = (
                 last_artifact if isinstance(last_artifact, str)
                 else f"[{len(last_artifact)} annotations]" if isinstance(last_artifact, list)
@@ -471,15 +536,22 @@ class GameHistoryRetrievalTool(BaseTool):
             )
             logger.info(f"📖 GameHistoryRetrieval artifact: {artifact_preview}")
 
-            history_context, game_id = self._resolve_history_context(query, last_artifact)
+            history_context, game_id = self._resolve_history_context(
+                query, last_artifact, active_game_id, about_current_match
+            )
+
+            # Ground the answer on the live playback position only when answering about the active video.
+            on_active = game_id is not None and game_id == active_game_id
+            video_position = self._format_position(active_vct) if (on_active and active_vct is not None) else "None"
 
             llm_structured = self._llm.with_structured_output(ToolOutput)
             response: ToolOutput = (get_game_history_retrieval_prompt_template() | llm_structured).invoke({
                 "query": query,
                 "context": history_context,
-                "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+                "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "video_position": video_position,
             })  # type: ignore
-            logger.info(f"✅ game_history_retrieval: game_id={game_id} | answer={response.answer[:200]}")
+            logger.info(f"✅ game_history_retrieval: game_id={game_id} | on_active={on_active} | answer={response.answer[:200]}")
             return response.answer, game_id
 
         except Exception as e:
@@ -493,6 +565,7 @@ class GameHistoryRetrievalTool(BaseTool):
         self,
         query: str,
         execution_agent_state: Annotated[dict, InjectedState],
+        about_current_match: bool = False,
         time_context: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, Optional[str]]:
@@ -500,6 +573,8 @@ class GameHistoryRetrievalTool(BaseTool):
         run_tree = get_current_run_tree()
         try:
             last_artifact = execution_agent_state.get("last_tool_artifact")
+            active_game_id = execution_agent_state.get("game_id")
+            active_vct = execution_agent_state.get("video_current_time")
             artifact_preview = (
                 last_artifact if isinstance(last_artifact, str)
                 else f"[{len(last_artifact)} annotations]" if isinstance(last_artifact, list)
@@ -508,9 +583,11 @@ class GameHistoryRetrievalTool(BaseTool):
             logger.info(f"📖 GameHistoryRetrieval (async) artifact: {artifact_preview}")
 
             try:
-                history_context, game_id = self._resolve_history_context(query, last_artifact)
+                history_context, game_id = self._resolve_history_context(
+                    query, last_artifact, active_game_id, about_current_match
+                )
             except ValueError:
-                # _GameNotFound path — fallback to Tavily match report search
+                # _GameNotFound path — fallback to Tavily match report search (no active video to ground on)
                 logger.info("⚡ game_history_retrieval DB miss — falling back to Tavily news search")
                 tavily_answer, news = await _get_tavily().search_news(
                     f"{query} match report events goals cards substitutions",
@@ -522,16 +599,22 @@ class GameHistoryRetrievalTool(BaseTool):
                     "query": query,
                     "context": news_text,
                     "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+                    "video_position": "None",
                 })
                 return response.answer, news_text
+
+            # Ground the answer on the live playback position only when answering about the active video.
+            on_active = game_id is not None and game_id == active_game_id
+            video_position = self._format_position(active_vct) if (on_active and active_vct is not None) else "None"
 
             llm_structured = self._llm.with_structured_output(ToolOutput)
             response: ToolOutput = (get_game_history_retrieval_prompt_template() | llm_structured).invoke({
                 "query": query,
                 "context": history_context,
-                "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+                "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "video_position": video_position,
             })  # type: ignore
-            logger.info(f"✅ game_history_retrieval: game_id={game_id} | answer={response.answer[:200]}")
+            logger.info(f"✅ game_history_retrieval: game_id={game_id} | on_active={on_active} | answer={response.answer[:200]}")
             return response.answer, history_context
 
         except Exception as e:

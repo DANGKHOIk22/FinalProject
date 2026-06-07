@@ -26,6 +26,10 @@ def get_game_history_retrieval_prompt_template() -> ChatPromptTemplate:
     {context}
 
     Time Context: {time_context}
+    Current Playback Position: {video_position}
+
+    If a Current Playback Position is given (not "None"), the user is watching this match live —
+    focus your answer on events at or just before that moment. If "None", answer over the full history.
 
     Please provide the answer based on the match history information. Think carefully about timestamps and event sequences. Make sure your answer is evidence-based and accurate.
     MANDATORY: Your answer MUST be in ENGLISH.
