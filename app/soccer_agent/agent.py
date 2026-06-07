@@ -30,7 +30,6 @@ from app.soccer_agent.toolbox import (
     segment,
     frame_selection,
     commentary_generation,
-    commentary_extraction,
     web_news_search,
     entity_recognition,
 )
@@ -67,7 +66,6 @@ class SoccerAgent:
             "game_info_retrieval": game_info_retrieval(),
             "choice_selection": choice_selection(),
             "segment": segment(),
-            "commentary_extraction": commentary_extraction(),
             "frame_selection": frame_selection(),
             "commentary_generation": commentary_generation(),
             "web_news_search": web_news_search(),
@@ -155,7 +153,7 @@ class SoccerAgent:
                     "long_term_context": "",
                     "parallel_results": [],
                     "time_context": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "video_id": request.video_id,
+                    "game_id": request.game_id,
                 }
                 
                 # Execute LangGraph

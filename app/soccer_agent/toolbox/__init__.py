@@ -4,7 +4,6 @@ from app.soccer_agent.toolbox.entity_recognition import EntityRecognitionTool as
 from app.soccer_agent.toolbox.choice_selection import ChoiceSelection as choice_selection
 from app.soccer_agent.toolbox.segment import SegmentTool as segment
 from app.soccer_agent.toolbox.frame_selection import FrameSelectionTool as frame_selection
-from app.soccer_agent.toolbox.commentary_extraction import CommentaryExtractionTool as commentary_extraction
 from app.soccer_agent.toolbox.commentary_generation import CommentaryGenerationTool as commentary_generation
 from app.soccer_agent.toolbox.web_search import WebNewsSearchTool as web_news_search
 
@@ -17,6 +16,5 @@ __all__ = [
     "segment",
     "frame_selection",
     "commentary_generation",
-    "commentary_extraction",
     "web_news_search",
 ]
