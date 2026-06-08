@@ -35,12 +35,16 @@ class Settings:
 
     # Redis Configuration
     REDIS_URL: Optional[str] = os.getenv('REDIS_URL')
+    UMRS_REDIS_URL: str = os.getenv('UMRS_REDIS_URL', 'redis://localhost:6379/1')
 
     # JWT Configuration
     JWT_SECRET_KEY: Optional[str] = os.getenv('JWT_SECRET_KEY')
     JWT_ALGORITHM: str = os.getenv('JWT_ALGORITHM', 'HS256')
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv('JWT_ACCESS_TOKEN_EXPIRE_MINUTES', 10080)) # 60 * 24 * 7 =7 days
 
+    # Azure Configuration
+    AZURE_STORAGE_ACCOUNT_URL: str = os.getenv('AZURE_STORAGE_ACCOUNT_URL', 'https://socceragentws6807459471.blob.core.windows.net')
+    AZURE_CONTAINER_NAME: str = os.getenv('AZURE_CONTAINER_NAME', 'chat-uploads')
 
     # Tavily Configuration — comma-separated keys for round-robin + failover.
     # Single TAVILY_API_KEY is also accepted for backwards compatibility.
@@ -72,7 +76,9 @@ class Settings:
             raise ValueError("QDRANT_API_KEY is required but not set")
         if not cls.QDRANT_COLLECTION_NAME:
             raise ValueError("QDRANT_COLLECTION_NAME is required but not set")
-        
+        # Validate Postgres settings
+        if not cls.POSTGRES_DATABASE_URL:
+            raise ValueError("POSTGRES_DATABASE_URL is required but not set. The connection string should be start with postgresql")
         # Validate endpoint settings
         if not cls.INSIGHTFACE_ENDPOINT_URI:
             raise ValueError("INSIGHTFACE_ENDPOINT_URI is required but not set")
@@ -83,7 +89,9 @@ class Settings:
         #Validate Redis settings
         if not cls.REDIS_URL:
             raise ValueError("REDIS_URL is required but not set")
-            
+        if not cls.UMRS_REDIS_URL:
+            raise ValueError("UMRS_REDIS_URL is required but not set. This is used for the MediaRegistryService to store media id.")
+        
         # Validate JWT settings
         if not cls.JWT_SECRET_KEY:
             raise ValueError("The JWT_SECRET_KEY is not added to the .env file, you should add it with a 64-character hex string to .env. For example: 4a2c9f8b1d7e6c3a5b0f8e9d2c1b3a4f6e7d8c9b0a1f2e3d4c5b6a7f8e9d0c1b")

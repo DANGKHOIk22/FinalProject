@@ -11,6 +11,7 @@ from langfuse import get_client
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.state import CompiledStateGraph, RunnableConfig
 from langchain_core.tools import BaseTool
+from langchain_core.messages import HumanMessage
 
 # Internal Imports
 from app.config.settings import settings
@@ -22,6 +23,7 @@ from app.soccer_agent.case_bank.retriever import CaseBankRetriever
 # Tools
 from app.soccer_agent.toolbox import (
     entity_augment,
+    entity_recognition,
     game_history_retrieval,
     game_info_retrieval,
     choice_selection,
@@ -66,6 +68,7 @@ class SoccerAgent:
             "frame_selection": frame_selection(),
             "commentary_generation": commentary_generation(),
             "web_news_search": web_news_search(),
+            "entity_recognition": entity_recognition(),
         }
         self.tools = list(self.tool_registry.values())
         self.execution_llm_with_tools = self.execution_llm.bind_tools(self.tools) 
@@ -133,6 +136,7 @@ class SoccerAgent:
             try:
                 logger.info(f"🚀 Processing Query: {request.user_query[:100]}...")
                 initial_state = {
+                    "messages": [HumanMessage(content=request.user_query)],
                     "user_query": request.user_query,
                     "clarified_query": "",
                     "additional_material": request.additional_material or [],

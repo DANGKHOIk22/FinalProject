@@ -4,6 +4,8 @@ import json
 from datetime import datetime
 import uuid
 from langgraph.graph.state import RunnableConfig
+from langchain.messages import HumanMessage
+from app.config.settings import settings
 from app.schema.soccer_agent.state import AgentState
 from app.soccer_agent.memory.long_term_memory import long_term_memory_manager
 from app.soccer_agent.case_bank.retriever import CaseBankRetriever
@@ -22,13 +24,12 @@ class ContextRetrievalNode:
 
     async def retrieve_context_node(self, state: AgentState, config: RunnableConfig) -> dict:
         # 1. Identify User Query
-        user_query = state.get("user_query")
-        if not user_query:
-            messages = state.get("messages", [])
-            for msg in reversed(messages):
-                if msg.__class__.__name__ == "HumanMessage":
-                    user_query = msg.content
-                    break
+        messages = state.get("messages", [])
+        user_query = str(messages[-1].text) if isinstance(messages[-1], HumanMessage) else None
+        metadata = config.get("metadata", {})
+        thread_id = metadata.get("thread_id", str(uuid.uuid4()))
+        user_id = str(config.get("configurable", {}).get("user_id"))
+        has_media = bool(state.get("additional_material"))
         
         if not user_query:
             return {"long_term_context": "", "retrieved_cases": ""}
@@ -40,17 +41,16 @@ class ContextRetrievalNode:
                 logger.info(f"🎯 [ContextRetrieval] Semantic Cache HIT for: '{user_query[:50]}'")
                 return json.loads(cached_res)
         except Exception as e:
-            logger.warning(f"Semantic cache error: {e}")
-
-        metadata = config.get("metadata", {})
-        thread_id = metadata.get("thread_id", str(uuid.uuid4()))
-        user_id = config.get("configurable", {}).get("user_id")
-        has_media = bool(state.get("additional_material"))
-
+            logger.warning(f"Semantic cache error: {e}") # if there is an error in tooo
+        
         logger.info(f"🔍 [ContextRetrieval] Cache MISS. Searching DBs for: '{user_query[:50]}...'")
 
         # 2. Get Embedding ONCE
-        query_embedding = await long_term_memory_manager._get_embedding(user_query)
+        try:
+            query_embedding = await long_term_memory_manager._get_embedding(user_query)
+        except Exception as e:
+            logger.error(f"Failed to get query embedding: {e}", exc_info=True)
+            query_embedding = None
 
         # 3. Parallel Retrieval
         async def fetch_cases():
@@ -63,7 +63,7 @@ class ContextRetrievalNode:
 
         async def fetch_long_term():
             try:
-                if not user_id: return ""
+                if not user_id or not query_embedding: return ""
                 results = await long_term_memory_manager.retrieve_memory(
                     user_id=user_id,
                     query=user_query,

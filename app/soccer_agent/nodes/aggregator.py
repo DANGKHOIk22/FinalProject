@@ -15,7 +15,7 @@ class AggregatorNode:
         from langchain_core.messages import AIMessage
 
         messages = state.get("messages", [])
-        user_query = messages[-1].content if messages else ""
+        user_query = messages[-1].text if messages else ""
         additional_material_list = state.get("additional_material", [])
         additional_material = ", ".join(additional_material_list) if additional_material_list else "None"
         conversation_history = state.get("conversation_history", "No previous conversation.")

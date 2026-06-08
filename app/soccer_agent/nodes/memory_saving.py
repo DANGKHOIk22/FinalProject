@@ -186,7 +186,7 @@ class SaveToMemoryNode:
 
         metadata = config.get("metadata", {})
         thread_id = metadata.get("thread_id", str(uuid.uuid4()))
-        user_id = config.get("configurable", {}).get("user_id")  # user_id for cross-session long-term memory
+        user_id = str(config.get("configurable", {}).get("user_id"))  # user_id for cross-session long-term memory
 
         # --- 1. Save Clean Conversation History ---
         last_user_message = None
@@ -205,8 +205,8 @@ class SaveToMemoryNode:
             asyncio.create_task(
                 self._background_save_memory(
                     session_id=thread_id,
-                    user_query=last_user_message.content,
-                    final_response=last_ai_message.content
+                    user_query=last_user_message.text,
+                    final_response=last_ai_message.text
                 )
             )
 

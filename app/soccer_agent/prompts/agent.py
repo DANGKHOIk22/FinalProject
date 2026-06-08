@@ -1,5 +1,5 @@
 from langchain_core.messages import SystemMessage
-from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder
 
 
 def get_unified_planning_prompt_template() -> ChatPromptTemplate:
@@ -155,25 +155,39 @@ DB covers: EPL, Bundesliga, Champions League, Serie A, Ligue 1, La Liga — seas
       {"chain": ["entity_augment"], "sub_query": "Tell me about Cristiano Ronaldo (player).", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null}
     ]
   }
+
+**Example 7: Multiple visual entities query -> parallel segment chains**
+- Additional Material (images/video): "image_uuid_123"
+- Query: "Ai là người mặc áo đỏ và ai là người mặc áo xanh lá trong hình?"
+- Output: {
+    "clarified_query": "Identify the person wearing a red shirt (player) and the person wearing a green shirt (player) in the image.",
+    "need_call_tools": true,
+    "planned_chains": [
+      {"chain": ["segment", "entity_recognition"], "sub_query": "Identify the person wearing a red shirt in the image image_uuid_123.", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null},
+      {"chain": ["segment", "entity_recognition"], "sub_query": "Identify the person wearing a green shirt in the image image_uuid_123.", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null}
+    ]
+  }
 """),
     HumanMessagePromptTemplate.from_template("""
 ## INPUT DATA:
-- **User Query**: "{user_query}"
+- **User Query**: (The user query and any attached media are provided in the next message. additional_material contains the ids of any attached images or videos.)
+- **Additional Material (images/video)**: {additional_material}
 - **Conversation History**: {conversation_history}
 - **Long-term Memory (saved entity knowledge)**: {long_term_context}
-- **Additional Material (images/video)**: {additional_material}
+
 - **Available Tools**:
 {toolbox_descriptions}
-
+- **Time Context**: {time_context}
+- **Retrieved Cases**: {retrieved_cases}
+                                             
+## OUTPUT FORMAT:
+{format_instructions}
 ---
 ## YOUR TASK:
 Based on the user query and the rules above, produce the analysis and planning result as JSON.
 **NOTE: `clarified_query` and `sub_queries` MUST BE IN ENGLISH.**
-Time Context: {time_context}
-Retrieved Cases: {retrieved_cases}
-
-{format_instructions}
-""")
+"""),
+        MessagesPlaceholder(variable_name="user_query_msg", optional=True)
     ])
 
 

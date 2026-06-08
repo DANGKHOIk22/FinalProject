@@ -26,16 +26,16 @@ Generate:
 ### IMPORTANT
 - If the video clips are not soccer-related or you are not confident they depict a soccer match, set annotations to an empty list.
 - The annotations must be grounded in the video content.
-
+{query_context}
 ### OUTPUT FORMAT
 {output_format}
 """
                     },
                     {
-                        "type": "media",
-                        "source_type": "base64",
-                        "mime_type": "{mime_type}",
-                        "data": "{video_base64}",
+                        "type": "video_url",
+                        "video_url": {
+                            "url": "{video_url}"
+                        }
                     }
                 ]
                 

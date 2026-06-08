@@ -5,6 +5,7 @@ from datetime import datetime
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.callbacks.manager import adispatch_custom_event
 from langgraph.graph.state import RunnableConfig
+from langchain_core.messages import SystemMessage, HumanMessage
 
 from app.config.config import PLANNING_CONFIDENCE_THRESHOLD
 from app.schema.soccer_agent.state import AgentState, UnifiedPlanningOutput
@@ -25,8 +26,18 @@ class UnifiedPlanningNode:
         dispatchable (non-ambiguous) vs pending_clarifications (ambiguous).
         """
         messages = state.get("messages", [])
-        user_query = state.get("user_query") or (messages[-1].content if messages else "")
-        additional_material = state.get("additional_material", [])
+        user_query = str(messages[-1].text) if messages else ""
+        additional_material = state.get("additional_material") or []
+
+        # Extract additional material UUIDs from messages if media registry is available
+        media_registry = config.get("configurable", {}).get("media_registry")
+        if media_registry and messages:
+            extracted_uuids = media_registry.extract_uuids_from_message(messages[-1])
+            for uuid_val in extracted_uuids:
+                if uuid_val not in additional_material:
+                    additional_material.append(uuid_val)
+                    logger.info(f"Extracted SAS URL UUID from message: {uuid_val}")
+
         conversation_history = state.get("conversation_history") or "No previous conversation."
         retrieved_cases = state.get("retrieved_cases") or "No examples available."
 
@@ -47,9 +58,10 @@ class UnifiedPlanningNode:
                 "This is expected if running outside a LangChain/LangGraph run context (e.g., in unit tests)."
             )
 
+        # Construct the prompt using the template
         prompt_template = get_unified_planning_prompt_template()
-        prompt = prompt_template.invoke({
-            "user_query": user_query,
+        prompt_value = prompt_template.invoke({
+            "user_query_msg": [messages[-1]] if messages else [],
             "additional_material": ", ".join(additional_material) if additional_material else "None",
             "conversation_history": conversation_history,
             "toolbox_descriptions": toolbox_descriptions,
@@ -58,8 +70,9 @@ class UnifiedPlanningNode:
             "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "format_instructions": self.parser.get_format_instructions()
         })
+        prompt_messages = prompt_value.to_messages()
 
-        response = await self.planning_llm.ainvoke(prompt, config=config)
+        response = await self.planning_llm.ainvoke(prompt_messages, config=config)
         response_text = response.text if hasattr(response, 'text') else str(response.content)
 
         try:
@@ -107,4 +120,5 @@ class UnifiedPlanningNode:
             "sub_queries": sub_queries,
             "need_call_tools": need_call_tools,
             "pending_clarifications": pending_clarifications,
+            "additional_material": additional_material,
         }
