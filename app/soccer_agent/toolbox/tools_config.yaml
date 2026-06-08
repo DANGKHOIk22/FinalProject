@@ -97,19 +97,21 @@ tools:
 
   commentary_generation:
     description: >
-      Generate natural-language commentary or description for a visual soccer scene (image or video frame).
-      Use when the user asks what is happening in an image, or requests commentary on a play.
-      Requires visual media input.
+      Given a soccer match video clip, this tool generates an approximately 500-word
+      match commentary and extract key events as structured annotations.
+      After using this tool, you can use the 'game_history_retrieval' tool for answering questions about the match history.
     inputs:
-      image_path: >
-        Path or URL to the image or frame to describe.
+      video_id: >
+        UUID of the video media to generate commentary for.
+      query: >
+        Optional user query/context to guide commentary (usually None).
 
   entity_recognition:
     description: >
-      Identify a specific soccer player from a cropped image region using face/body recognition (DeepFace).
+      Identify a specific soccer player name from a cropped image region using face/body recognition (DeepFace).
       Must receive a cropped image — typically the output of the segment tool.
       Use only after segment has isolated the relevant region.
       Requires visual media input.
     inputs:
-      image_path: >
-        Path or URL to the cropped image region containing the player to identify.
+      image_id: >
+        UUID of the cropped image region containing the player to identify.

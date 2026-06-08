@@ -52,8 +52,9 @@ class CommentaryGenerationTool(BaseTool):
     name: str = "commentary_generation"
     description: str = (
         "Given a soccer match video clip, this tool generates an approximately 500-word "
-        "match commentary and extract key events as structured annotations. "
-        "After using this tool, you can use the 'game_history_retrieval' tool for answering questions about the match history."
+        "match commentary and extracts key events as structured annotations. "
+        "It is only used at the beginning of the chain to process the initial user-provided video clip. "
+        "After using this tool, you must use the 'game_history_retrieval' tool to answer questions about the match history."
     )
 
     args_schema: Type[BaseModel] = CommentaryGenerationInput  # type: ignore
