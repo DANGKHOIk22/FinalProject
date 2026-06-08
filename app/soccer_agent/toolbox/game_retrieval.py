@@ -75,12 +75,14 @@ logger = logging.getLogger(__name__)
 class GameQueryInput(BaseModel):
     query: str = Field(description="Câu hỏi hoặc truy vấn của người dùng về trận đấu.")
     time_context: Optional[str] = Field(default=None, description="Bối cảnh thời gian hiện tại.")
-    about_current_match: bool = Field(
+    about_current_game: bool = Field(
         default=False,
         description=(
-            "Set True when this sub-query is about the match the user is currently watching "
-            "(e.g. 'what just happened', 'who has the ball', 'the current score', 'this match'/'this game'). "
-            "Set False when the query identifies a specific match by team, league, or date."
+            "Set True only when this sub-query is about the SAME fixture the user is currently watching — "
+            "either deictic ('what just happened', 'who has the ball', 'the current score', 'this match'/'this game') "
+            "or naming the same teams AND matching the watched game's season/date. "
+            "Set False when the query names a different fixture, including the same teams in another season or on another date; "
+            "when unsure, set False so the tool resolves by search."
         ),
     )
     execution_agent_state: Annotated[dict, InjectedState] = Field(
@@ -91,12 +93,14 @@ class GameQueryInput(BaseModel):
 class GameHistoryInput(BaseModel):
     query: str = Field(description="Câu hỏi hoặc truy vấn của người dùng về trận đấu.")
     time_context: Optional[str] = Field(default=None, description="Bối cảnh thời gian hiện tại.")
-    about_current_match: bool = Field(
+    about_current_game: bool = Field(
         default=False,
         description=(
-            "Set True when this sub-query is about the match the user is currently watching "
-            "(e.g. 'what just happened', 'who scored', 'this match'/'this game'). "
-            "Set False when the query identifies a specific match by team, league, or date."
+            "Set True only when this sub-query is about the SAME fixture the user is currently watching — "
+            "either deictic ('what just happened', 'who scored', 'this match'/'this game') "
+            "or naming the same teams AND matching the watched game's season/date. "
+            "Set False when the query names a different fixture, including the same teams in another season or on another date; "
+            "when unsure, set False so the tool resolves by search."
         ),
     )
     execution_agent_state: Annotated[dict, InjectedState] = Field(
@@ -311,7 +315,7 @@ class GameInfoRetrievalTool(BaseTool):
         self,
         query: str,
         execution_agent_state: Annotated[dict, InjectedState],
-        about_current_match: bool = False,
+        about_current_game: bool = False,
         time_context: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, Optional[str]]:
@@ -320,7 +324,7 @@ class GameInfoRetrievalTool(BaseTool):
             game_id = execution_agent_state.get("game_id")
 
             # Fast path: sub-query is about the currently-playing video — skip search entirely.
-            if about_current_match and game_id:
+            if about_current_game and game_id:
                 logger.info(f"⚡ game_info_retrieval fast path — active video game_id={game_id}")
                 return self._answer_from_context(query, self._fetch_metadata(game_id), time_context), game_id
 
@@ -356,7 +360,7 @@ class GameInfoRetrievalTool(BaseTool):
         self,
         query: str,
         execution_agent_state: Annotated[dict, InjectedState],
-        about_current_match: bool = False,
+        about_current_game: bool = False,
         time_context: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, Optional[str]]:
@@ -366,7 +370,7 @@ class GameInfoRetrievalTool(BaseTool):
             game_id = execution_agent_state.get("game_id")
 
             # Fast path: sub-query is about the currently-playing video — skip search entirely.
-            if about_current_match and game_id:
+            if about_current_game and game_id:
                 logger.info(f"⚡ game_info_retrieval (async) fast path — active video game_id={game_id}")
                 return self._answer_from_context(query, self._fetch_metadata(game_id), time_context), game_id
 
@@ -476,7 +480,7 @@ class GameHistoryRetrievalTool(BaseTool):
         query: str,
         last_artifact: Union[List[Annotation], str, None],
         active_game_id: Optional[str] = None,
-        about_current_match: bool = False,
+        about_current_game: bool = False,
     ) -> Tuple[str, Optional[str]]:
         """
         Return (history_json, game_id).
@@ -484,7 +488,7 @@ class GameHistoryRetrievalTool(BaseTool):
 
         Resolution precedence:
           1. last_tool_artifact from a previous tool in the chain
-          2. the currently-playing video (when about_current_match is set)
+          2. the currently-playing video (when about_current_game is set)
           3. search from the query (with the active video as a safety net on miss)
         """
         if isinstance(last_artifact, list):
@@ -500,7 +504,7 @@ class GameHistoryRetrievalTool(BaseTool):
             logger.warning(f"last_tool_artifact '{last_artifact[:80]}' does not look like a game_id, searching instead.")
 
         # Fast path: sub-query is about the currently-playing video — skip search entirely.
-        if about_current_match and active_game_id:
+        if about_current_game and active_game_id:
             logger.info(f"⚡ game_history_retrieval fast path — active video game_id={active_game_id}")
             return self._history_from_game_id(active_game_id), active_game_id
 
@@ -520,7 +524,7 @@ class GameHistoryRetrievalTool(BaseTool):
         self,
         query: str,
         execution_agent_state: Annotated[dict, InjectedState],
-        about_current_match: bool = False,
+        about_current_game: bool = False,
         time_context: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, Optional[str]]:
@@ -537,7 +541,7 @@ class GameHistoryRetrievalTool(BaseTool):
             logger.info(f"📖 GameHistoryRetrieval artifact: {artifact_preview}")
 
             history_context, game_id = self._resolve_history_context(
-                query, last_artifact, active_game_id, about_current_match
+                query, last_artifact, active_game_id, about_current_game
             )
 
             # Ground the answer on the live playback position only when answering about the active video.
@@ -565,7 +569,7 @@ class GameHistoryRetrievalTool(BaseTool):
         self,
         query: str,
         execution_agent_state: Annotated[dict, InjectedState],
-        about_current_match: bool = False,
+        about_current_game: bool = False,
         time_context: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, Optional[str]]:
@@ -584,7 +588,7 @@ class GameHistoryRetrievalTool(BaseTool):
 
             try:
                 history_context, game_id = self._resolve_history_context(
-                    query, last_artifact, active_game_id, about_current_match
+                    query, last_artifact, active_game_id, about_current_game
                 )
             except ValueError:
                 # _GameNotFound path — fallback to Tavily match report search (no active video to ground on)

@@ -227,8 +227,9 @@ def get_execution_human_prompt() -> HumanMessagePromptTemplate:
 3. Suggested tool chain for your sub-query: '{tool_chain}'
 4. Time context: {time_context}
 5. Current video context: game_id={game_id}.
-   - If game_id is not "None", a video is currently playing. When this sub-query is about that ongoing match (e.g. "what just happened", "who has the ball", "the current score", "this match"), set `about_current_match=true` on `game_info_retrieval` / `game_history_retrieval` to target the active video directly.
-   - When the query identifies a different match by team, league, or date, set `about_current_match=false`.
+   - When game_id is not "None", a video is currently playing. The slug encodes the match as `{{league}}/{{season}}/{{date}}/{{home}}-vs-{{away}}`.
+   - Set `about_current_game=true` on `game_info_retrieval` / `game_history_retrieval` when this sub-query is about that SAME fixture — either phrased deictically ("what just happened", "who has the ball", "the current score", "this match") OR naming the same teams AND matching the season/date in the slug.
+   - Set `about_current_game=false` when the query names a DIFFERENT fixture — including the same teams in a different season or on a different date. When unsure, set false so the tool resolves by search rather than misgrounding on the active video.
 
 # Next Step
 Based on the above determine the next step in your execution:
