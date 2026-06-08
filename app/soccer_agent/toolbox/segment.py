@@ -49,7 +49,7 @@ class SegmentInput(BaseModel):
 # --- Segment Tool ---
 class SegmentTool(BaseTool):
     name: str = "segment"
-    description: str = "Segments an image into cropped regions, each containing a detected human face. Use this when the agent needs to distinguish multiple people in a single image by visual attributes (e.g., clothing, color, face), which helps overcome the entity recognition tool's limitation of detecting all faces without differentiation. After segmentation, each cropped image can be passed to the entity recognition tool for per-face identification or attribute-based comparison. Returns the UUIDs of the cropped images."
+    description: str = "Segments an image into cropped regions, each containing a detected human face. Use this when the agent needs to distinguish multiple people in a single image by visual attributes (e.g., clothing, color, face), which helps overcome the entity recognition tool's limitation of detecting all faces without differentiation. After segmentation, each cropped image can be passed to the entity recognition tool for per-face identification or attribute-based comparison. Returns the UUIDs of the cropped images. The next tool call must be entity_recognition with the returned image UUID to identify the segmented entities."
     args_schema: Type[BaseModel] = SegmentInput # type: ignore
     response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
     

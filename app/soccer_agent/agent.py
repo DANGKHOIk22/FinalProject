@@ -23,6 +23,7 @@ from app.soccer_agent.case_bank.retriever import CaseBankRetriever
 # Tools
 from app.soccer_agent.toolbox import (
     entity_augment,
+    entity_recognition,
     game_history_retrieval,
     game_info_retrieval,
     choice_selection,
@@ -67,6 +68,7 @@ class SoccerAgent:
             "frame_selection": frame_selection(),
             "commentary_generation": commentary_generation(),
             "web_news_search": web_news_search(),
+            "entity_recognition": entity_recognition(),
         }
         self.tools = list(self.tool_registry.values())
         self.execution_llm_with_tools = self.execution_llm.bind_tools(self.tools) 

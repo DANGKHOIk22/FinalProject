@@ -89,6 +89,7 @@ tools:
       Produces a bounding-box crop of the single matched object for downstream visual tools.
       Requires visual media input (image UUID).
       IMPORTANT: This tool only segments ONE object at a time. For multiple objects, plan parallel chains.
+      The next tool call must be entity_recognition with the returned image UUID to identify the segmented entities.
     inputs:
       image_id: >
         UUID of the input image to segment.
