@@ -26,20 +26,22 @@ logger = logging.getLogger(__name__)
 class SegmentInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
-    query_entity_recognition_task: List[str] = Field(
+    query_entity_recognition_task: str = Field(
         ...,
         description=(
-            "Instruction: Analyze the user input and extract ONLY the text describing the visually identifiable object(s) that need to be located. Adhere to these strict rules:"
-            "1. MANDATORY OBJECT CLASS: You MUST include the noun identifying the object type (e.g., 'person', 'ball', 'man', 'woman'). Never output an adjective without its noun (e.g., return 'a person in pink', NOT just 'pink'). Use 'person', 'man', 'woman' for humans, NOT 'player', 'athlete', or specific roles."
-            "2. VISUAL ATTRIBUTES ONLY: Include color, clothing, and position (e.g., 'wearing a white shirt', 'on the left')."
-            "3. REMOVE NAMED ENTITIES: Remove all proper names (e.g., 'Messi', 'Chelsea'). The segmentation tool does not recognize names, only descriptions."
-            "4. REMOVE ABSTRACT CONTEXT: Remove all text related to actions, statistics, or comparisons (e.g., 'goals scored', 'compare', 'history')."
-            "5. MULTIPLE OBJECTS: If multiple objects are described, separate them into distinct descriptions even if they are in a single sentence. Return each description as a separate item in the list."
-            "6. LANGUAGE: Respond ONLY in English, regardless of the input language."),
-        examples=[["the person wearing a white shirt on the left"], 
-                  ["the person wearing number 10"],
-                  ["the person in black uniform", "the person wearing green shirt"]
-                 ]
+            "Instruction: Analyze the user input and extract ONLY the text describing the visually identifiable object that needs to be located. Adhere to these strict rules:\n"
+            "1. MANDATORY OBJECT CLASS: You MUST include the noun identifying the object type (e.g., 'person', 'ball', 'man', 'woman'). Never output an adjective without its noun (e.g., return 'a person in pink', NOT just 'pink'). Use 'person', 'man', 'woman' for humans, NOT 'player', 'athlete', or specific roles.\n"
+            "2. VISUAL ATTRIBUTES ONLY: Include color, clothing, and position (e.g., 'wearing a white shirt', 'on the left').\n"
+            "3. REMOVE NAMED ENTITIES: Remove all proper names (e.g., 'Messi', 'Chelsea'). The segmentation tool does not recognize names, only descriptions.\n"
+            "4. REMOVE ABSTRACT CONTEXT: Remove all text related to actions, statistics, or comparisons (e.g., 'goals scored', 'compare', 'history').\n"
+            "5. SINGLE OBJECT: The segmentation tool only segments one object/entity at a time. If there are multiple objects, use parallel chains where each chain focuses on a single description.\n"
+            "6. LANGUAGE: Respond ONLY in English, regardless of the input language."
+        ),
+        examples=[
+            "the person wearing a white shirt on the left", 
+            "the person wearing number 10",
+            "the person in black uniform"
+        ]
     )
     image_id: str = Field(..., description="UUID of the image to segment")
     runtime: Annotated[Optional[ToolRuntime], InjectedToolArg] = Field(default=None)
@@ -77,7 +79,7 @@ class SegmentTool(BaseTool):
         
         logger.info("✅ Qwen-VL (DashScope International) client initialized via OpenAI SDK")
           
-    def _detect_and_segment(self, image_id: str, entities_description: List[str], media_registry: Any, user_id: str, thread_id: str) -> List[Dict]:
+    def _detect_and_segment(self, image_id: str, entities_description: str, media_registry: Any, user_id: str, thread_id: str) -> List[Dict]:
         """
         Get segmented entities from the query using Qwen-VL.
 
@@ -114,10 +116,9 @@ class SegmentTool(BaseTool):
                 """
             )
             
-            queries = ".".join(entities_description)
             user_prompt = (
                 f"Detect ONLY ONE bounding box for the single most prominent person that best matches the description. "
-                f"Do NOT return multiple boxes. Description: {queries}"
+                f"Do NOT return multiple boxes. Description: {entities_description}"
             )
             
             # Call Qwen-VL via OpenAI client
@@ -310,7 +311,7 @@ class SegmentTool(BaseTool):
 
     def _run(
         self,
-        query_entity_recognition_task: List[str],
+        query_entity_recognition_task: str,
         image_id: str,
         run_manager: Optional[CallbackManagerForToolRun] = None,
         runtime: Optional[ToolRuntime] = None,
@@ -343,6 +344,11 @@ class SegmentTool(BaseTool):
                 user_id=user_id,
                 thread_id=thread_id
             )
+            
+            # Enforce returning only the single most prominent detected object
+            if len(segmented_entities) > 1:
+                logger.info(f"More than one object detected ({len(segmented_entities)}) - keeping only the first one.")
+                segmented_entities = segmented_entities[:1]
             
             # 3. Post-process and Save Segmented Objects
             segmented_uuids = self._post_proccessing_segmented_entities(

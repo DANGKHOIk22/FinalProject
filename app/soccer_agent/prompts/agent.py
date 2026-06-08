@@ -155,6 +155,18 @@ DB covers: EPL, Bundesliga, Champions League, Serie A, Ligue 1, La Liga — seas
       {"chain": ["entity_augment"], "sub_query": "Tell me about Cristiano Ronaldo (player).", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null}
     ]
   }
+
+**Example 7: Multiple visual entities query -> parallel segment chains**
+- Additional Material (images/video): "image_uuid_123"
+- Query: "Ai là người mặc áo đỏ và ai là người mặc áo xanh lá trong hình?"
+- Output: {
+    "clarified_query": "Identify the person wearing a red shirt (player) and the person wearing a green shirt (player) in the image.",
+    "need_call_tools": true,
+    "planned_chains": [
+      {"chain": ["segment", "entity_recognition"], "sub_query": "Identify the person wearing a red shirt in the image image_uuid_123.", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null},
+      {"chain": ["segment", "entity_recognition"], "sub_query": "Identify the person wearing a green shirt in the image image_uuid_123.", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null}
+    ]
+  }
 """),
     HumanMessagePromptTemplate.from_template("""
 ## INPUT DATA:

@@ -85,15 +85,15 @@ tools:
 
   segment:
     description: >
-      Segment an image to detect and locate objects or regions using GroundingDINO.
-      Produces bounding-box crops for downstream visual tools.
-      Requires visual media input (image URL or path).
+      Segments an image to locate a single visually described object or region (e.g., using kit color, position, jersey number).
+      Produces a bounding-box crop of the single matched object for downstream visual tools.
+      Requires visual media input (image UUID).
+      IMPORTANT: This tool only segments ONE object at a time. For multiple objects, plan parallel chains.
     inputs:
-      image_path: >
-        Path or URL to the input image to segment.
-      text_prompt: >
-        Text description of the objects to detect and segment (e.g. "soccer player", "ball").
-        The prompt MUST be in English regardless of the user's input language.
+      image_id: >
+        UUID of the input image to segment.
+      query_entity_recognition_task: >
+        Text description of the single object to detect and segment. Must be in English.
 
   commentary_generation:
     description: >
