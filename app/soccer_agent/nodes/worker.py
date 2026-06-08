@@ -12,7 +12,7 @@ from langgraph.prebuilt import ToolNode
 
 from app.schema.soccer_agent.state import AgentState, WorkerState
 from app.soccer_agent.prompts.agent import get_execution_human_prompt, get_execution_system_prompt
-from app.cache.semantic_cache import semantic_cache
+from app.cache.semantic_cache import sub_query_cache
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +214,7 @@ class WorkerNodes:
 
             # Only cache successful tool-chain results — never cache failures.
             if sub_query and worker_result and not execution_failed:
-                semantic_cache.set(
+                sub_query_cache.set(
                     sub_query,
                     worker_result,
                     additional_material_list,
@@ -245,7 +245,7 @@ class WorkerNodes:
             return {}
             
         additional_material = state.get("additional_material", [])
-        cached_result = semantic_cache.check(
+        cached_result = sub_query_cache.check(
             sub_query,
             additional_material,
             game_id=state.get("game_id"),

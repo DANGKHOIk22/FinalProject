@@ -11,8 +11,8 @@ _NO_VIDEO = "__none__"
 _VIDEO_TIME_WINDOW = 5.0  # seconds — cache hit valid only within this window before current_time
 
 
-class SubQuerySemanticCache:
-    def __init__(self, threshold: float = 0.05, ttl: int = 60 * 60):
+class SemanticCache:
+    def __init__(self, index_name: str, threshold: float = 0.05, ttl: int = 60 * 60):
         self.threshold = threshold
         try:
             self.embeddings = GoogleGenerativeAIEmbeddings(
@@ -22,7 +22,7 @@ class SubQuerySemanticCache:
                 task_type="RETRIEVAL_QUERY"
             )
             config = RedisConfig(
-                index_name="semantic_cache",
+                index_name=index_name,
                 redis_url=settings.REDIS_URL,
                 distance_metric="COSINE",
                 embedding_dimensions=768,
@@ -80,6 +80,7 @@ class SubQuerySemanticCache:
                 filter=filter_condition,
                 distance_threshold=self.threshold
             )
+            print(docs)
             if docs:
                 logger.info(f"🎯 Semantic cache HIT for query: '{query}'")
                 return docs[0][0].metadata.get("response")
@@ -168,7 +169,7 @@ class SubQuerySemanticCache:
             logger.error(f"Semantic cache update error: {e}")
 
 
-# Global instance — threshold=0.15 cosine distance, ttl=1h
-# NOTE: schema changed (match_id → game_id). Flush the existing Redis index
-# before restarting: redis-cli DEL semantic_cache (or FLUSHDB on dev).
-semantic_cache = SubQuerySemanticCache(threshold=0.15, ttl=3600)
+# Two isolated indexes — no cross-reads between worker results and context-retrieval payloads.
+# After deploying, flush the old shared index: redis-cli DEL semantic_cache
+sub_query_cache = SemanticCache(index_name="sub_query_cache", threshold=0.15, ttl=3600)
+context_cache   = SemanticCache(index_name="context_cache",   threshold=0.15, ttl=3600)

@@ -10,7 +10,7 @@ from app.schema.soccer_agent.state import AgentState
 from app.soccer_agent.memory.long_term_memory import long_term_memory_manager
 from app.soccer_agent.case_bank.retriever import CaseBankRetriever
 from app.soccer_agent.case_bank.cache import case_bank_cache
-from app.cache.semantic_cache import semantic_cache
+from app.cache.semantic_cache import context_cache
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class ContextRetrievalNode:
 
         # --- SEMANTIC CACHE CHECK (Internal) ---
         try:
-            cached_res = semantic_cache.check(user_query)
+            cached_res = context_cache.check(user_query)
             if cached_res:
                 logger.info(f"🎯 [ContextRetrieval] Semantic Cache HIT for: '{user_query[:50]}'")
                 return json.loads(cached_res)
@@ -99,7 +99,7 @@ class ContextRetrievalNode:
 
         # --- SEMANTIC CACHE SET (Internal) ---
         try:
-            semantic_cache.set(user_query, json.dumps(result))
+            context_cache.set(user_query, json.dumps(result))
         except Exception as e:
             logger.warning(f"Failed to update semantic cache: {e}")
 
