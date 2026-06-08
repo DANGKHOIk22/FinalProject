@@ -55,7 +55,8 @@ class WorkerNodes:
 
     def trigger_workers(self, state: AgentState, config: RunnableConfig):
         """Map worker executions for each parallel tool chain."""
-        game_id = state.get("game_id")
+        additional_material = state.get("additional_material") or {}
+        game_id = additional_material.get("game_id")
         video_current_time = state.get("video_current_time")
         if game_id is None:
             import json
@@ -86,14 +87,15 @@ class WorkerNodes:
             worker_state = {
                 "messages": [], # Start with empty messages for the worker;
                 "sub_query": sub_query,
-                "additional_material": state.get("additional_material", []),
+                # Carry the resolved game_id inside additional_material so InjectedState
+                # tools (game_retrieval) and the cache can read it from the dict.
+                "additional_material": {**additional_material, "game_id": game_id},
                 "tool_chain": chain,
                 "tool_calls_history": [],
                 "tool_results_history": [],
                 "last_tool_artifact": None,
                 "parallel_results": [],
                 "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "game_id": game_id,
                 "video_current_time": video_current_time,
             }
             logger.info(f"🚀 Triggering worker {idx}: sub_query='{sub_query}', chain={chain}")
@@ -140,13 +142,14 @@ class WorkerNodes:
         Iteratively execute the tool chain step by step using bind_tools with tool_choice.
         """
         sub_query = state.get("sub_query")
-        additional_material_list = state.get("additional_material", [])
+        additional_material = state.get("additional_material") or {}
+        image_id_list = additional_material.get("image_id") or []
         tool_chain = state["tool_chain"]
         tool_calls_history = state.get("tool_calls_history", [])
         tool_results_history = state.get("tool_results_history", [])
         messages = state.get("messages", [])
-        game_id = state.get("game_id")
-
+        game_id = additional_material.get("game_id")
+        print(f"[Execution Node] Starting execution for sub_query='{sub_query}', tool_chain={tool_chain}, game_id={game_id}, image_id_list={image_id_list}")
         logger.info(f"🔧 Running TOOL EXECUTION STEP: Step {len(tool_calls_history)}")
 
         last_artifact = state.get("last_tool_artifact")
@@ -155,25 +158,7 @@ class WorkerNodes:
             last_tool_message = messages[-1]
             last_artifact = last_tool_message.artifact if hasattr(last_tool_message, 'artifact') else None
 
-        # Merge artifact paths (e.g. from frame_selection) into additional_material
-        if last_artifact and isinstance(last_artifact, list):
-            if last_tool_message and last_tool_message.name == "segment":
-                # Remove raw HLS frame paths now that segment has produced cropped images
-                additional_material_list = [p for p in additional_material_list if "hls_sessions" not in p]
-                logger.info("Cleaned HLS frame paths from additional_material after segment.")
-            new_paths = [p for p in last_artifact if isinstance(p, str) and p not in additional_material_list]
-            if new_paths:
-                additional_material_list = additional_material_list + new_paths
-                messages = messages + [HumanMessage(
-                    content=(
-                        f"The previous tool returned {len(new_paths)} path(s) which are now in additional_material: "
-                        + ", ".join(new_paths)
-                        + ". Pass ALL of them to the next tool."
-                    )
-                )]
-                logger.info(f"Merged {len(new_paths)} artifact path(s) into additional_material.")
-
-        additional_material_str = ", ".join(additional_material_list) if additional_material_list else "None"
+        additional_material_str = ", ".join(image_id_list) if image_id_list else "None"
         system_prompt = get_execution_system_prompt()
         if not messages:
             execution_prompt_template = get_execution_human_prompt()
@@ -217,8 +202,7 @@ class WorkerNodes:
                 sub_query_cache.set(
                     sub_query,
                     worker_result,
-                    additional_material_list,
-                    game_id=state.get("game_id"),
+                    additional_material,
                     current_time=state.get("video_current_time"),
                 )
 
@@ -229,8 +213,8 @@ class WorkerNodes:
                     tool_results_history.append(message)
 
         return {
-            "messages": messages + [response] if not state.get("messages") else [response], 
-            "additional_material": additional_material_list,
+            "messages": messages + [response] if not state.get("messages") else [response],
+            "additional_material": additional_material,
             "tool_calls_history": tool_calls_history,
             "tool_results_history": tool_results_history,
             "tool_chain": tool_chain,
@@ -244,11 +228,10 @@ class WorkerNodes:
         if not sub_query:
             return {}
             
-        additional_material = state.get("additional_material", [])
+        additional_material = state.get("additional_material") or {}
         cached_result = sub_query_cache.check(
             sub_query,
             additional_material,
-            game_id=state.get("game_id"),
             current_time=state.get("video_current_time"),
         )
         

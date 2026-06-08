@@ -16,7 +16,7 @@ def context_node(mock_retriever):
 
 
 @pytest.mark.asyncio
-@patch('app.soccer_agent.nodes.context_retrieval.semantic_cache')
+@patch('app.soccer_agent.nodes.context_retrieval.context_cache')
 @patch('app.soccer_agent.nodes.context_retrieval.long_term_memory_manager')
 async def test_context_retrieval_cache_hit(mock_ltm, mock_sem_cache, context_node):
     """When semantic cache hits, return cached result directly."""
@@ -24,7 +24,7 @@ async def test_context_retrieval_cache_hit(mock_ltm, mock_sem_cache, context_nod
     cached = {"retrieved_cases": "cached_case", "long_term_context": "cached_lt"}
     mock_sem_cache.check.return_value = json.dumps(cached)
 
-    state = {"messages": [HumanMessage(content="test query")], "user_query": "test query", "additional_material": []}
+    state = {"messages": [HumanMessage(content="test query")], "user_query": "test query", "additional_material": {}}
     config = {"metadata": {"thread_id": "t1"}}
 
     result = await context_node.retrieve_context_node(state, config)
@@ -36,7 +36,7 @@ async def test_context_retrieval_cache_hit(mock_ltm, mock_sem_cache, context_nod
 
 
 @pytest.mark.asyncio
-@patch('app.soccer_agent.nodes.context_retrieval.semantic_cache')
+@patch('app.soccer_agent.nodes.context_retrieval.context_cache')
 @patch('app.soccer_agent.nodes.context_retrieval.long_term_memory_manager')
 async def test_context_retrieval_cache_miss(mock_ltm, mock_sem_cache, context_node):
     """When semantic cache misses, fetch from case bank + long-term memory."""
@@ -46,7 +46,7 @@ async def test_context_retrieval_cache_miss(mock_ltm, mock_sem_cache, context_no
 
     context_node.case_bank_retriever.retrieve = AsyncMock(return_value="example_new")
 
-    state = {"messages": [HumanMessage(content="test query")], "user_query": "test query", "additional_material": []}
+    state = {"messages": [HumanMessage(content="test query")], "user_query": "test query", "additional_material": {}}
     config = {"metadata": {"thread_id": "t1"}}
 
     result = await context_node.retrieve_context_node(state, config)

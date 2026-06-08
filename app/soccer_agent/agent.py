@@ -140,7 +140,7 @@ class SoccerAgent:
                     "messages": [HumanMessage(content=request.user_query)],
                     "user_query": request.user_query,
                     "clarified_query": "",
-                    "additional_material": request.additional_material or [],
+                    "additional_material": request.additional_material or {},
                     "planning_output": None,
                     "tool_chains": [],
                     "sub_queries": [],
@@ -153,7 +153,6 @@ class SoccerAgent:
                     "long_term_context": "",
                     "parallel_results": [],
                     "time_context": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "game_id": request.game_id,
                 }
                 
                 # Execute LangGraph

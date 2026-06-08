@@ -44,14 +44,10 @@ class Settings:
     INSIGHTFACE_ENDPOINT_URI: Optional[str] = os.getenv('INSIGHTFACE_ENDPOINT_URI')
     INSIGHTFACE_ENDPOINT_KEY: Optional[str] = os.getenv('INSIGHTFACE_ENDPOINT_KEY')
 
-    # Speech-to-Text Configuration
-    STT_BACKEND: str = os.getenv('STT_BACKEND', 'stub')  # "gemini", "whisper_api", "whisper_local", "stub"
+    
     OPENAI_API_KEY: Optional[str] = os.getenv('OPENAI_API_KEY')  # for whisper_api backend
 
-    # Video Streaming Configuration
-    VIDEO_SEGMENT_DURATION: int = int(os.getenv('VIDEO_SEGMENT_DURATION', '5'))
-    VIDEO_MAX_DOWNLOAD_DURATION: int = int(os.getenv('VIDEO_MAX_DOWNLOAD_DURATION', '600'))
-    VIDEO_DIR: str = os.getenv('VIDEO_DIR', os.path.join(PROJECT_PATH, '..', 'video'))
+   
 
     # Redis Configuration
     REDIS_URL: Optional[str] = os.getenv('REDIS_URL')

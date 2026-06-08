@@ -31,7 +31,7 @@ def planning_node(mock_planning_llm):
 async def test_unified_planning(mock_dispatch, planning_node):
     state = {
         "messages": [HumanMessage(content="test query")],
-        "additional_material": [],
+        "additional_material": {},
         "conversation_history": "History",
         "long_term_context": "Long term context",
         "retrieved_cases": "Examples",

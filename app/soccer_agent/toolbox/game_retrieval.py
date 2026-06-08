@@ -321,7 +321,7 @@ class GameInfoRetrievalTool(BaseTool):
     ) -> Tuple[str, Optional[str]]:
         run_tree = get_current_run_tree()
         try:
-            game_id = execution_agent_state.get("game_id")
+            game_id = (execution_agent_state.get("additional_material") or {}).get("game_id")
 
             # Fast path: sub-query is about the currently-playing video — skip search entirely.
             if about_current_game and game_id:
@@ -367,7 +367,7 @@ class GameInfoRetrievalTool(BaseTool):
         """Async version. Fast path for the active video; Tavily fallback when no match is found and no video is active."""
         run_tree = get_current_run_tree()
         try:
-            game_id = execution_agent_state.get("game_id")
+            game_id = (execution_agent_state.get("additional_material") or {}).get("game_id")
 
             # Fast path: sub-query is about the currently-playing video — skip search entirely.
             if about_current_game and game_id:
@@ -531,7 +531,7 @@ class GameHistoryRetrievalTool(BaseTool):
         run_tree = get_current_run_tree()
         try:
             last_artifact = execution_agent_state.get("last_tool_artifact")
-            active_game_id = execution_agent_state.get("game_id")
+            active_game_id = (execution_agent_state.get("additional_material") or {}).get("game_id")
             active_vct = execution_agent_state.get("video_current_time")
             artifact_preview = (
                 last_artifact if isinstance(last_artifact, str)
@@ -577,7 +577,7 @@ class GameHistoryRetrievalTool(BaseTool):
         run_tree = get_current_run_tree()
         try:
             last_artifact = execution_agent_state.get("last_tool_artifact")
-            active_game_id = execution_agent_state.get("game_id")
+            active_game_id = (execution_agent_state.get("additional_material") or {}).get("game_id")
             active_vct = execution_agent_state.get("video_current_time")
             artifact_preview = (
                 last_artifact if isinstance(last_artifact, str)

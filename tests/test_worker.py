@@ -47,11 +47,11 @@ def test_trigger_workers_with_tools(worker_nodes):
     assert result[0].arg["sub_query"] == "q1"
 
 @pytest.mark.asyncio
-@patch('app.soccer_agent.nodes.worker.semantic_cache')
+@patch('app.soccer_agent.nodes.worker.sub_query_cache')
 async def test_check_cache_node_hit(mock_cache, worker_nodes):
     mock_cache.check.return_value = "Cached Answer"
-    
-    state = {"sub_query": "q1", "additional_material": []}
+
+    state = {"sub_query": "q1", "additional_material": {}}
     result = worker_nodes._check_cache_node(state)
     
     assert "worker_result" in result

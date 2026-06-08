@@ -28,7 +28,7 @@ class SemanticCache:
                 embedding_dimensions=768,
                 metadata_schema=[
                     {"name": "response", "type": "text"},
-                    {"name": "material", "type": "tag"},
+                    {"name": "image_id", "type": "tag"},
                     {"name": "game_id", "type": "tag"},
                     {"name": "timestamp", "type": "numeric"},
                 ]
@@ -47,12 +47,15 @@ class SemanticCache:
     def check(
         self,
         query: str,
-        material: Optional[List[str]] = None,
-        game_id: Optional[str] = None,
+        additional_material: Optional[dict] = None,
         current_time: Optional[float] = None,
     ) -> str | None:
         if not self.is_active or not query:
             return None
+
+        additional_material = additional_material or {}
+        game_id = additional_material.get("game_id")
+        image_id = additional_material.get("image_id")
 
         try:
             if game_id is not None:
@@ -69,10 +72,10 @@ class SemanticCache:
                     f"window=[{ts_min:.1f}s, {ts:.1f}s] query='{query}'"
                 )
             else:
-                # Non-video path: filter by material, exclude video-scoped entries
-                material_str = ", ".join(material) if material else "None"
-                filter_condition = (Tag("material") == material_str) & (Tag("game_id") == _NO_VIDEO)
-                logger.debug(f"Checking Semantic cache | material='{material_str}' query='{query}'")
+                # Non-video path: filter by image_id, exclude video-scoped entries
+                image_id_str = ", ".join(image_id) if image_id else "None"
+                filter_condition = (Tag("image_id") == image_id_str) & (Tag("game_id") == _NO_VIDEO)
+                logger.debug(f"Checking Semantic cache | image_id='{image_id_str}' query='{query}'")
 
             docs = self.vector_store.similarity_search_with_score(
                 query=query,
@@ -80,7 +83,6 @@ class SemanticCache:
                 filter=filter_condition,
                 distance_threshold=self.threshold
             )
-            print(docs)
             if docs:
                 logger.info(f"🎯 Semantic cache HIT for query: '{query}'")
                 return docs[0][0].metadata.get("response")
@@ -135,18 +137,21 @@ class SemanticCache:
         self,
         query: str,
         response: str,
-        material: Optional[List[str]] = None,
-        game_id: Optional[str] = None,
+        additional_material: Optional[dict] = None,
         current_time: Optional[float] = None,
     ):
         if not self.is_active or not query or not response:
             return
 
+        additional_material = additional_material or {}
+        game_id = additional_material.get("game_id")
+        image_id = additional_material.get("image_id")
+
         try:
             if game_id is not None:
                 metadata = {
                     "response": response,
-                    "material": "None",
+                    "image_id": "None",
                     "game_id": game_id,
                     "timestamp": current_time if current_time is not None else 0.0,
                 }
@@ -155,14 +160,14 @@ class SemanticCache:
                     f"timestamp={metadata['timestamp']} query='{query}'"
                 )
             else:
-                material_str = ", ".join(material) if material else "None"
+                image_id_str = ", ".join(image_id) if image_id else "None"
                 metadata = {
                     "response": response,
-                    "material": material_str,
+                    "image_id": image_id_str,
                     "game_id": _NO_VIDEO,
                     "timestamp": 0.0,
                 }
-                logger.debug(f"Saved to Semantic cache | material='{material_str}' query='{query}'")
+                logger.debug(f"Saved to Semantic cache | image_id='{image_id_str}' query='{query}'")
 
             self.vector_store.add_texts(texts=[query], metadatas=[metadata])
         except Exception as e:

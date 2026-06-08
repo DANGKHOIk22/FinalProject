@@ -58,7 +58,7 @@ class UnifiedPlanningNode:
             )
 
         video_current_time = state.get("video_current_time")
-        game_id = state.get("game_id")
+        game_id = additional_material.get("game_id")
         if game_id is None:
             import json
             for ctx_item in state.get("copilotkit", {}).get("context", []):
@@ -75,8 +75,8 @@ class UnifiedPlanningNode:
         )
 
         prompt_template = get_unified_planning_prompt_template()
-        prompt_value = prompt_template.invoke({
-            "user_query_msg": [messages[-1]] if messages else [],
+        prompt = prompt_template.invoke({
+            "user_query": user_query,
             "additional_material": ", ".join(additional_material) if additional_material else "None",
             "conversation_history": conversation_history,
             "toolbox_descriptions": toolbox_descriptions,
