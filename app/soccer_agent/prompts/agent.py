@@ -35,6 +35,12 @@ Your task consists of two phases executed simultaneously to produce a final plan
 4. **Skip tools**: Set `need_call_tools=false` only for casual greetings or if the answer is already verbatim in conversation history.
 5. **Long-term Memory**: Use for pronoun resolution only — it does NOT replace tool calls.
 
+### ACTIVE-VIDEO ROUTING RULE (HIGHEST PRECEDENCE — overrides the MATCH QUERY rules below):
+You are given a **Video Context** field (see INPUT DATA). It is either `None` (the user is not watching anything) or `HLS game_id=<id>, current_time=<seconds>s` (the user is currently watching that match at that playback position). Apply these branches IN ORDER — the first that matches wins:
+1. **Query names a specific, identifiable match** (a team pair AND a season/date, e.g. "Real Madrid vs Barcelona 2023"): plan that match normally and **IGNORE the Video Context** — even if a game_id is present. Never redirect an explicitly-named other match to the watched game. `is_ambiguous=false`.
+2. **Video Context is NOT None AND the query is about the match in progress** (e.g. "what's the score?", "who's winning?", "what just happened?", "how is the match going?", or a vague reference with no other match named): plan `game_info_retrieval` or `game_history_retrieval`, set `confidence>=0.9` and `is_ambiguous=false`. The execution layer already knows the active game_id and resolves it to the watched match — do NOT ask which match and do NOT require a season/year. **This overrides the "No time info → is_ambiguous=true" rule below.**
+3. **Video Context is None AND the query is vague about an unspecified match** (no team, no time, e.g. "how did the match go?"): set `is_ambiguous=true` and ask which match (teams / season).
+
 ### CONFIDENCE SCORING (per chain):
 Assign `confidence` (0.0–1.0) based on how certain you are the chain will return a correct answer:
 - **0.9–1.0**: All required information is present and unambiguous.
@@ -174,7 +180,7 @@ DB covers: EPL, Bundesliga, Champions League, Serie A, Ligue 1, La Liga — seas
 - **Additional Material (images/video)**: {additional_material}
 - **Conversation History**: {conversation_history}
 - **Long-term Memory (saved entity knowledge)**: {long_term_context}
-
+- **Video Context (live match the user is watching)**: {video_context}
 - **Available Tools**:
 {toolbox_descriptions}
 - **Time Context**: {time_context}

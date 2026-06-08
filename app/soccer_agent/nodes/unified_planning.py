@@ -110,17 +110,20 @@ class UnifiedPlanningNode:
         pending_clarifications: list = []
 
         for pc in (output.planned_chains or []):
-            # Ambiguity check disabled — all chains are dispatched regardless of confidence
-            # if pc.confidence < PLANNING_CONFIDENCE_THRESHOLD:
-            #     pc.is_ambiguous = True
-            # if pc.is_ambiguous:
-            #     q = pc.clarifying_question or "Bạn có thể cung cấp thêm thông tin không?"
-            #     pending_clarifications.append(q)
-            #     logger.info(f"  └─ Chain AMBIGUOUS (confidence={pc.confidence:.2f}): {pc.chain} | '{pc.sub_query}' → asking: {q}")
-            # else:
-            tool_chains.append(pc.chain)
-            sub_queries.append(pc.sub_query)
-            logger.info(f"  └─ Chain OK (confidence={pc.confidence:.2f}): {pc.chain} | '{pc.sub_query}'")
+            # Low-confidence chains are treated as ambiguous.
+            if pc.confidence < PLANNING_CONFIDENCE_THRESHOLD:
+                pc.is_ambiguous = True
+            # Clarification gate (scoped): only ask the user when the chain is ambiguous
+            # AND there is no active video to anchor it to. When a game_id is present the
+            # chain is dispatched and resolved against the watched match instead of asking.
+            if pc.is_ambiguous and game_id is None:
+                q = pc.clarifying_question or "Bạn có thể cung cấp thêm thông tin không?"
+                pending_clarifications.append(q)
+                logger.info(f"  └─ Chain AMBIGUOUS (confidence={pc.confidence:.2f}): {pc.chain} | '{pc.sub_query}' → asking: {q}")
+            else:
+                tool_chains.append(pc.chain)
+                sub_queries.append(pc.sub_query)
+                logger.info(f"  └─ Chain OK (confidence={pc.confidence:.2f}): {pc.chain} | '{pc.sub_query}'")
 
         need_call_tools = output.need_call_tools and len(tool_chains) > 0
         logger.info(
