@@ -4,16 +4,18 @@ import random
 import cv2
 import numpy as np
 from datetime import datetime
-from typing import Type, List, Optional, Literal, Tuple, Union
+from typing import Type, List, Optional, Literal, Tuple, Union, Any, Annotated
 from PIL import Image
-from pydantic import BaseModel, Field, PrivateAttr
-from langchain_core.tools import BaseTool
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from langchain_core.tools import BaseTool, InjectedToolArg
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langsmith import get_current_run_tree
 import dashscope
 from dashscope import MultiModalEmbedding
 from app.config import settings
 from app.config.config import PROJECT_PATH
+from langgraph.prebuilt import ToolRuntime
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +24,10 @@ logger = logging.getLogger(__name__)
 # ==========================================
 
 class FrameSelectionInput(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     query: str = Field(description="Description of the desired frame to be selected from the video. This should be a concise text prompt. For example, 'A soccer player scoring a goal' or 'A goalkeeper making a save'.")
-    material: List[str] = Field(description="List of video file paths. Usually contains only one element.")
+    video_id: str = Field(description="Video UUID from which frames will be extracted and analyzed.")
+    runtime: Annotated[Optional[ToolRuntime], InjectedToolArg] = Field(default=None)
     
 class FrameSelectionTool(BaseTool):
     name: str = "frame_selection"
@@ -31,7 +35,7 @@ class FrameSelectionTool(BaseTool):
     Given a description query and a video of soccer game, the tool selects the frame that best matches the prompt 
     and saves that frame as an image. This image is crucial for subsequent visual analysis steps.
     Input: A text prompt describing the scene and a video file path.
-    Output: The file path of the saved image frame.
+    Output: The UUIDs of the saved image frames.
     """
     args_schema: Type[BaseModel] = FrameSelectionInput #type: ignore
     
@@ -62,12 +66,19 @@ class FrameSelectionTool(BaseTool):
         except Exception as exc:
             logger.warning("Error initializing DashScope: %s", exc)
 
-    def _select_random_frame(self, video_path: str) -> Optional[str]:
+    def _select_random_frame(self, video_id: str, output_dir: str, media_registry: Any, user_id: str, thread_id: str) -> Optional[str]:
         """Chọn ngẫu nhiên 1 frame nếu CLIP thất bại."""
         try:
-            cap = cv2.VideoCapture(video_path)
+            sas_url = media_registry.get_sas_url(user_id, thread_id, video_id)
+            if sas_url:
+                cap_path = sas_url
+            else:
+                media_data = media_registry.redis_client.hgetall(media_registry._get_redis_key(user_id, thread_id, video_id))
+                cap_path = media_data.get("path") if media_data else video_id
+                
+            cap = cv2.VideoCapture(cap_path)
             if not cap.isOpened():
-                logger.error(f"Cannot open video for random selection: {video_path}")
+                logger.error(f"Cannot open video for random selection: {cap_path}")
                 return None
             
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -86,11 +97,14 @@ class FrameSelectionTool(BaseTool):
             # Save frame
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_filename = f"FRAME_RANDOM_{timestamp}.jpg"
-            output_path = os.path.join(self.output_dir, output_filename)
+            output_path = os.path.join(output_dir, output_filename)
             
             cv2.imwrite(output_path, frame)
             logger.info(f"Random frame saved at: {output_path}")
-            return output_path
+            
+            new_uuid = str(uuid.uuid4())
+            media_registry.add_new_image(user_id, thread_id, new_uuid, type="local", path=output_path, temporary=True)
+            return new_uuid
             
         except Exception as e:
             logger.error(f"Error in random frame selection: {e}")
@@ -98,26 +112,38 @@ class FrameSelectionTool(BaseTool):
 
     def _preprocess_video(
         self,
-        video_path: str,
+        video_id: str,
+        output_dir: str,
         desired_fps: int = 1,
         shortest_edge: int = 224,
         jpeg_quality: int = 100,
         max_frames: int = 1500,
+        media_registry: Any = None,
+        user_id: str = "default_user",
+        thread_id: str = "default_thread",
     ) -> Tuple[List[Image.Image], List[str]]:
         """Preprocess video: extract frames, resize, and save as temporary files.
 
-        :param video_path: Path to the input video file.
+        :param video_id: UUID to the input video.
+        :param output_dir: Directory to save temporary frame images.
         :param desired_fps: Target frames per second to sample from the video.
         :param shortest_edge: The size of the shortest edge after resizing.
         :param jpeg_quality: Quality of JPEG compression (1-100).
         :param max_frames: Maximum number of frames to process.
+        :param media_registry: MediaRegistryService instance.
         :return: A tuple containing a list of original PIL Images and a list of temporary frame file paths.
         """
 
-        # Open video file with OpenCV
-        cap = cv2.VideoCapture(video_path)
+        sas_url = media_registry.get_sas_url(user_id, thread_id, video_id)
+        if sas_url:
+            cap_path = sas_url
+        else:
+            media_data = media_registry.redis_client.hgetall(media_registry._get_redis_key(user_id, thread_id, video_id))
+            cap_path = media_data.get("path") if media_data else video_id
+
+        cap = cv2.VideoCapture(cap_path)
         if not cap.isOpened():
-            raise FileNotFoundError(f"Cannot open video: {video_path}")
+            raise FileNotFoundError(f"Cannot open video: {cap_path}")
 
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -158,7 +184,7 @@ class FrameSelectionTool(BaseTool):
                 pil_resized = Image.fromarray(rgb_resized)
 
                 temp_filename = f"FRAME_TEMP_{timestamp}_{frame_count}.jpg"
-                temp_path = os.path.join(self.output_dir, temp_filename)
+                temp_path = os.path.join(output_dir, temp_filename)
                 pil_resized.save(temp_path, format="JPEG", quality=jpeg_quality, optimize=True)
                 temp_frame_paths.append(temp_path)
 
@@ -239,51 +265,79 @@ class FrameSelectionTool(BaseTool):
             logger.error(f"Error in Qwen embedding call: {e}")
             raise ValueError(f"DashScope embedding call failed: {str(e)}")
 
-    def _save_selected_frames(self, indices: List[int], frames: List[Image.Image]) -> List[str]:
-        """Save selected frames to disk and return their paths.
+    def _save_selected_frames(self, indices: List[int], frames: List[Image.Image], output_dir: str, media_registry: Any, user_id: str, thread_id: str) -> List[str]:
+        """Save selected frames to disk and return their UUIDs.
         :param indices: List of frame indices to save.
         :param frames: List of original PIL Image frames.
-        :return: List of file paths where frames are saved.
+        :param output_dir: Directory to save selected frames.
+        :return: List of UUIDs where frames are saved.
         """
-        saved_paths: List[str] = []
+        saved_uuids: List[str] = []
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         for idx in indices:
             if idx < 0 or idx >= len(frames):
                 continue
             output_filename = f"FRAME_SELECTED_{timestamp}_{idx}.jpg"
-            output_path = os.path.join(self.output_dir, output_filename)
+            output_path = os.path.join(output_dir, output_filename)
             frames[idx].save(output_path, format="JPEG", quality=100, subsampling=0)
-            saved_paths.append(output_path)
+            
+            new_uuid = str(uuid.uuid4())
+            media_registry.add_new_image(user_id, thread_id, new_uuid, type="local", path=output_path, temporary=True)
+            saved_uuids.append(new_uuid)
 
-        return saved_paths
+        return saved_uuids
 
-    def _run(self, query: str, material: List[str], run_manager: Optional[CallbackManagerForToolRun] = None) -> Tuple[str, Optional[List[str]]]:
+    def _run(
+        self,
+        query: str,
+        video_id: str,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+        runtime: Optional[ToolRuntime] = None,
+    ) -> Tuple[str, Optional[List[str]]]:
         """Main execution method using Qwen3-VL-Embedding for frame selection."""
         try:
             logger.info("🔍 Frame selection started for query: %s", query)
-            if not material:
+            if not video_id:
                 raise ValueError("No video file provided in material.")
 
-            file_path_raw = material[0]
-            full_path = os.path.join(self.project_path, file_path_raw) if not os.path.isabs(file_path_raw) else file_path_raw
+            # Extract state and config values from ToolRuntime
+            user_id = "default_user"
+            thread_id = "default_thread"
+            media_registry = None
+            if runtime and runtime.config:
+                configurable = runtime.config.get("configurable", {})
+                user_id = str(configurable.get("user_id", "default_user"))
+                thread_id = str(configurable.get("thread_id", "default_thread"))
+                media_registry = configurable.get("media_registry")
+            
+            if not media_registry:
+                raise ValueError("MediaRegistryService not found in runtime config")
 
-            # Validate video file exists
-            if not os.path.exists(full_path):
-                raise ValueError(f"Video file not found at {full_path}")
+            # Create user and thread structured output folder
+            session_output_dir = os.path.join(self.output_dir, user_id, thread_id)
+            os.makedirs(session_output_dir, exist_ok=True)
 
-            logger.info(f"🎞️ Frame Selection from: {full_path}")
+            logger.info(f"🎞️ Frame Selection from video UUID: {video_id}")
 
             # Preprocess video and extract frames
             original_frames, temp_frame_paths = self._preprocess_video(
-                full_path, desired_fps=1, shortest_edge=224, jpeg_quality=100, max_frames=1500
+                video_id=video_id,
+                output_dir=session_output_dir,
+                desired_fps=1,
+                shortest_edge=224,
+                jpeg_quality=100,
+                max_frames=1500,
+                media_registry=media_registry,
+                user_id=user_id,
+                thread_id=thread_id
             )
 
             if not temp_frame_paths:
                 logger.warning("No frames extracted from video")
-                fallback_path = self._select_random_frame(full_path)
-                if fallback_path:
-                    return f"No frames extracted. Selected random frame: {fallback_path}", [fallback_path]
+                fallback_uuid = self._select_random_frame(video_id, output_dir=session_output_dir, media_registry=media_registry, user_id=user_id, thread_id=thread_id)
+                if fallback_uuid:
+                    return f"No frames extracted. Selected random frame UUID: {fallback_uuid}", [fallback_uuid]
                 else:
                     return "No frames could be extracted from video", None
 
@@ -300,15 +354,15 @@ class FrameSelectionTool(BaseTool):
                         pass
                 del original_frames
                 del temp_frame_paths
-                fallback_path = self._select_random_frame(full_path)
-                if fallback_path:
-                    return f"Qwen API failed. Selected a random frame as fallback: {fallback_path}", [fallback_path]
+                fallback_uuid = self._select_random_frame(video_id, output_dir=session_output_dir, media_registry=media_registry, user_id=user_id, thread_id=thread_id)
+                if fallback_uuid:
+                    return f"Qwen API failed. Selected a random frame UUID as fallback: {fallback_uuid}", [fallback_uuid]
                 else:
                     return f"Both Qwen API and random selection failed: {qwen_error}", None
 
             # Save selected frames and clean up temp files
             if selected_indices and original_frames:
-                saved_paths = self._save_selected_frames(selected_indices, original_frames)
+                saved_uuids = self._save_selected_frames(selected_indices, original_frames, output_dir=session_output_dir, media_registry=media_registry, user_id=user_id, thread_id=thread_id)
 
                 # Clean up temporary frame files
                 for temp_path in temp_frame_paths:
@@ -317,13 +371,13 @@ class FrameSelectionTool(BaseTool):
                     except Exception as e:
                         logger.debug(f"Could not delete temp frame {temp_path}: {e}")
 
-                if saved_paths:
-                    saved_paths_str = "\n".join(saved_paths)
+                if saved_uuids:
+                    saved_uuids_str = "\n".join(saved_uuids)
                     msg = (
-                        f"Successfully selected {len(saved_paths)} frame(s) for query '{query}'. Continue call next tool to analyze extracted frames.\n"
-                        f"The most relevant frame is saved at: {saved_paths_str}."
+                        f"Successfully selected {len(saved_uuids)} frame(s) for query '{query}'. Continue call next tool to analyze extracted frames.\n"
+                        f"The most relevant frame UUID is: {saved_uuids_str}."
                     )
-                    return msg, saved_paths
+                    return msg, saved_uuids
 
             # Cleanup if no frames selected
             for temp_path in temp_frame_paths:

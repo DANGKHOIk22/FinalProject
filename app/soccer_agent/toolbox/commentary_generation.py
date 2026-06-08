@@ -5,12 +5,13 @@ import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-from typing import Any, List, Optional, Tuple, Type, Literal, Union, Dict
-from pydantic import BaseModel, Field, PrivateAttr
+from typing import Any, List, Optional, Tuple, Type, Literal, Union, Dict, Annotated
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.tools import InjectedToolArg
 from app.soccer_agent.factory.llm_provider import get_llm
 from langsmith import get_current_run_tree
 
@@ -27,6 +28,7 @@ class CommentaryGenerationInput(BaseModel):
     `material` is expected to be one or more local video file paths.
     `query` is optional extra context (often None).
     """
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     video_id: str = Field(
         ..., description="UUID of the video media to generate commentary for."
@@ -35,6 +37,7 @@ class CommentaryGenerationInput(BaseModel):
         default=None,
         description="Optional user query/context to guide commentary (usually None).",
     )
+    runtime: Annotated[Optional[ToolRuntime], InjectedToolArg] = Field(default=None)
 
 
 class _CommentaryGenerationOutput(BaseModel):
