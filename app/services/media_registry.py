@@ -173,9 +173,15 @@ class MediaRegistryService:
         content = message.content
         if isinstance(content, list):
             for part in content:
-                if isinstance(part, dict) and part.get("type") == "image_url":
-                    image_url_obj = part.get("image_url") or {}
-                    url = image_url_obj.get("url")
+                if isinstance(part, dict):
+                    url = None
+                    if part.get("type") == "image_url":
+                        image_url_obj = part.get("image_url") or {}
+                        url = image_url_obj.get("url")
+                    elif part.get("type") == "video_url":
+                        video_url_obj = part.get("video_url") or {}
+                        url = video_url_obj.get("url")
+                    
                     if url and isinstance(url, str):
                         try:
                             from urllib.parse import urlparse
@@ -187,5 +193,4 @@ class MediaRegistryService:
                                 uuids.append(uuid_str)
                         except Exception as e:
                             logger.error(f"Error parsing media URL in message: {e}")
-        # TODO: extract from video_url type if needed in the future
         return uuids
