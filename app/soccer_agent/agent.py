@@ -26,12 +26,8 @@ from app.soccer_agent.toolbox import (
     entity_recognition,
     game_history_retrieval,
     game_info_retrieval,
-    choice_selection,
-    segment,
-    frame_selection,
     commentary_generation,
     web_news_search,
-    entity_recognition,
 )
 
 # Nodes
@@ -64,12 +60,9 @@ class SoccerAgent:
             "entity_augment": entity_augment(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
-            "choice_selection": choice_selection(),
-            "segment": segment(),
-            "frame_selection": frame_selection(),
+            #"entity_recognition": entity_recognition(),
             "commentary_generation": commentary_generation(),
             "web_news_search": web_news_search(),
-            "entity_recognition": entity_recognition(),
         }
         self.tools = list(self.tool_registry.values())
         self.execution_llm_with_tools = self.execution_llm.bind_tools(self.tools) 

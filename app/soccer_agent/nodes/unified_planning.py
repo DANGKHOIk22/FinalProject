@@ -26,16 +26,18 @@ class UnifiedPlanningNode:
         """
         messages = state.get("messages", [])
         user_query = str(messages[-1].text) if messages else ""
-        additional_material = state.get("additional_material") or []
+        additional_material = state.get("additional_material") or {}
 
         # Extract additional material UUIDs from messages if media registry is available
         media_registry = config.get("configurable", {}).get("media_registry")
         if media_registry and messages:
             extracted_uuids = media_registry.extract_uuids_from_message(messages[-1])
-            for uuid_val in extracted_uuids:
-                if uuid_val not in additional_material:
-                    additional_material.append(uuid_val)
-                    logger.info(f"Extracted SAS URL UUID from message: {uuid_val}")
+            if extracted_uuids:
+                existing = additional_material.get("image_id") or []
+                new_ids = [u for u in extracted_uuids if u not in existing]
+                if new_ids:
+                    additional_material["image_id"] = existing + new_ids
+                    logger.info(f"Extracted SAS URL UUIDs from message: {new_ids}")
 
         conversation_history = state.get("conversation_history") or "No previous conversation."
         retrieved_cases = state.get("retrieved_cases") or "No examples available."
@@ -75,9 +77,9 @@ class UnifiedPlanningNode:
         )
 
         prompt_template = get_unified_planning_prompt_template()
-        prompt = prompt_template.invoke({
+        prompt_value = prompt_template.invoke({
             "user_query": user_query,
-            "additional_material": ", ".join(additional_material) if additional_material else "None",
+            "additional_material": ", ".join(additional_material.get("image_id") or []) or "None",
             "conversation_history": conversation_history,
             "toolbox_descriptions": toolbox_descriptions,
             "retrieved_cases": retrieved_cases,
