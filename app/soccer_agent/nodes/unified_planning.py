@@ -75,10 +75,10 @@ class UnifiedPlanningNode:
             if game_id is not None
             else "None"
         )
-
+        
         prompt_template = get_unified_planning_prompt_template()
         prompt_value = prompt_template.invoke({
-            "user_query": user_query,
+            "user_query_msg": [messages[-1]] if messages else [],
             "additional_material": ", ".join(additional_material.get("image_id") or []) or "None",
             "conversation_history": conversation_history,
             "toolbox_descriptions": toolbox_descriptions,
@@ -92,7 +92,7 @@ class UnifiedPlanningNode:
 
         response = await self.planning_llm.ainvoke(prompt_messages, config=config)
         response_text = response.text if hasattr(response, 'text') else str(response.content)
-
+    
         try:
             output: UnifiedPlanningOutput = self.parser.parse(response_text)
         except Exception as e:

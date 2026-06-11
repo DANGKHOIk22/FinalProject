@@ -40,7 +40,7 @@ User Query
       ├─ need_call_tools=False → aggregator (direct response from history)
       └─ need_call_tools=True  → worker_graph (LangGraph Send → N parallel worker subgraphs)
             worker subgraph:
-              → check_cache_node  (Redis semantic cache, cosine threshold=0.15)
+              → check_cache_node  (Redis sub_query_cache, cosine threshold=0.15, ttl=3600)
                   ├─ cache hit → END (skip execution)
                   └─ miss    → execution_node (LLM + tool calls, loops until done)
                                    └─ tool_node (ToolNode executes one tool per cycle)
@@ -50,7 +50,9 @@ User Query
 
 **Critical**: Workers and aggregator always use `clarified_query`, never `user_query`. Set by `unified_planning` after pronoun resolution.
 
-**`unified_planning` also reads `video_id` / `video_current_time`** from `AgentState` or from the CopilotKit context blob (JSON under `state.copilotkit.context`) if not set on state directly. All planned chains are dispatched regardless of confidence — the `PLANNING_CONFIDENCE_THRESHOLD` ambiguity check is currently disabled (commented out in `unified_planning.py`).
+**`unified_planning` reads `game_id`** from `additional_material` dict in state, or from the CopilotKit context blob (JSON under `state.copilotkit.context`) if not set on state directly. `video_current_time` is a top-level `AgentState` field (float, seconds). All planned chains are dispatched regardless of confidence — the `PLANNING_CONFIDENCE_THRESHOLD` ambiguity check is currently disabled (commented out in `unified_planning.py`).
+
+**`trigger_workers` resolves `game_id`** from `additional_material` dict (not a top-level state field), then merges it into each worker's `additional_material` dict before dispatch.
 
 **Streaming UI events**: `unified_planning` emits a `manually_emit_tool_call` custom LangGraph event (via `adispatch_custom_event`) so the frontend CopilotKit adapter can render planning progress in real time.
 
@@ -77,15 +79,10 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 | `entity_augment` | `entity_augment.py` | Search + RAG for soccer entities (players, teams, coaches) |
 | `game_history_retrieval` | `game_retrieval.py` | Historical match data lookup |
 | `game_info_retrieval` | `game_retrieval.py` | Specific match info lookup |
-| `choice_selection` | `choice_selection.py` | Best-option selector from a list |
 | `segment` | `segment.py` | Image segmentation via GroundingDINO endpoint |
-| `frame_selection` | `frame_selection.py` | RRF fusion query (DashScope vision + BM25) on Qdrant `hls_frame_index` |
-| `commentary_extraction` | `commentary_extraction.py` | Extracts transcript text from MongoDB by time window (`current`/`recent`/`specific`); HLS-only (requires `video_id`) |
 | `commentary_generation` | `commentary_generation.py` | Visual commentary from frame analysis |
 | `web_news_search` | `web_search.py` | Tavily web search for post-2024 or news queries |
 | ~~`entity_recognition`~~ | `entity_recognition.py` | **Commented out** — player recognition via face recognition + Qdrant |
-
-**`frame_selection` is HLS-only**: requires `video_id` in state; raises `ValueError` if not provided. Uses DashScope `tongyi-embedding-vision-flash` + BM25 fastembed with RRF fusion (single query — not two separate queries).
 
 ## Storage Layer
 
@@ -94,7 +91,7 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 | MongoDB | Soccer entities (players, teams, coaches) |
 | Qdrant | RAG knowledge base, HLS frame embeddings, case bank |
 | PostgreSQL | Chat history, LangGraph checkpoints |
-| Redis | Semantic cache, session memory summaries, Celery broker |
+| Redis | Semantic cache (`sub_query_cache`, `context_cache`), session memory summaries, Celery broker |
 
 ## Critical Gotchas
 
@@ -102,9 +99,9 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 
 **`SoccerAgent` is `None` at startup if `DASHSCOPE_API_KEY` is missing.** `/chat` returns 503 — not a bug.
 
-**Semantic cache lives inside the worker subgraph**, not the main graph. `_check_cache_node` in `worker.py` is live — it calls `semantic_cache.check()` and short-circuits on a hit. However `check()` always returns `None` because the hit-return block is commented out inside `app/cache/semantic_cache.py` (lines 57-59). Cache writes (`set()`) still work. To enable reads, uncomment those lines. Also note: the global `semantic_cache` instance is created with `ttl=1` (1 second) — effectively disabling persistence even when reads are re-enabled. Standard cache (`app/cache/standard_cache.py`) reads are also disabled (hit block commented out in `_cache_logic`); async writes work, sync writes are commented out. Semantic cache uses `gemini-embedding-001` (768-dim) via `GOOGLE_API_KEY`.
+**Semantic cache is split into two isolated Redis indexes** (`sub_query_cache` and `context_cache`), both `SemanticCache` instances in `app/cache/semantic_cache.py`. Reads and writes are fully active (`threshold=0.15`, `ttl=3600`). The cache filters by `game_id` + `timestamp` window for video queries and by `image_id` + `game_id == "__none__"` for non-video queries. **If you have a stale `semantic_cache` index from before the split, flush it**: `redis-cli DEL semantic_cache`.
 
-**`trigger_workers` has a duplicate `return "aggregator"` (lines 81-82 of `worker.py`).** Only the first executes; harmless but should be cleaned up.
+**`additional_material` is now a dict**, not a list. Structure: `{"game_id": str | None, "image_id": List[str]}`. The `game_id` key in this dict is the canonical place `trigger_workers` and the cache use to route video-aware execution. Do not pass `additional_material` as `List[str]`.
 
 **Celery on Windows requires `-P solo`.** The default prefork pool is POSIX-only.
 
@@ -116,9 +113,11 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 
 **`VIDEO_SEGMENT_DURATION` defaults to 5 seconds** (not 30 — the `.env` default and config value differ from older docs).
 
-**`IncrementalSegmentIndexer` uses VLM captions + `text-embedding-v4`.** Each frame is captioned by `qwen3-vl-flash-2026-01-22` in a single batched call per segment, then embedded with `dashscope.TextEmbedding` (`text-embedding-v4`). The `hls_frame_index` Qdrant collection uses `dense_caption` (not `dense_image`). **Breaking**: if you have an existing `hls_frame_index` collection from the old vision-embedding schema, drop and recreate it before running the indexer.
+**`IncrementalSegmentIndexer` uses VLM captions + `text-embedding-v4`.** Each frame is captioned by `qwen3-vl-flash-2026-01-22` then embedded with `dashscope.TextEmbedding` (`text-embedding-v4`). The `hls_frame_index` Qdrant collection uses `dense_caption` (not `dense_image`). **Breaking**: if you have an existing `hls_frame_index` collection from the old vision-embedding schema, drop and recreate it.
 
 **`processor.py` is HLS-only.** It no longer downloads or splits full videos — it assumes HLS segments already exist on disk and only does per-segment frame/audio extraction.
+
+**Do not remove `@observe` decorators** (Langfuse) — they are the primary production debugging tool.
 
 ## Key Files
 
@@ -137,6 +136,7 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 | `app/config/config.py` | Numeric thresholds, model alias constants, `TEMPORARY_DIR` |
 | `app/config/settings.py` | Env-var loader — `.env` anchored to `FinalProject/` to survive Celery CWD changes |
 | `app/soccer_agent/toolbox/__init__.py` | Tool imports — add new tools here |
+| `app/cache/semantic_cache.py` | `SemanticCache`, `sub_query_cache`, `context_cache` instances |
 | `app/celery_app.py` | Celery app instance; Redis broker+backend; includes `hls_tasks` |
 | `app/api/hls_stream.py` | HLS session registration, playlist proxy, segment proxy, status polling |
 | `app/video_processing/processor.py` | `VideoStreamingProcessor`, `HLSSegmentWatcher`, `VideoSegment` |
@@ -144,6 +144,7 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 | `app/video_processing/speech_to_text.py` | `SpeechToTextService` — DashScope Qwen3-ASR |
 | `app/video_processing/services/match_indexing_service.py` | Orchestrates watcher + indexer per HLS session |
 | `app/video_processing/tasks/hls_tasks.py` | Celery task `hls.process_video_session` |
+| `app/services/media_registry.py` | `MediaRegistryService` — Azure Blob Storage + Redis media registry |
 | `scripts/case_bank_manager.ipynb` | Manage planning few-shot examples in `planning_case_bank` Qdrant collection |
 
 ## Environment Variables
@@ -153,7 +154,7 @@ In `FinalProject/.env`. `Settings.validate()` exists but is **not** called at st
 ```
 # LLM
 OPENAI_API_KEY=             # Required — primary LLM provider (gpt-5.4-nano)
-GOOGLE_API_KEY=             # Required for Gemini fallback
+GOOGLE_API_KEY=             # Required for Gemini fallback + semantic cache embeddings
 DASHSCOPE_API_KEY=          # Required — SoccerAgent is None without it; /chat returns 503
 
 # Databases
@@ -167,7 +168,6 @@ QDRANT_CASE_BANK_COLLECTION_NAME=Soccer_Case_Bank
 QDRANT_HLS_COLLECTION_NAME=hls_frame_index
 POSTGRES_DATABASE_URL=
 REDIS_URL=redis://localhost:6379/0
-TRANSCRIPTION_COLLECTION_NAME=transcription  # MongoDB collection used by commentary_extraction tool
 
 # Tavily (web search)
 TAVILY_API_KEYS=key1,key2   # Comma-separated for round-robin + 429 failover
@@ -183,11 +183,21 @@ CLIP_ENDPOINT_URI=
 CLIP_GROUNDINGDINO_ENDPOINT_URI=
 CLIP_GROUNDINGDINO_ENDPOINT_KEY=
 
+# Azure Storage (MediaRegistryService — upload endpoint)
+AZURE_STORAGE_ACCOUNT_URL=
+AZURE_CONTAINER_NAME=
+UMRS_REDIS_URL=             # Redis URL for media registry (can be same as REDIS_URL)
+
 # Video
 STT_BACKEND=stub            # gemini | whisper_api | whisper_local | stub
 VIDEO_SEGMENT_DURATION=5    # Seconds per HLS segment
 VIDEO_MAX_DOWNLOAD_DURATION=600
 VIDEO_DIR=../video/
+
+# JWT (required — startup raises ValueError if missing unless CI=true or TESTING=true)
+JWT_SECRET_KEY=
+JWT_ALGORITHM=HS256
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=10080
 
 # Observability (optional)
 LANGFUSE_PUBLIC_KEY=
@@ -197,8 +207,8 @@ LANGSMITH_API_KEY=
 
 ## API Endpoints
 
-- `POST /chat` — Main agent endpoint (`user_id`, `user_query`, optional `additional_material: List[str]`, `session_id`)
-- AG-UI streaming endpoint — mounted by `add_langgraph_fastapi_endpoint` at `/soccer_agent/copilotkit`; used by the frontend CopilotKit adapter
+- `POST /chat` — Main agent endpoint (`user_id`, `user_query`, optional `additional_material: dict`, `session_id`)
+- AG-UI streaming endpoint — mounted at `/soccer_agent/copilotkit`; used by the frontend CopilotKit adapter
 - `GET /` — Health check (shows DB connection status)
 - `POST /hls/sessions` — Register HLS directory for streaming
 - `GET /hls/{id}/playlist.m3u8` — Rewritten HLS playlist
@@ -206,13 +216,15 @@ LANGSMITH_API_KEY=
 - `POST /hls/{id}/analyze` — Enqueue Celery background analysis task
 - `GET /hls/{id}/analyze/status` — Poll Celery task status
 - `DELETE /hls/sessions/{id}` — Revoke Celery task (SIGTERM)
+- `/upload` — Media upload router (Azure Blob via `MediaRegistryService`)
+- `/user` — User CRUD
 
 ## HLS Video Processing Pipeline
 
 ```
 POST /hls/sessions
   → Celery task: hls.process_video_session
-      ├─ ffmpeg: video → HLS segments (seg000.ts, …) in temporary/hls_sessions/{video_id}/
+      ├─ ffmpeg: video → HLS segments (seg000.ts, …) in temporary/hls_sessions/{game_id}/
       │   stderr drained in background thread to prevent pipe-buffer deadlock on Windows
       └─ MatchIndexingService.process_hls_session (concurrent with ffmpeg)
             → HLSSegmentWatcher polls playlist, yields segments as ffmpeg writes them
@@ -224,7 +236,7 @@ POST /hls/sessions
             → IncrementalSegmentIndexer.index_transcript_chunk ─┘
 ```
 
-**Qdrant `hls_frame_index` schema**: named vectors `dense_caption` (`text-embedding-v4` of VLM caption) + `dense_text` (`text-embedding-v4` of transcript) + `sparse` (BM25 of caption + transcript). Payload includes `caption` field. All points carry `video_id` for filtering.
+**Qdrant `hls_frame_index` schema**: named vectors `dense_caption` (`text-embedding-v4` of VLM caption) + `dense_text` (`text-embedding-v4` of transcript) + `sparse` (BM25 of caption + transcript). All points carry `game_id` for filtering.
 
 ## Adding a Tool
 
@@ -236,12 +248,12 @@ POST /hls/sessions
 
 - `SESSION_MEMORY_TOKEN_THRESHOLD = 12_600` — triggers Redis compression
 - `SESSION_MEMORY_RECENT_KEEP = 5` — messages kept verbatim post-compression
-- `PLANNING_CONFIDENCE_THRESHOLD = 0.5` — chains below this go to `pending_clarifications`
+- `PLANNING_CONFIDENCE_THRESHOLD = 0.5` — disabled; all chains dispatch regardless of confidence
 - `QDRANT_SEARCH_SCORE_THRESHOLD = 0.5`
 
 ## GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **FinalProject** (2741 symbols, 4353 relationships, 84 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **FinalProject**. Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

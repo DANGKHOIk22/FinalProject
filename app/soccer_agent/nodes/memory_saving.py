@@ -184,8 +184,7 @@ class SaveToMemoryNode:
         tool_calls_history = state.get("tool_calls_history", [])
         tool_results_history = state.get("tool_results_history", [])
 
-        metadata = config.get("metadata", {})
-        thread_id = metadata.get("thread_id", str(uuid.uuid4()))
+        thread_id = config.get("configurable", {}).get("thread_id") or str(uuid.uuid4())
         user_id = str(config.get("configurable", {}).get("user_id"))  # user_id for cross-session long-term memory
 
         # --- 1. Save Clean Conversation History ---
