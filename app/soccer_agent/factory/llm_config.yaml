@@ -78,6 +78,24 @@ model_list:
       top_p: 0.95
       max_completion_tokens: 8000
 
+  # ── Guardrail: soccer-topic classification before planning ───────────────────
+  # Primary is Gemini flash-lite — measured ~1s here vs ~7-8s on the OpenAI path.
+  - model_name: guardrail
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GOOGLE_API_KEY
+      temperature: 0
+      max_completion_tokens: 200
+      stream: false
+
+  - model_name: guardrail-backup
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+      temperature: 0
+      max_completion_tokens: 200
+      stream: false
+
   # ── Fallbacks (Gemini as backup now) ────────────────────────────────────────
   - model_name: gemini-backup
     litellm_params:
@@ -91,3 +109,4 @@ router_settings:
     - retrieval-augment: [retrieval-augment-backup]
     - aggregator: [aggregator-backup]
     - tool: [gemini-backup]
+    - guardrail: [guardrail-backup]

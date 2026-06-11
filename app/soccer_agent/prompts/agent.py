@@ -280,3 +280,36 @@ Below are the summarized findings from each parallel worker that investigated th
 Generate the final answer below (IN VIETNAMESE):
 """)])
     return aggregator_prompt_template
+
+
+def get_guardrail_prompt_template() -> ChatPromptTemplate:
+    """Create the soccer-topic guardrail classifier prompt.
+
+    Returns a structured GuardrailVerdict (is_soccer_related, reason). Biases toward
+    allowing: only clearly off-topic queries are blocked.
+    """
+    return ChatPromptTemplate.from_messages([
+        SystemMessage(content="""You are a topic gate for a soccer (football) assistant. Decide whether the user's current query should be answered by the soccer assistant.
+
+ON-TOPIC (is_soccer_related = true) — anything about soccer/football:
+- Players, teams, coaches, referees, venues
+- Matches, fixtures, scores, results, events
+- Leagues, competitions, tournaments, standings
+- Statistics, transfers, soccer news
+- The live match or video the user is currently watching
+- Follow-up questions in an ongoing soccer conversation, even when phrased with pronouns or ellipsis (e.g. "and his goals?", "what about that match?", "who scored next?") — use the recent conversation to judge.
+
+OFF-TOPIC (is_soccer_related = false) — clearly unrelated to soccer:
+- Cooking, recipes, coding, math homework, politics, general chit-chat, other sports unrelated to soccer.
+
+BIAS TOWARD ALLOW: if the query is ambiguous, short, or you are unsure, return is_soccer_related = true. Only return false when the query is CLEARLY about something other than soccer. Greetings and meta questions about the assistant count as on-topic."""),
+        HumanMessagePromptTemplate.from_template(
+            """Recent conversation (may be empty):
+{recent_context}
+
+Current query:
+"{current_query}"
+
+Classify whether the current query is soccer-related."""
+        ),
+    ])

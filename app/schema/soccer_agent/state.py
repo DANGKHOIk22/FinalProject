@@ -28,6 +28,12 @@ class UnifiedPlanningOutput(BaseModel):
     need_call_tools: bool = Field(description="False only for greetings or when the answer is already in conversation history")
     planned_chains: Optional[List[PlannedChain]] = Field(default=None, description="List of planned chains, one per parallel worker")
 
+
+class GuardrailVerdict(BaseModel):
+    """Structured verdict from the soccer-topic guardrail classifier."""
+    is_soccer_related: bool = Field(description="True if the query is about soccer (players, teams, coaches, matches, leagues, statistics, or the live match the user is watching), or a follow-up within an ongoing soccer conversation. When uncertain, prefer True.")
+    reason: str = Field(description="Brief justification for the verdict")
+
 # Define the state structure for the agent
 class AgentState(CopilotKitState):
     """Parent state structure for the planning agent. It is derived from CopilotKitState, which provides 'messages' list to store the conversation history"""
@@ -48,6 +54,7 @@ class AgentState(CopilotKitState):
     effective_memory: Optional[Any]
     time_context: Optional[str]
     video_current_time: Optional[float] # Current HLS video playback position in seconds (synced from frontend)
+    is_off_topic: Optional[bool] # Set by the guardrail node: True = query is not soccer-related, hard-stop to refusal
 
 class WorkerState(CopilotKitState):
     """State for individual tool chain execution workers. It is derived from CopilotKitState, which provides 'messages' list to store the conversation history"""
