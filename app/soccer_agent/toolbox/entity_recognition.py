@@ -164,7 +164,7 @@ class EntityRecognitionTool(BaseTool):
         )
 
         response = self._vl_client.chat.completions.create(
-            model="qwen-vl-max",
+            model="qwen3-vl-flash-2025-10-15",
             messages=[
                 {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
                 {
