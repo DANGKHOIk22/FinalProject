@@ -10,7 +10,7 @@ from app.schema.soccer_agent.state import AgentState
 from app.soccer_agent.memory.long_term_memory import long_term_memory_manager
 from app.soccer_agent.case_bank.retriever import CaseBankRetriever
 from app.soccer_agent.case_bank.cache import case_bank_cache
-from app.cache.semantic_cache import semantic_cache
+from app.cache.semantic_cache import context_cache
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +36,19 @@ class ContextRetrievalNode:
 
         # --- SEMANTIC CACHE CHECK (Internal) ---
         try:
-            cached_res = semantic_cache.check(user_query)
+            cached_res = context_cache.check(user_query)
             if cached_res:
                 logger.info(f"🎯 [ContextRetrieval] Semantic Cache HIT for: '{user_query[:50]}'")
                 return json.loads(cached_res)
         except Exception as e:
-            logger.warning(f"Semantic cache error: {e}") # if there is an error in tooo
-        
+            logger.warning(f"Semantic cache error: {e}")
+
+        metadata = config.get("metadata", {})
+        thread_id = metadata.get("thread_id", str(uuid.uuid4()))
+        user_id = config.get("configurable", {}).get("user_id")
+        additional_material = state.get("additional_material") or {}
+        has_media = bool(additional_material.get("game_id") or additional_material.get("image_id"))
+
         logger.info(f"🔍 [ContextRetrieval] Cache MISS. Searching DBs for: '{user_query[:50]}...'")
 
         # 2. Get Embedding ONCE
@@ -99,7 +105,7 @@ class ContextRetrievalNode:
 
         # --- SEMANTIC CACHE SET (Internal) ---
         try:
-            semantic_cache.set(user_query, json.dumps(result))
+            context_cache.set(user_query, json.dumps(result))
         except Exception as e:
             logger.warning(f"Failed to update semantic cache: {e}")
 

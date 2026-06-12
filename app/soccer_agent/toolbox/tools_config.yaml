@@ -83,19 +83,6 @@ tools:
       choices: >
         List of candidate items to choose from.
 
-  segment:
-    description: >
-      Segments an image to locate a single visually described object or region (e.g., using kit color, position, jersey number).
-      Produces a bounding-box crop of the single matched object for downstream visual tools.
-      Requires visual media input (image UUID).
-      IMPORTANT: This tool only segments ONE object at a time. For multiple objects, plan parallel chains.
-      The next tool call must be entity_recognition with the returned image UUID to identify the segmented entities.
-    inputs:
-      image_id: >
-        UUID of the input image to segment.
-      query_entity_recognition_task: >
-        Text description of the single object to detect and segment. Must be in English.
-
   commentary_generation:
     description: >
       Given a soccer match video clip, this tool generates an approximately 500-word
@@ -109,10 +96,20 @@ tools:
 
   entity_recognition:
     description: >
-      Identify a specific soccer player name from a cropped image region using face/body recognition (DeepFace).
-      Must receive a cropped image — typically the output of the segment tool.
-      Use only after segment has isolated the relevant region.
-      Requires visual media input.
+      Identify a specific soccer player or person in an image using visual description-based localization
+      followed by face recognition. Provide a plain-English description of the person's visual attributes
+      (kit color, jersey number, position in frame) and the source image UUID.
+      Internally: uses Qwen-VL to locate the described region, OpenCV to refine to the face,
+      InsightFace to extract the face embedding, and Qdrant vector search + MongoDB to return the entity's
+      full wiki profile.
+      Use for: "Who is the person wearing the red shirt?", "Identify the goalkeeper in this frame."
+      Do NOT use for: questions about match events or statistics — use game tools.
+      IMPORTANT: One entity per call. For multiple people, use parallel chains.
+      Requires visual media input (image UUID).
     inputs:
       image_id: >
-        UUID of the cropped image region containing the player to identify.
+        UUID of the source image to search in.
+      query_entity_recognition_task: >
+        Visual description of the single person to locate and identify. Must be in English.
+        Include object class noun (person/man/woman) and visual attributes (color, clothing, position).
+        Do NOT include proper names — the localization model does not recognize names.

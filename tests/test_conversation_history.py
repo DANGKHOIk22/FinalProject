@@ -18,10 +18,10 @@ async def test_get_conversational_history_no_history(history_node):
     history_node.get_memory.return_value = (mock_memory_object, MagicMock(), MagicMock())
     
     state = {"messages": [HumanMessage(content="Hello")]}
-    config = {"metadata": {"thread_id": "test-session"}}
-    
+    config = {"configurable": {"thread_id": "test-session"}}
+
     result = await history_node.get_conversational_history(state, config)
-    
+
     assert "conversation_history" in result
     assert result["conversation_history"] == ""
     assert result["recent_msgs_for_qu"] == []
@@ -36,7 +36,7 @@ async def test_get_conversational_history_with_history(history_node):
     history_node.get_memory.return_value = (mock_memory_object, MagicMock(), MagicMock())
     
     state = {"messages": [HumanMessage(content="New query")]}
-    config = {"metadata": {"thread_id": "test-session"}}
+    config = {"configurable": {"thread_id": "test-session"}}
     
     result = await history_node.get_conversational_history(state, config)
     

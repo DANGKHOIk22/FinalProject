@@ -69,8 +69,7 @@ class ConversationHistoryNode:
         """
         This node retrieves the conversation history from the storage and updates the state.
         """
-        metadata = config.get("metadata", {})
-        thread_id = metadata.get("thread_id", str(uuid.uuid4()))
+        thread_id = config.get("configurable", {}).get("thread_id") or str(uuid.uuid4())
         user_id = str(config.get("configurable", {}).get("user_id"))
         
         # --- Emit tool call for rendering this step in UI ---

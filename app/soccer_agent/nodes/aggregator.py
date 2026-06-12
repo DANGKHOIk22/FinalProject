@@ -16,8 +16,8 @@ class AggregatorNode:
 
         messages = state.get("messages", [])
         user_query = messages[-1].text if messages else ""
-        additional_material_list = state.get("additional_material", [])
-        additional_material = ", ".join(additional_material_list) if additional_material_list else "None"
+        image_id_list = (state.get("additional_material") or {}).get("image_id") or []
+        additional_material = ", ".join(image_id_list) if image_id_list else "None"
         conversation_history = state.get("conversation_history", "No previous conversation.")
         results = state.get("parallel_results", [])
         pending_clarifications = state.get("pending_clarifications") or []

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 class ChatRequest(BaseModel):
     """Schema cho input của người dùng."""
     user_id: str = Field(
@@ -10,7 +10,12 @@ class ChatRequest(BaseModel):
         ...,
         description="Câu hỏi của người dùng về bóng đá."
     )
-    additional_material: Optional[List[str]] = Field(
+    additional_material: Optional[Dict[str, Any]] = Field(
         None,
-        description="Tài liệu bổ sung (ví dụ: đường dẫn file ảnh, video)."
+        description=(
+            "Tài liệu bổ sung. Dict shape: {'game_id': str | None, 'image_id': List[str]}. "
+            "game_id: ID returned by POST /hls/sessions, required when the user is watching a "
+            "live-simulated stream and the agent should query indexed frames. "
+            "image_id: list of media file paths (e.g. image/video frame paths)."
+        )
     )

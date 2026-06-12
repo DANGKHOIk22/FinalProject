@@ -3,10 +3,20 @@ Configuration settings loader for the soccer agent application.
 Loads settings from environment variables with default fallbacks.
 """
 import os
+from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 from app.config.config import PROJECT_PATH
-load_dotenv(override=True)
+
+# Anchor to FinalProject/ regardless of process CWD.
+# Bare load_dotenv() breaks in Celery workers where CWD != FinalProject/.
+_ENV_PATH = Path(__file__).parent.parent.parent / ".env"
+load_dotenv(_ENV_PATH, override=True)
+
+
+def _env(key: str, default: Optional[str] = None) -> Optional[str]:
+    val = os.getenv(key, default)
+    return val.strip() if val is not None else None
 
 class Settings:
     """Application settings loaded from environment variables."""
@@ -18,13 +28,14 @@ class Settings:
     GOOGLE_API_KEY: Optional[str] = os.getenv('GOOGLE_API_KEY')
     DASHSCOPE_API_KEY: Optional[str] = os.getenv('DASHSCOPE_API_KEY')
     SOCCER_COLLECTION_NAME: str = os.getenv('SOCCER_COLLECTION_NAME', 'EntityInformation')
-    
+
     # Qdrant Configuration
     QDRANT_URL: Optional[str] = os.getenv('QDRANT_URL')
     QDRANT_API_KEY: Optional[str] = os.getenv('QDRANT_API_KEY')
     QDRANT_COLLECTION_NAME: Optional[str] = os.getenv('QDRANT_COLLECTION_NAME')
-    QDRANT_CASE_BANK_COLLECTION_NAME: str = os.getenv('QDRANT_CASE_BANK_COLLECTION_NAME', 'planning_case_bank')
-
+    QDRANT_CASE_BANK_COLLECTION_NAME: str = os.getenv('QDRANT_CASE_BANK_COLLECTION_NAME', 'Soccer_Case_Bank')
+    QDRANT_HLS_COLLECTION_NAME: str = os.getenv('QDRANT_HLS_COLLECTION_NAME', 'hls_frame_index')
+    
     # Postgres Configuration
     POSTGRES_DATABASE_URL: Optional[str] = os.getenv('POSTGRES_DATABASE_URL')
     DEEPFACE_HOME: Optional[str] = os.path.join(PROJECT_PATH, os.getenv('DEEPFACE_HOME', './temporary/cache'))
@@ -32,6 +43,11 @@ class Settings:
     # Endpoint Configuration
     INSIGHTFACE_ENDPOINT_URI: Optional[str] = os.getenv('INSIGHTFACE_ENDPOINT_URI')
     INSIGHTFACE_ENDPOINT_KEY: Optional[str] = os.getenv('INSIGHTFACE_ENDPOINT_KEY')
+
+    
+    OPENAI_API_KEY: Optional[str] = os.getenv('OPENAI_API_KEY')  # for whisper_api backend
+
+   
 
     # Redis Configuration
     REDIS_URL: Optional[str] = os.getenv('REDIS_URL')

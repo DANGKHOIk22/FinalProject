@@ -26,9 +26,6 @@ from app.soccer_agent.toolbox import (
     entity_recognition,
     game_history_retrieval,
     game_info_retrieval,
-    choice_selection,
-    segment,
-    frame_selection,
     commentary_generation,
     web_news_search,
 )
@@ -40,6 +37,7 @@ from app.soccer_agent.nodes.unified_planning import UnifiedPlanningNode
 from app.soccer_agent.nodes.worker import WorkerNodes
 from app.soccer_agent.nodes.aggregator import AggregatorNode
 from app.soccer_agent.nodes.memory_saving import SaveToMemoryNode
+from app.soccer_agent.nodes.guardrail import GuardrailNode
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +51,7 @@ class SoccerAgent:
         self.planning_llm = get_llm("planning")
         self.execution_llm = get_llm("execution")
         self.aggregator_llm = get_llm("aggregator")
+        self.guardrail_llm = get_llm("guardrail")
         self.checkpointer = checkpointer
         
         # 2. Service Initialization
@@ -63,12 +62,9 @@ class SoccerAgent:
             "entity_augment": entity_augment(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
-            "choice_selection": choice_selection(),
-            "segment": segment(),
-            "frame_selection": frame_selection(),
+            "entity_recognition": entity_recognition(),
             "commentary_generation": commentary_generation(),
             "web_news_search": web_news_search(),
-            "entity_recognition": entity_recognition(),
         }
         self.tools = list(self.tool_registry.values())
         self.execution_llm_with_tools = self.execution_llm.bind_tools(self.tools) 
@@ -80,6 +76,7 @@ class SoccerAgent:
         self.worker_nodes = WorkerNodes(self.execution_llm_with_tools, self.tools)
         self.aggregator_node = AggregatorNode(self.aggregator_llm)
         self.memory_saving_node = SaveToMemoryNode()
+        self.guardrail_node = GuardrailNode(self.guardrail_llm)
 
         # 5. Graph Compilation
         self.graph = self._build_graph()
@@ -92,19 +89,32 @@ class SoccerAgent:
         # Add Core Nodes
         workflow.add_node("get_history", self.history_node.get_conversational_history)
         workflow.add_node("context_retrieval", self.context_retrieval_node.retrieve_context_node)
+        workflow.add_node("guardrail_classify", self.guardrail_node.classify_node)
+        workflow.add_node("guardrail_gate", self.guardrail_node.gate_node)
+        workflow.add_node("guardrail_refusal", self.guardrail_node.refusal_node)
         workflow.add_node("unified_planning", self.planning_node.unified_planning_node)
         workflow.add_node("worker_graph", self.worker_nodes.worker_node)
         workflow.add_node("aggregator", self.aggregator_node.aggregator_node)
         workflow.add_node("save_memory", self.memory_saving_node.save_to_memory_node)
 
-        # Build Parallel Entry
+        # Build Parallel Entry — guardrail runs alongside history + context retrieval
         workflow.add_edge(START, "get_history")
         workflow.add_edge(START, "context_retrieval")
+        workflow.add_edge(START, "guardrail_classify")
 
-        # Sync into Planning
-        workflow.add_edge("get_history", "unified_planning")
-        workflow.add_edge("context_retrieval", "unified_planning")
-        
+        # Fan-in: all three parallel branches converge on the guardrail gate
+        workflow.add_edge("get_history", "guardrail_gate")
+        workflow.add_edge("context_retrieval", "guardrail_gate")
+        workflow.add_edge("guardrail_classify", "guardrail_gate")
+
+        # Gate: off-topic hard-stops to the canned refusal, skipping planning/workers/aggregator
+        workflow.add_conditional_edges(
+            "guardrail_gate",
+            self.guardrail_node.gate_router,
+            {"proceed": "unified_planning", "blocked": "guardrail_refusal"}
+        )
+        workflow.add_edge("guardrail_refusal", "save_memory")
+
         # Execution Path
         workflow.add_conditional_edges(
             "unified_planning",
@@ -139,7 +149,7 @@ class SoccerAgent:
                     "messages": [HumanMessage(content=request.user_query)],
                     "user_query": request.user_query,
                     "clarified_query": "",
-                    "additional_material": request.additional_material or [],
+                    "additional_material": request.additional_material or {},
                     "planning_output": None,
                     "tool_chains": [],
                     "sub_queries": [],
@@ -151,7 +161,7 @@ class SoccerAgent:
                     "conversation_history": "",
                     "long_term_context": "",
                     "parallel_results": [],
-                    "time_context": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    "time_context": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 }
                 
                 # Execute LangGraph

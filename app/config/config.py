@@ -1,7 +1,8 @@
 import os
+from pathlib import Path
 
-# Project root
-PROJECT_PATH = os.getcwd()  # Đường dẫn tuyệt đối đến thư mục dự án
+# Project root — anchored to this file's location, not os.getcwd()
+PROJECT_PATH = str(Path(__file__).parent.parent.parent)
 
 # Temporary / artifact folders
 TEMPORARY_DIR = os.path.join(PROJECT_PATH, "temporary")
@@ -39,6 +40,15 @@ PLANNING_CONFIDENCE_THRESHOLD: float = 0.5
 
 # Game tools — Tavily fallback result count when DB has no match
 GAME_FALLBACK_TOP_K: int = 10
+
+# Soccer-topic guardrail
+GUARDRAIL_RECENT_TURNS: int = 4          # trailing messages the classifier sees for context
+GUARDRAIL_TIMEOUT_SECONDS: float = 10.0  # fail-open ceiling; primary (gemini flash-lite) is ~1s, headroom covers failover to the gpt-4o-mini backup
+GUARDRAIL_REFUSAL_MESSAGE: str = (
+    "Xin lỗi, tôi là trợ lý chuyên về bóng đá nên chỉ có thể trả lời các câu hỏi "
+    "liên quan đến bóng đá (cầu thủ, đội bóng, huấn luyện viên, trận đấu, giải đấu...). "
+    "Bạn vui lòng đặt câu hỏi về bóng đá nhé!"
+)
 
 
 

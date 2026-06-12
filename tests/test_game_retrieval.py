@@ -384,13 +384,13 @@ class TestGameInfoRetrievalRun:
 
     def test_search_error_returns_error_string(self):
         self.tool._finder.find.return_value = _GameSearchError(detail="DB timeout")
-        content, artifact = self.tool._run("query")
+        content, artifact = self.tool._run("query", execution_agent_state={})
         assert "DB timeout" in content
         assert artifact is None
 
     def test_not_found_returns_reason(self):
         self.tool._finder.find.return_value = _GameNotFound(reason="No match found, please provide more info.")
-        content, artifact = self.tool._run("query")
+        content, artifact = self.tool._run("query", execution_agent_state={})
         assert "No match found" in content
         assert artifact is None
 
@@ -403,13 +403,13 @@ class TestGameInfoRetrievalRun:
             mock_chain.invoke.return_value = ToolOutput(answer="Chelsea won 2-0.")
             mock_tmpl.return_value.__or__ = MagicMock(return_value=mock_chain)
             self.tool._llm.with_structured_output.return_value = MagicMock()
-            content, artifact = self.tool._run("query")
+            content, artifact = self.tool._run("query", execution_agent_state={})
         assert content == "Chelsea won 2-0."
         assert artifact == "x/y"
 
     def test_exception_returns_error_string(self):
         self.tool._finder.find.side_effect = Exception("unexpected crash")
-        content, artifact = self.tool._run("query")
+        content, artifact = self.tool._run("query", execution_agent_state={})
         assert "unexpected crash" in content
         assert artifact is None
 
@@ -452,3 +452,82 @@ class TestGameHistoryRetrievalRun:
             content, artifact = self._run()
         assert "no events" in content
         assert artifact is None
+
+
+# ---------------------------------------------------------------------------
+# about_current_game fast-path gating (renamed from about_current_match)
+# ---------------------------------------------------------------------------
+
+class TestAboutCurrentGameFastPath:
+    def setup_method(self):
+        from app.soccer_agent.toolbox.game_retrieval import GameInfoRetrievalTool, GameHistoryRetrievalTool
+        with patch("app.soccer_agent.toolbox.game_retrieval._get_collection", return_value=MagicMock()), \
+             patch("app.soccer_agent.toolbox.game_retrieval.get_llm", return_value=MagicMock()), \
+             patch("app.soccer_agent.toolbox.game_retrieval._GameFinder"):
+            self.info_tool = GameInfoRetrievalTool()
+            self.history_tool = GameHistoryRetrievalTool()
+        # Only _finder is exercised by these tests; _llm/_collection are bypassed via patching.
+        for tool in (self.info_tool, self.history_tool):
+            object.__setattr__(tool, "_finder", MagicMock())
+
+    def test_info_fast_path_skips_finder_when_flag_and_game_id(self):
+        # Covers AE3 — flag true + active game_id resolves to the watched match without search.
+        active_id = "europe_uefa-champions-league/2023-2024/2023-11-29/real-madrid-vs-napoli"
+        with patch.object(self.info_tool, "_fetch_metadata", return_value='{"home_team":"Real Madrid"}'), \
+             patch.object(self.info_tool, "_answer_from_context", return_value="Real Madrid 1 - 0 Napoli.") as mock_answer:
+            content, artifact = self.info_tool._run(
+                "what is the score",
+                execution_agent_state={"additional_material": {"game_id": active_id}},
+                about_current_game=True,
+            )
+        self.info_tool._finder.find.assert_not_called()
+        assert content == "Real Madrid 1 - 0 Napoli."
+        assert artifact == active_id
+        mock_answer.assert_called_once()
+
+    def test_history_fast_path_resolves_from_active_id_without_search(self):
+        active_id = "england_epl/2014-2015/2015-02-21/chelsea-vs-burnley"
+        with patch.object(self.history_tool, "_history_from_game_id", return_value='["event"]') as mock_db:
+            context, game_id = self.history_tool._resolve_history_context(
+                query="what just happened",
+                last_artifact=None,
+                active_game_id=active_id,
+                about_current_game=True,
+            )
+        self.history_tool._finder.find.assert_not_called()
+        mock_db.assert_called_once_with(active_id)
+        assert game_id == active_id
+
+    def test_info_flag_true_but_no_game_id_falls_through_to_search(self):
+        # No active video → fast path cannot fire even with the flag set; tool searches.
+        self.info_tool._finder.find.return_value = _GameNotFound(reason="No match found.")
+        content, artifact = self.info_tool._run(
+            "what is the score",
+            execution_agent_state={},
+            about_current_game=True,
+        )
+        self.info_tool._finder.find.assert_called_once()
+        assert "No match found" in content
+        assert artifact is None
+
+    def test_info_flag_false_with_active_game_id_uses_search_not_fast_path(self):
+        # Flag false → fast path skipped; a different fixture from search is returned, not the active game.
+        from app.soccer_agent.toolbox.game_retrieval import ToolOutput
+        self.info_tool._finder.find.return_value = _GameFound(message="found", game_id="spain_laliga/other/match")
+        with patch.object(self.info_tool, "_fetch_metadata", return_value='{"home_team":"Other"}'), \
+             patch.object(self.info_tool, "_answer_from_context", return_value="Other match result."):
+            content, artifact = self.info_tool._run(
+                "Barcelona vs Sevilla 2019 result",
+                execution_agent_state={"game_id": "europe_uefa-champions-league/2023-2024/2023-11-29/real-madrid-vs-napoli"},
+                about_current_game=False,
+            )
+        self.info_tool._finder.find.assert_called_once()
+        assert artifact == "spain_laliga/other/match"
+
+
+class TestFlagRename:
+    def test_input_schemas_expose_about_current_game_not_old_name(self):
+        from app.soccer_agent.toolbox.game_retrieval import GameQueryInput, GameHistoryInput
+        for model in (GameQueryInput, GameHistoryInput):
+            assert "about_current_game" in model.model_fields
+            assert "about_current_match" not in model.model_fields

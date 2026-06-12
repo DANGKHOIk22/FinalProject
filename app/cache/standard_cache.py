@@ -113,7 +113,7 @@ class StandardCache:
                         return data
                     else:
                         result = func(*args, **kwargs)
-                        self._store_result(data, result, ttl, validatedModel)
+                        # self._store_result(data, result, ttl, validatedModel)
                         return result
 
                 return sync_wrapper

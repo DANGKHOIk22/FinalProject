@@ -28,11 +28,17 @@ class UnifiedPlanningOutput(BaseModel):
     need_call_tools: bool = Field(description="False only for greetings or when the answer is already in conversation history")
     planned_chains: Optional[List[PlannedChain]] = Field(default=None, description="List of planned chains, one per parallel worker")
 
+
+class GuardrailVerdict(BaseModel):
+    """Structured verdict from the soccer-topic guardrail classifier."""
+    is_soccer_related: bool = Field(description="True if the query is about soccer (players, teams, coaches, matches, leagues, statistics, or the live match the user is watching), or a follow-up within an ongoing soccer conversation. When uncertain, prefer True.")
+    reason: str = Field(description="Brief justification for the verdict")
+
 # Define the state structure for the agent
 class AgentState(CopilotKitState):
     """Parent state structure for the planning agent. It is derived from CopilotKitState, which provides 'messages' list to store the conversation history"""
     clarified_query: str
-    additional_material: Optional[List[str]]
+    additional_material: Optional[Dict[str, Any]]  # {"game_id": str | None, "image_id": List[str]}
     planning_output: Optional[UnifiedPlanningOutput]
     tool_chains: Optional[List[List[str]]]       # non-ambiguous chains unpacked from planned_chains
     sub_queries: Optional[List[str]]             # sub-queries for non-ambiguous chains
@@ -47,14 +53,17 @@ class AgentState(CopilotKitState):
     recent_msgs_for_qu: Optional[List[Any]]
     effective_memory: Optional[Any]
     time_context: Optional[str]
+    video_current_time: Optional[float] # Current HLS video playback position in seconds (synced from frontend)
+    is_off_topic: Optional[bool] # Set by the guardrail node: True = query is not soccer-related, hard-stop to refusal
 
 class WorkerState(CopilotKitState):
     """State for individual tool chain execution workers. It is derived from CopilotKitState, which provides 'messages' list to store the conversation history"""
     sub_query: str
-    additional_material: Optional[List[str]]
+    additional_material: Optional[Dict[str, Any]]  # {"game_id": str | None, "image_id": List[str]}
     tool_chain: List[str]
     tool_calls_history: List[ToolCall]
     tool_results_history: List[ToolMessage]
     worker_result: List[str] # To store the final result of the worker's execution, which will be aggregated into the parent agent's state
     last_tool_artifact: Optional[Any]
     time_context: Optional[str] # Current date and time passed from AgentState
+    video_current_time: Optional[float] # HLS playback position forwarded from AgentState

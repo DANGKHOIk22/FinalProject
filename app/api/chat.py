@@ -69,7 +69,7 @@ def get_copilotkit_router(agent: LangGraphAGUIAgent) -> APIRouter:
             request_agent.config = {}
         if "configurable" not in request_agent.config:
             request_agent.config["configurable"] = {}
-        request_agent.config["configurable"]["user_id"] = current_user.id
+        request_agent.config["configurable"]["user_id"] = str(current_user.id)
 
         async def event_generator():
             async for event in request_agent.run(input_data):

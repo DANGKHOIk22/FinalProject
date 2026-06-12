@@ -1,14 +1,18 @@
 import logging
 from typing import List, Optional
-from redisvl.query.filter import Tag
+from redisvl.query.filter import Tag, Num
 from langchain_redis import RedisConfig, RedisVectorStore
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-class SubQuerySemanticCache:
-    def __init__(self, threshold: float = 0.05, ttl: int = 60 * 60):
+_NO_VIDEO = "__none__"
+_VIDEO_TIME_WINDOW = 5.0  # seconds — cache hit valid only within this window before current_time
+
+
+class SemanticCache:
+    def __init__(self, index_name: str, threshold: float = 0.05, ttl: int = 60 * 60):
         self.threshold = threshold
         try:
             self.embeddings = GoogleGenerativeAIEmbeddings(
@@ -18,19 +22,21 @@ class SubQuerySemanticCache:
                 task_type="RETRIEVAL_QUERY"
             )
             config = RedisConfig(
-                index_name="semantic_cache",
+                index_name=index_name,
                 redis_url=settings.REDIS_URL,
                 distance_metric="COSINE",
                 embedding_dimensions=768,
                 metadata_schema=[
                     {"name": "response", "type": "text"},
-                    {"name": "material", "type": "tag"}
+                    {"name": "image_id", "type": "tag"},
+                    {"name": "game_id", "type": "tag"},
+                    {"name": "timestamp", "type": "numeric"},
                 ]
             )
             self.vector_store = RedisVectorStore(
-                config = config,
-                embeddings = self.embeddings,
-                ttl = ttl
+                config=config,
+                embeddings=self.embeddings,
+                ttl=ttl
             )
             self.is_active = True
             logger.info("✅ Redis Vector Store Cache initialized successfully.")
@@ -38,98 +44,137 @@ class SubQuerySemanticCache:
             logger.error(f"Failed to initialize RedisVectorStore: {e}")
             self.is_active = False
 
-    def check(self, query: str, material: Optional[List[str]] = None) -> str | None:
+    def check(
+        self,
+        query: str,
+        additional_material: Optional[dict] = None,
+        current_time: Optional[float] = None,
+    ) -> str | None:
         if not self.is_active or not query:
             return None
-            
-        # Format the material list to string to match on filter
-        material_str = ", ".join(material) if material else "None"
-        logger.debug(f"Checking Semantic cache for sub-query: '{query}' with material: '{material_str}'")
-        
+
+        additional_material = additional_material or {}
+        game_id = additional_material.get("game_id")
+        image_id = additional_material.get("image_id")
+
         try:
-            filter_condition = Tag("material") == material_str
+            if game_id is not None:
+                # Video path: filter by game_id + timestamp within [current_time - 5s, current_time]
+                ts = current_time if current_time is not None else 0.0
+                ts_min = max(0.0, ts - _VIDEO_TIME_WINDOW)
+                filter_condition = (
+                    (Tag("game_id") == game_id)
+                    & (Num("timestamp") >= ts_min)
+                    & (Num("timestamp") <= ts)
+                )
+                logger.debug(
+                    f"Checking Semantic cache | game_id='{game_id}' "
+                    f"window=[{ts_min:.1f}s, {ts:.1f}s] query='{query}'"
+                )
+            else:
+                # Non-video path: filter by image_id, exclude video-scoped entries
+                image_id_str = ", ".join(image_id) if image_id else "None"
+                filter_condition = (Tag("image_id") == image_id_str) & (Tag("game_id") == _NO_VIDEO)
+                logger.debug(f"Checking Semantic cache | image_id='{image_id_str}' query='{query}'")
+
             docs = self.vector_store.similarity_search_with_score(
                 query=query,
                 k=1,
                 filter=filter_condition,
-                distance_threshold = self.threshold
+                distance_threshold=self.threshold
             )
             if docs:
                 logger.info(f"🎯 Semantic cache HIT for query: '{query}'")
                 return docs[0][0].metadata.get("response")
-                    
+
             logger.debug(f"Semantic cache MISS for query: '{query}'")
         except Exception as e:
             logger.error(f"Semantic cache lookup error: {e}")
-            
+
         return None
 
     def cache(self, ttl: Optional[int] = None):
-        """
-        Decorator for semantic caching.
-        Works for async functions.
-        """
+        """Decorator for semantic caching. Works for async functions."""
         import functools
         def decorator(func):
             @functools.wraps(func)
             async def wrapper(*args, **kwargs):
-                # Try to find a 'query' or 'user_query' in args/kwargs
                 query = kwargs.get("user_query") or kwargs.get("query")
                 if not query and args:
-                    # Heuristic: first string arg is likely the query
                     for arg in args:
                         if isinstance(arg, str):
                             query = arg
                             break
-                
+
                 if not query:
                     return await func(*args, **kwargs)
 
-                # Check cache
                 cached_res = self.check(query)
                 if cached_res:
-                    # If the function returns a dict, try to parse JSON
                     if cached_res.startswith("{") and cached_res.endswith("}"):
                         try:
                             import json
                             return json.loads(cached_res)
-                        except:
+                        except Exception:
                             pass
                     return cached_res
 
-                # Execute
                 result = await func(*args, **kwargs)
 
-                # Store (serialize if dict)
                 res_to_store = result
                 if isinstance(result, dict):
                     import json
                     res_to_store = json.dumps(result)
-                
+
                 if res_to_store:
                     self.set(query, res_to_store)
-                
+
                 return result
             return wrapper
         return decorator
 
-    def set(self, query: str, response: str, material: Optional[List[str]] = None):
+    def set(
+        self,
+        query: str,
+        response: str,
+        additional_material: Optional[dict] = None,
+        current_time: Optional[float] = None,
+    ):
         if not self.is_active or not query or not response:
             return
-            
-        material_str = ", ".join(material) if material else "None"
+
+        additional_material = additional_material or {}
+        game_id = additional_material.get("game_id")
+        image_id = additional_material.get("image_id")
+
         try:
-            metadata = {
-                "response": response,
-                "material": material_str
-            }
-            self.vector_store.add_texts(
-                texts=[query],
-                metadatas=[metadata]
-            )
-            logger.debug(f"Saved worker result to Semantic cache for query: '{query}' with material: '{material_str}'")
+            if game_id is not None:
+                metadata = {
+                    "response": response,
+                    "image_id": "None",
+                    "game_id": game_id,
+                    "timestamp": current_time if current_time is not None else 0.0,
+                }
+                logger.debug(
+                    f"Saved to Semantic cache | game_id='{game_id}' "
+                    f"timestamp={metadata['timestamp']} query='{query}'"
+                )
+            else:
+                image_id_str = ", ".join(image_id) if image_id else "None"
+                metadata = {
+                    "response": response,
+                    "image_id": image_id_str,
+                    "game_id": _NO_VIDEO,
+                    "timestamp": 0.0,
+                }
+                logger.debug(f"Saved to Semantic cache | image_id='{image_id_str}' query='{query}'")
+
+            self.vector_store.add_texts(texts=[query], metadatas=[metadata])
         except Exception as e:
             logger.error(f"Semantic cache update error: {e}")
 
-# Global instance with proximity threshold
-semantic_cache = SubQuerySemanticCache(threshold=0.15, ttl=60 * 60)
+
+# Two isolated indexes — no cross-reads between worker results and context-retrieval payloads.
+# After deploying, flush the old shared index: redis-cli DEL semantic_cache
+sub_query_cache = SemanticCache(index_name="sub_query_cache", threshold=0.15, ttl=3600)
+context_cache   = SemanticCache(index_name="context_cache",   threshold=0.15, ttl=3600)

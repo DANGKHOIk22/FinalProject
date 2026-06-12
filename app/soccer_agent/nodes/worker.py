@@ -3,7 +3,7 @@ import asyncio
 from datetime import datetime
 from typing import List
 
-from langchain_core.messages import ToolMessage, AIMessage
+from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph, RunnableConfig
@@ -12,7 +12,7 @@ from langgraph.prebuilt import ToolNode
 
 from app.schema.soccer_agent.state import AgentState, WorkerState
 from app.soccer_agent.prompts.agent import get_execution_human_prompt, get_execution_system_prompt
-from app.cache.semantic_cache import semantic_cache
+from app.cache.semantic_cache import sub_query_cache
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,19 @@ class WorkerNodes:
 
     def trigger_workers(self, state: AgentState, config: RunnableConfig):
         """Map worker executions for each parallel tool chain."""
+        additional_material = state.get("additional_material") or {}
+        game_id = additional_material.get("game_id")
+        video_current_time = state.get("video_current_time")
+        if game_id is None:
+            import json
+            for ctx_item in state.get("copilotkit", {}).get("context", []):
+                raw = ctx_item.value if hasattr(ctx_item, "value") else ctx_item.get("value")
+                value = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else None
+                if isinstance(value, dict) and value.get("game_id"):
+                    game_id = value["game_id"]
+                    video_current_time = value.get("current_time", video_current_time)
+                    break
+        logger.info(f"[trigger_workers] game_id={game_id!r}, video_current_time={video_current_time!r}")
         # Read from top-level state — always freshly written by unified_planning_node.
         # Do NOT read from planning_output: it may be stale (from a previous turn's checkpointed state).
         need_call_tools = state.get("need_call_tools", True)
@@ -74,13 +87,16 @@ class WorkerNodes:
             worker_state = {
                 "messages": [], # Start with empty messages for the worker;
                 "sub_query": sub_query,
-                "additional_material": state.get("additional_material", []),
+                # Carry the resolved game_id inside additional_material so InjectedState
+                # tools (game_retrieval) and the cache can read it from the dict.
+                "additional_material": {**additional_material, "game_id": game_id},
                 "tool_chain": chain,
                 "tool_calls_history": [],
                 "tool_results_history": [],
                 "last_tool_artifact": None,
                 "parallel_results": [],
-                "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+                "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "video_current_time": video_current_time,
             }
             logger.info(f"🚀 Triggering worker {idx}: sub_query='{sub_query}', chain={chain}")
             sends.append(Send("worker_graph", worker_state))
@@ -126,21 +142,23 @@ class WorkerNodes:
         Iteratively execute the tool chain step by step using bind_tools with tool_choice.
         """
         sub_query = state.get("sub_query")
-        additional_material_list = state.get("additional_material", [])
+        additional_material = state.get("additional_material") or {}
+        image_id_list = additional_material.get("image_id") or []
         tool_chain = state["tool_chain"]
         tool_calls_history = state.get("tool_calls_history", [])
         tool_results_history = state.get("tool_results_history", [])
         messages = state.get("messages", [])
-
+        game_id = additional_material.get("game_id")
+        print(f"[Execution Node] Starting execution for sub_query='{sub_query}', tool_chain={tool_chain}, game_id={game_id}, image_id_list={image_id_list}")
         logger.info(f"🔧 Running TOOL EXECUTION STEP: Step {len(tool_calls_history)}")
-        
+
         last_artifact = state.get("last_tool_artifact")
         last_tool_message = None
         if messages and isinstance(messages[-1], ToolMessage):
             last_tool_message = messages[-1]
             last_artifact = last_tool_message.artifact if hasattr(last_tool_message, 'artifact') else None
 
-        additional_material_str = ", ".join(additional_material_list) if additional_material_list else "None"
+        additional_material_str = ", ".join(image_id_list) if image_id_list else "None"
         system_prompt = get_execution_system_prompt()
         if not messages:
             execution_prompt_template = get_execution_human_prompt()
@@ -148,13 +166,15 @@ class WorkerNodes:
                 sub_query=sub_query,
                 additional_material=additional_material_str,
                 tool_chain=" -> ".join(tool_chain) if tool_chain else "No tools needed",
-                time_context=state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+                time_context=state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+                game_id=str(game_id) if game_id else "None",
             )
             messages = [execution_prompt]
         
         logger.info(f"Tool chain to execute: {' -> '.join(tool_chain) if tool_chain else 'No tools needed'}")
 
         response: AIMessage = None  # type: ignore
+        execution_failed = False
         try:
             response = await self.execution_llm_with_tools.ainvoke([system_prompt] + messages, config=config) # type: ignore
         except Exception as e:
@@ -162,7 +182,8 @@ class WorkerNodes:
             logger.error(error_msg)
             logger.info("Stopping execution due to error.")
             response = AIMessage(content="The execution has been stopped due to an error. Please try again later.")
-        
+            execution_failed = True
+
         worker_result = None
         if not response.tool_calls:
             logger.info("✅ TOOL EXECUTION STEP COMPLETED FOR CHAIN")
@@ -174,9 +195,16 @@ class WorkerNodes:
                 worker_result = response.text
             else:
                 worker_result = "Worker stopped due to execution error."
+                execution_failed = True
 
-            if sub_query:
-                semantic_cache.set(sub_query, worker_result, additional_material_list)
+            # Only cache successful tool-chain results — never cache failures.
+            if sub_query and worker_result and not execution_failed:
+                sub_query_cache.set(
+                    sub_query,
+                    worker_result,
+                    additional_material,
+                    current_time=state.get("video_current_time"),
+                )
 
             for message in messages:
                 if isinstance(message, AIMessage) and message.tool_calls:
@@ -185,8 +213,8 @@ class WorkerNodes:
                     tool_results_history.append(message)
 
         return {
-            "messages": messages + [response] if not state.get("messages") else [response], 
-            "additional_material": additional_material_list,
+            "messages": messages + [response] if not state.get("messages") else [response],
+            "additional_material": additional_material,
             "tool_calls_history": tool_calls_history,
             "tool_results_history": tool_results_history,
             "tool_chain": tool_chain,
@@ -200,8 +228,12 @@ class WorkerNodes:
         if not sub_query:
             return {}
             
-        additional_material = state.get("additional_material", [])
-        cached_result = semantic_cache.check(sub_query, additional_material)
+        additional_material = state.get("additional_material") or {}
+        cached_result = sub_query_cache.check(
+            sub_query,
+            additional_material,
+            current_time=state.get("video_current_time"),
+        )
         
         if cached_result:
             logger.info("⚡ Skipping worker execution due to cache hit (>0.9 similarity).")
