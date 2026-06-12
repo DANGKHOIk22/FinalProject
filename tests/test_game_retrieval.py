@@ -472,16 +472,17 @@ class TestAboutCurrentGameFastPath:
 
     def test_info_fast_path_skips_finder_when_flag_and_game_id(self):
         # Covers AE3 — flag true + active game_id resolves to the watched match without search.
+        active_id = "europe_uefa-champions-league/2023-2024/2023-11-29/real-madrid-vs-napoli"
         with patch.object(self.info_tool, "_fetch_metadata", return_value='{"home_team":"Real Madrid"}'), \
              patch.object(self.info_tool, "_answer_from_context", return_value="Real Madrid 1 - 0 Napoli.") as mock_answer:
             content, artifact = self.info_tool._run(
                 "what is the score",
-                execution_agent_state={"game_id": "europe_uefa-champions-league/2023-2024/2023-11-29/real-madrid-vs-napoli"},
+                execution_agent_state={"additional_material": {"game_id": active_id}},
                 about_current_game=True,
             )
         self.info_tool._finder.find.assert_not_called()
         assert content == "Real Madrid 1 - 0 Napoli."
-        assert artifact == "europe_uefa-champions-league/2023-2024/2023-11-29/real-madrid-vs-napoli"
+        assert artifact == active_id
         mock_answer.assert_called_once()
 
     def test_history_fast_path_resolves_from_active_id_without_search(self):

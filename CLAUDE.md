@@ -34,8 +34,12 @@ uv run pytest unit_test/tools/test_video_streaming.py
 
 ```
 User Query
-  → get_history          (PostgreSQL conversation history)    ─┐ parallel
-  → context_retrieval    (Qdrant case bank, top-3 positive)   ─┘
+  → get_history          (PostgreSQL conversation history)    ─┐
+  → context_retrieval    (Qdrant case bank, top-3 positive)   ─┤ parallel
+  → guardrail_classify   (soccer-topic classifier, fail-open) ─┘
+  → guardrail_gate       (fan-in join)
+      ├─ is_off_topic=True  → guardrail_refusal → save_memory → END
+      └─ is_off_topic=False → unified_planning
   → unified_planning     (pronoun resolution + chain decomposition → UnifiedPlanningOutput)
       ├─ need_call_tools=False → aggregator (direct response from history)
       └─ need_call_tools=True  → worker_graph (LangGraph Send → N parallel worker subgraphs)
@@ -49,6 +53,8 @@ User Query
 ```
 
 **Critical**: Workers and aggregator always use `clarified_query`, never `user_query`. Set by `unified_planning` after pronoun resolution.
+
+**Guardrail**: Runs in parallel with `get_history` / `context_retrieval`. Classifies the query as soccer-related using a fast LLM (`guardrail` role in `llm_config.yaml`). Fails open on any error or timeout (`GUARDRAIL_TIMEOUT_SECONDS = 10.0`). Off-topic queries get a canned refusal (`GUARDRAIL_REFUSAL_MESSAGE`) and skip planning/workers/aggregator entirely.
 
 **`unified_planning` reads `game_id`** from `additional_material` dict in state, or from the CopilotKit context blob (JSON under `state.copilotkit.context`) if not set on state directly. `video_current_time` is a top-level `AgentState` field (float, seconds). All planned chains are dispatched regardless of confidence — the `PLANNING_CONFIDENCE_THRESHOLD` ambiguity check is currently disabled (commented out in `unified_planning.py`).
 
@@ -79,10 +85,9 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 | `entity_augment` | `entity_augment.py` | Search + RAG for soccer entities (players, teams, coaches) |
 | `game_history_retrieval` | `game_retrieval.py` | Historical match data lookup |
 | `game_info_retrieval` | `game_retrieval.py` | Specific match info lookup |
-| `segment` | `segment.py` | Image segmentation via GroundingDINO endpoint |
+| `entity_recognition` | `entity_recognition.py` | Player recognition via face recognition (InsightFace) + Qdrant |
 | `commentary_generation` | `commentary_generation.py` | Visual commentary from frame analysis |
 | `web_news_search` | `web_search.py` | Tavily web search for post-2024 or news queries |
-| ~~`entity_recognition`~~ | `entity_recognition.py` | **Commented out** — player recognition via face recognition + Qdrant |
 
 ## Storage Layer
 
@@ -130,6 +135,7 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 | `app/soccer_agent/nodes/conversation_history.py` | Loads PostgreSQL chat history into state |
 | `app/soccer_agent/nodes/context_retrieval.py` | Qdrant case bank few-shot retrieval |
 | `app/soccer_agent/nodes/memory_saving.py` | Async background save to PostgreSQL + Redis |
+| `app/soccer_agent/nodes/guardrail.py` | `GuardrailNode` — soccer-topic classifier; `classify_node` (parallel), `gate_node` (fan-in), `gate_router`, `refusal_node` |
 | `app/schema/soccer_agent/state.py` | `AgentState`, `WorkerState`, `UnifiedPlanningOutput`, `PlannedChain` |
 | `app/soccer_agent/factory/llm_config.yaml` | **Authoritative** LiteLLM router config — actual model names |
 | `app/soccer_agent/prompts/agent.py` | Planning, execution, and aggregator prompt templates |
@@ -250,6 +256,9 @@ POST /hls/sessions
 - `SESSION_MEMORY_RECENT_KEEP = 5` — messages kept verbatim post-compression
 - `PLANNING_CONFIDENCE_THRESHOLD = 0.5` — disabled; all chains dispatch regardless of confidence
 - `QDRANT_SEARCH_SCORE_THRESHOLD = 0.5`
+- `GUARDRAIL_RECENT_TURNS = 4` — trailing messages the guardrail classifier sees for context
+- `GUARDRAIL_TIMEOUT_SECONDS = 10.0` — fail-open ceiling for the classifier
+- `GUARDRAIL_REFUSAL_MESSAGE` — canned off-topic refusal string
 
 ## GitNexus — Code Intelligence
 

@@ -72,7 +72,7 @@ async def test_execution_node_returns_text(worker_nodes, mock_execution_llm):
     }
     config = {}
     
-    with patch('app.soccer_agent.nodes.worker.semantic_cache') as mock_cache:
+    with patch('app.soccer_agent.nodes.worker.sub_query_cache') as mock_cache:
         result = await worker_nodes._execution_node(state, config)
         
         assert "worker_result" in result
