@@ -155,12 +155,14 @@ class WorkerNodes:
         logger.info(f"Tool chain to execute: {' -> '.join(tool_chain) if tool_chain else 'No tools needed'}")
 
         response: AIMessage = None  # type: ignore
+        execution_error = False
         try:
             response = await self.execution_llm_with_tools.ainvoke([system_prompt] + messages, config=config) # type: ignore
         except Exception as e:
             error_msg = f"Error in tool execution agent: {str(e)}"
             logger.error(error_msg)
             logger.info("Stopping execution due to error.")
+            execution_error = True
             response = AIMessage(content="The execution has been stopped due to an error. Please try again later.")
         
         worker_result = None
@@ -168,15 +170,19 @@ class WorkerNodes:
             logger.info("✅ TOOL EXECUTION STEP COMPLETED FOR CHAIN")
             logger.info("="*70)
 
-            if last_tool_message is not None and (last_tool_message.name == "entity_augment" or last_tool_message.name == "game_history_retrieval" or last_tool_message.name == "game_info_retrieval"):
+            if last_tool_message is not None and (last_tool_message.name == "entity_augment" or last_tool_message.name == "game_history_retrieval" or last_tool_message.name == "game_info_retrieval" or last_tool_message.name == "commentary_generation"):
                 worker_result = last_tool_message.content
             elif response.text:
                 worker_result = response.text
             else:
                 worker_result = "Worker stopped due to execution error."
+                execution_error = True
 
-            if sub_query:
-                semantic_cache.set(sub_query, worker_result, additional_material_list)
+            # Never cache error responses; run sync cache I/O off the event loop
+            if sub_query and not execution_error:
+                await asyncio.to_thread(
+                    semantic_cache.set, sub_query, worker_result, additional_material_list
+                )
 
             for message in messages:
                 if isinstance(message, AIMessage) and message.tool_calls:
@@ -204,7 +210,7 @@ class WorkerNodes:
         cached_result = semantic_cache.check(sub_query, additional_material)
         
         if cached_result:
-            logger.info("⚡ Skipping worker execution due to cache hit (>0.9 similarity).")
+            logger.info(f"⚡ Skipping worker execution due to cache hit (cosine distance <= {semantic_cache.threshold}).")
             return {
                 "worker_result": [cached_result]
             }

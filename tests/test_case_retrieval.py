@@ -16,31 +16,34 @@ def context_node(mock_retriever):
 
 
 @pytest.mark.asyncio
-@patch('app.soccer_agent.nodes.context_retrieval.semantic_cache')
+@patch('app.soccer_agent.nodes.context_retrieval.case_bank_cache')
 @patch('app.soccer_agent.nodes.context_retrieval.long_term_memory_manager')
-async def test_context_retrieval_cache_hit(mock_ltm, mock_sem_cache, context_node):
-    """When semantic cache hits, return cached result directly."""
-    import json
-    cached = {"retrieved_cases": "cached_case", "long_term_context": "cached_lt"}
-    mock_sem_cache.check.return_value = json.dumps(cached)
+async def test_context_retrieval_case_cache_hit(mock_ltm, mock_cb_cache, context_node):
+    """When case bank cache hits, skip the retriever but still fetch long-term memory."""
+    mock_cb_cache.get.return_value = "cached_case"
+    mock_ltm._get_embedding = AsyncMock(return_value=[0.1] * 768)
+    mock_ltm.retrieve_memory = AsyncMock(return_value=[])
 
     state = {"messages": [HumanMessage(content="test query")], "user_query": "test query", "additional_material": []}
     config = {"metadata": {"thread_id": "t1"}}
 
     result = await context_node.retrieve_context_node(state, config)
 
-    assert result == cached
-    mock_sem_cache.check.assert_called_once_with("test query")
-    # Should NOT call retriever or LTM on cache hit
+    assert result["retrieved_cases"] == "cached_case"
+    mock_cb_cache.get.assert_called_once_with("test query", False)
+    # Should NOT call retriever or re-save cache on cache hit
     context_node.case_bank_retriever.retrieve.assert_not_called()
+    mock_cb_cache.set.assert_not_called()
+    # Long-term memory is always fetched fresh (per-user data, never cached)
+    mock_ltm.retrieve_memory.assert_called_once()
 
 
 @pytest.mark.asyncio
-@patch('app.soccer_agent.nodes.context_retrieval.semantic_cache')
+@patch('app.soccer_agent.nodes.context_retrieval.case_bank_cache')
 @patch('app.soccer_agent.nodes.context_retrieval.long_term_memory_manager')
-async def test_context_retrieval_cache_miss(mock_ltm, mock_sem_cache, context_node):
-    """When semantic cache misses, fetch from case bank + long-term memory."""
-    mock_sem_cache.check.return_value = None
+async def test_context_retrieval_case_cache_miss(mock_ltm, mock_cb_cache, context_node):
+    """When case bank cache misses, fetch from retriever and save to cache."""
+    mock_cb_cache.get.return_value = None
     mock_ltm._get_embedding = AsyncMock(return_value=[0.1] * 768)
     mock_ltm.retrieve_memory = AsyncMock(return_value=[])
 
@@ -51,6 +54,28 @@ async def test_context_retrieval_cache_miss(mock_ltm, mock_sem_cache, context_no
 
     result = await context_node.retrieve_context_node(state, config)
 
-    assert "retrieved_cases" in result
     assert result["retrieved_cases"] == "example_new"
-    context_node.case_bank_retriever.retrieve.assert_called_once()
+    context_node.case_bank_retriever.retrieve.assert_called_once_with("test query", False)
+    mock_cb_cache.set.assert_called_once_with("test query", False, "example_new")
+
+
+@pytest.mark.asyncio
+@patch('app.soccer_agent.nodes.context_retrieval.case_bank_cache')
+@patch('app.soccer_agent.nodes.context_retrieval.long_term_memory_manager')
+async def test_context_retrieval_has_media_passed_to_cache(mock_ltm, mock_cb_cache, context_node):
+    """has_media must be part of both cache lookup and save."""
+    mock_cb_cache.get.return_value = None
+    mock_ltm._get_embedding = AsyncMock(return_value=[0.1] * 768)
+    mock_ltm.retrieve_memory = AsyncMock(return_value=[])
+
+    state = {
+        "messages": [HumanMessage(content="test query")],
+        "user_query": "test query",
+        "additional_material": ["http://example.com/image.png"],
+    }
+    config = {"metadata": {"thread_id": "t1"}}
+
+    await context_node.retrieve_context_node(state, config)
+
+    mock_cb_cache.get.assert_called_once_with("test query", True)
+    mock_cb_cache.set.assert_called_once_with("test query", True, "example1\nexample2")

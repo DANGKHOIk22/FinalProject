@@ -1,6 +1,5 @@
 import logging
 import asyncio
-import json
 from datetime import datetime
 import uuid
 from langgraph.graph.state import RunnableConfig
@@ -10,7 +9,6 @@ from app.schema.soccer_agent.state import AgentState
 from app.soccer_agent.memory.long_term_memory import long_term_memory_manager
 from app.soccer_agent.case_bank.retriever import CaseBankRetriever
 from app.soccer_agent.case_bank.cache import case_bank_cache
-from app.cache.semantic_cache import semantic_cache
 
 logger = logging.getLogger(__name__)
 
@@ -34,17 +32,6 @@ class ContextRetrievalNode:
         if not user_query:
             return {"long_term_context": "", "retrieved_cases": ""}
 
-        # --- SEMANTIC CACHE CHECK (Internal) ---
-        try:
-            cached_res = semantic_cache.check(user_query)
-            if cached_res:
-                logger.info(f"🎯 [ContextRetrieval] Semantic Cache HIT for: '{user_query[:50]}'")
-                return json.loads(cached_res)
-        except Exception as e:
-            logger.warning(f"Semantic cache error: {e}") # if there is an error in tooo
-        
-        logger.info(f"🔍 [ContextRetrieval] Cache MISS. Searching DBs for: '{user_query[:50]}...'")
-
         # 2. Get Embedding ONCE
         try:
             query_embedding = await long_term_memory_manager._get_embedding(user_query)
@@ -53,10 +40,23 @@ class ContextRetrievalNode:
             query_embedding = None
 
         # 3. Parallel Retrieval
+        # Only the case-bank examples are cached (global knowledge, keyed by
+        # query + has_media). Long-term memory is per-user and must NOT be
+        # cached without user scoping — see cache-layer fix 2026-06-12.
         async def fetch_cases():
             try:
-                # Case Bank already has its own internal cache check
-                return await self.case_bank_retriever.retrieve(user_query, has_media)
+                cached_cases = await asyncio.to_thread(
+                    case_bank_cache.get, user_query, has_media
+                )
+                if cached_cases:
+                    return cached_cases
+
+                cases = await self.case_bank_retriever.retrieve(user_query, has_media)
+                if cases:
+                    await asyncio.to_thread(
+                        case_bank_cache.set, user_query, has_media, cases
+                    )
+                return cases
             except Exception as e:
                 logger.error(f"Error fetching cases: {e}")
                 return ""
@@ -92,15 +92,7 @@ class ContextRetrievalNode:
             logger.error(f"Parallel retrieval failed: {e}")
             cases_text, long_term_text = "", ""
 
-        result = {
+        return {
             "retrieved_cases": cases_text or "No examples available.",
             "long_term_context": long_term_text or "No relevant long-term memory found."
         }
-
-        # --- SEMANTIC CACHE SET (Internal) ---
-        try:
-            semantic_cache.set(user_query, json.dumps(result))
-        except Exception as e:
-            logger.warning(f"Failed to update semantic cache: {e}")
-
-        return result

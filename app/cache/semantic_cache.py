@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from typing import List, Optional
 from redisvl.query.filter import Tag
@@ -6,6 +7,18 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _material_tag(material: Optional[List[str]]) -> str:
+    """Build a stable tag value for a material list.
+
+    Hashed because RediSearch splits tag values on commas (media URLs often
+    contain them) and the tag must not depend on list order.
+    """
+    if not material:
+        return "None"
+    return hashlib.md5("|".join(sorted(material)).encode()).hexdigest()
+
 
 class SubQuerySemanticCache:
     def __init__(self, threshold: float = 0.05, ttl: int = 60 * 60):
@@ -42,8 +55,8 @@ class SubQuerySemanticCache:
         if not self.is_active or not query:
             return None
             
-        # Format the material list to string to match on filter
-        material_str = ", ".join(material) if material else "None"
+        # Format the material list to a stable tag to match on filter
+        material_str = _material_tag(material)
         logger.debug(f"Checking Semantic cache for sub-query: '{query}' with material: '{material_str}'")
         
         try:
@@ -64,60 +77,11 @@ class SubQuerySemanticCache:
             
         return None
 
-    def cache(self, ttl: Optional[int] = None):
-        """
-        Decorator for semantic caching.
-        Works for async functions.
-        """
-        import functools
-        def decorator(func):
-            @functools.wraps(func)
-            async def wrapper(*args, **kwargs):
-                # Try to find a 'query' or 'user_query' in args/kwargs
-                query = kwargs.get("user_query") or kwargs.get("query")
-                if not query and args:
-                    # Heuristic: first string arg is likely the query
-                    for arg in args:
-                        if isinstance(arg, str):
-                            query = arg
-                            break
-                
-                if not query:
-                    return await func(*args, **kwargs)
-
-                # Check cache
-                cached_res = self.check(query)
-                if cached_res:
-                    # If the function returns a dict, try to parse JSON
-                    if cached_res.startswith("{") and cached_res.endswith("}"):
-                        try:
-                            import json
-                            return json.loads(cached_res)
-                        except:
-                            pass
-                    return cached_res
-
-                # Execute
-                result = await func(*args, **kwargs)
-
-                # Store (serialize if dict)
-                res_to_store = result
-                if isinstance(result, dict):
-                    import json
-                    res_to_store = json.dumps(result)
-                
-                if res_to_store:
-                    self.set(query, res_to_store)
-                
-                return result
-            return wrapper
-        return decorator
-
     def set(self, query: str, response: str, material: Optional[List[str]] = None):
         if not self.is_active or not query or not response:
             return
-            
-        material_str = ", ".join(material) if material else "None"
+
+        material_str = _material_tag(material)
         try:
             metadata = {
                 "response": response,
