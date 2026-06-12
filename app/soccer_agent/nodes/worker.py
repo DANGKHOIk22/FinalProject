@@ -198,12 +198,14 @@ class WorkerNodes:
                 execution_failed = True
 
             # Only cache successful tool-chain results — never cache failures.
+            # set() does sync embedding + Redis I/O, so run it off the event loop.
             if sub_query and worker_result and not execution_failed:
-                sub_query_cache.set(
+                await asyncio.to_thread(
+                    sub_query_cache.set,
                     sub_query,
                     worker_result,
                     additional_material,
-                    current_time=state.get("video_current_time"),
+                    state.get("video_current_time"),
                 )
 
             for message in messages:
@@ -236,7 +238,7 @@ class WorkerNodes:
         )
         
         if cached_result:
-            logger.info("⚡ Skipping worker execution due to cache hit (>0.9 similarity).")
+            logger.info(f"⚡ Skipping worker execution due to cache hit (cosine distance <= {sub_query_cache.threshold}).")
             return {
                 "worker_result": [cached_result]
             }
