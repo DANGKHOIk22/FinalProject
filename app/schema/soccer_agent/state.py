@@ -44,6 +44,7 @@ class AgentState(CopilotKitState):
     sub_queries: Optional[List[str]]             # sub-queries for non-ambiguous chains
     need_call_tools: Optional[bool]              # False = skip all workers
     pending_clarifications: Optional[List[str]]  # clarifying questions from ambiguous chains
+    planning_error: Optional[str]                # set when planning output parsing fails — aggregator surfaces a system error
     parallel_results: Annotated[List[str], _reset_or_add]
     tool_calls_history: Annotated[List[ToolCall], _reset_or_add]
     tool_results_history: Annotated[List[ToolMessage], _reset_or_add]

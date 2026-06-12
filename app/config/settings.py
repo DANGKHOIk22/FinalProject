@@ -14,10 +14,6 @@ _ENV_PATH = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(_ENV_PATH, override=True)
 
 
-def _env(key: str, default: Optional[str] = None) -> Optional[str]:
-    val = os.getenv(key, default)
-    return val.strip() if val is not None else None
-
 class Settings:
     """Application settings loaded from environment variables."""
     

@@ -183,15 +183,26 @@ class EntityRecognitionTool(BaseTool):
         content_str = response.choices[0].message.content.strip()
         content_str = _re.sub(r"^```[a-z]*\n?", "", content_str)
         content_str = _re.sub(r"\n?```$", "", content_str)
-        raw_items = json.loads(content_str.strip())
+        # VLM output is free text — a refusal or error payload must read as
+        # "nothing localized", not escalate into a caching-eligible error string.
+        try:
+            raw_items = json.loads(content_str.strip())
+        except (json.JSONDecodeError, ValueError):
+            logger.warning(f"[entity_recognition] Qwen-VL returned non-JSON: {content_str[:200]!r}")
+            return None
         if not isinstance(raw_items, list):
             raw_items = [raw_items]
 
-        if not raw_items:
+        if not raw_items or not isinstance(raw_items[0], dict):
             return None
 
         bbox = raw_items[0].get("bbox_2d")
-        if not bbox or len(bbox) != 4:
+        if (
+            not isinstance(bbox, list)
+            or len(bbox) != 4
+            or not all(isinstance(v, (int, float)) for v in bbox)
+        ):
+            logger.warning(f"[entity_recognition] Qwen-VL returned invalid bbox: {bbox!r}")
             return None
 
         # Qwen-VL normalises coordinates to 0-1000

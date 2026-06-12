@@ -18,10 +18,6 @@ MODEL_TEMPERATURE = 1.0
 MODEL_TOP_P = 0.95
 MAX_COMPLETION_TOKENS = 8000
 
-# Grounding DINO model for image segmentation
-MODEL_SEGMENT = "IDEA-Research/grounding-dino-base"
-SEGMENT_IMAGE_FOLDER = os.path.join(TEMPORARY_DIR, "segmented_images")
-
 # Qdrant Configuration
 QDRANT_SEARCH_SCORE_THRESHOLD = 0.5
 

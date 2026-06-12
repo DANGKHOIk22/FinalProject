@@ -311,6 +311,18 @@ class GameInfoRetrievalTool(BaseTool):
         logger.info(f"✅ game_info_retrieval | answer={response.answer[:200]}")
         return response.answer
 
+    async def _answer_from_context_async(self, query: str, context: str, time_context: Optional[str]) -> str:
+        # Async twin of _answer_from_context — a sync .invoke() here would block
+        # the event loop for the whole LLM call and serialize parallel workers.
+        llm_structured = self._llm.with_structured_output(ToolOutput)
+        response: ToolOutput = await (get_game_info_retrieval_prompt_template() | llm_structured).ainvoke({
+            "query": query,
+            "context": context,
+            "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
+        })  # type: ignore
+        logger.info(f"✅ game_info_retrieval | answer={response.answer[:200]}")
+        return response.answer
+
     def _run(
         self,
         query: str,
@@ -372,7 +384,7 @@ class GameInfoRetrievalTool(BaseTool):
             # Fast path: sub-query is about the currently-playing video — skip search entirely.
             if about_current_game and game_id:
                 logger.info(f"⚡ game_info_retrieval (async) fast path — active video game_id={game_id}")
-                return self._answer_from_context(query, self._fetch_metadata(game_id), time_context), game_id
+                return await self._answer_from_context_async(query, self._fetch_metadata(game_id), time_context), game_id
 
             logger.info(f"🔎 GameInfoRetrieval (async) searching: {query}")
             result = self._finder.find(query, time_context)
@@ -388,7 +400,7 @@ class GameInfoRetrievalTool(BaseTool):
                 # Safety net: an active video is a strong signal — prefer it over a web search.
                 if game_id:
                     logger.info(f"↩️ game_info_retrieval (async) search miss — falling back to active video game_id={game_id}")
-                    return self._answer_from_context(query, self._fetch_metadata(game_id), time_context), game_id
+                    return await self._answer_from_context_async(query, self._fetch_metadata(game_id), time_context), game_id
                 logger.info(f"⚡ game_info_retrieval DB miss — falling back to Tavily news search")
                 tavily_answer, news = await _get_tavily().search_news(
                     f"{query} match result score lineup",
@@ -405,7 +417,7 @@ class GameInfoRetrievalTool(BaseTool):
 
             # _GameFound
             logger.info(f"📄 Fetching metadata for game_id: {result.game_id}")
-            return self._answer_from_context(query, self._fetch_metadata(result.game_id), time_context), result.game_id
+            return await self._answer_from_context_async(query, self._fetch_metadata(result.game_id), time_context), result.game_id
 
         except Exception as e:
             error_msg = f"Error in game_info_retrieval: {str(e)}"
@@ -612,7 +624,8 @@ class GameHistoryRetrievalTool(BaseTool):
             video_position = self._format_position(active_vct) if (on_active and active_vct is not None) else "None"
 
             llm_structured = self._llm.with_structured_output(ToolOutput)
-            response: ToolOutput = (get_game_history_retrieval_prompt_template() | llm_structured).invoke({
+            # ainvoke — a sync .invoke() here blocks the event loop for the whole LLM call
+            response: ToolOutput = await (get_game_history_retrieval_prompt_template() | llm_structured).ainvoke({
                 "query": query,
                 "context": history_context,
                 "time_context": time_context or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),

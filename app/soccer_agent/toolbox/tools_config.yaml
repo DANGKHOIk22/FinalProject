@@ -73,16 +73,6 @@ tools:
         The query MUST be in English regardless of the user's input language.
         Example: "goals scored in Man United vs Liverpool 2024-04-07".
 
-  choice_selection:
-    description: >
-      Select the single best option from a list of candidates given a goal or criterion.
-      Used internally by other tools; rarely invoked directly by the planning LLM.
-    inputs:
-      goal: >
-        The selection objective — what property or fit the best option must satisfy.
-      choices: >
-        List of candidate items to choose from.
-
   commentary_generation:
     description: >
       Given a soccer match video clip, this tool generates an approximately 500-word

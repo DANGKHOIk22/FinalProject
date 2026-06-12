@@ -62,10 +62,15 @@ class SoccerAgent:
             "entity_augment": entity_augment(),
             "game_history_retrieval": game_history_retrieval(),
             "game_info_retrieval": game_info_retrieval(),
-            "entity_recognition": entity_recognition(),
             "commentary_generation": commentary_generation(),
             "web_news_search": web_news_search(),
         }
+        # entity_recognition probes its Azure endpoint at construction time —
+        # an unreachable endpoint must disable this one tool, not the whole agent.
+        try:
+            self.tool_registry["entity_recognition"] = entity_recognition()
+        except Exception as e:
+            logger.warning(f"⚠️ entity_recognition unavailable at startup, tool disabled: {e}")
         self.tools = list(self.tool_registry.values())
         self.execution_llm_with_tools = self.execution_llm.bind_tools(self.tools) 
         
