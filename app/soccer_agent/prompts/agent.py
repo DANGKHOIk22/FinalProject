@@ -176,15 +176,24 @@ DB covers: EPL, Bundesliga, Champions League, Serie A, Ligue 1, La Liga — seas
 """),
     HumanMessagePromptTemplate.from_template("""
 ## INPUT DATA:
-- **User Query**: (The user query and any attached media are provided in the next message. additional_material contains the ids of any attached images or videos.)
-- **Additional Material (images/video)**: {additional_material}
+### TOOLBOX:
+- **Available Tools**:
+{toolbox_descriptions}             
+### User Query
+- **User Query**: (The user query and any attached media are provided in the next message.)
+- **Additional Material (images/video)**:
+  - Attached Image IDs: {image_ids}
+  - Attached Video ID: {video_id}
+
+### Match user is watching
+- The soccer match id (game_id) the user is currently watching (if any): {game_id}
+- The video is played at the Time: {video_current_time}s       
+
+### Other Context:                                                      
 - **Conversation History**: {conversation_history}
 - **Long-term Memory (saved entity knowledge)**: {long_term_context}
-- **Video Context (live match the user is watching)**: {video_context}
-- **Available Tools**:
-{toolbox_descriptions}
-- **Time Context**: {time_context}
 - **Retrieved Cases**: {retrieved_cases}
+- The current date and time: {time_context}
                                              
 ## OUTPUT FORMAT:
 {format_instructions}
@@ -229,10 +238,11 @@ def get_execution_human_prompt() -> HumanMessagePromptTemplate:
         """
 # Input:
 1. Your specific sub-query to focus on: '{sub_query}'
-2. Additional material: {additional_material}
-3. Suggested tool chain for your sub-query: '{tool_chain}'
-4. Time context: {time_context}
-5. Current video context: game_id={game_id}.
+2. Image ids are uploaded from the user for this query: {image_ids}
+3. Video ID are uploaded from the user for this query: {video_id}
+4. Suggested tool chain for your sub-query: '{tool_chain}'
+5. The current date and time: {time_context}
+6. The current soccer match id (game_id) the user is currently watching: {game_id}.
    - When game_id is not "None", a video is currently playing. The slug encodes the match as `{{league}}/{{season}}/{{date}}/{{home}}-vs-{{away}}`.
 
 # Next Step

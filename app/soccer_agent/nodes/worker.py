@@ -150,13 +150,13 @@ class WorkerNodes:
             last_tool_message = messages[-1]
             last_artifact = last_tool_message.artifact if hasattr(last_tool_message, 'artifact') else None
 
-        additional_material_str = ", ".join(image_id_list) if image_id_list else "None"
         system_prompt = get_execution_system_prompt()
         if not messages:
             execution_prompt_template = get_execution_human_prompt()
             execution_prompt = execution_prompt_template.format(
                 sub_query=sub_query,
-                additional_material=additional_material_str,
+                image_ids=", ".join(image_id_list) if image_id_list else "None",
+                video_id= additional_material.get("video_id") or "None",
                 tool_chain=" -> ".join(tool_chain) if tool_chain else "No tools needed",
                 time_context=state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
                 game_id=str(game_id) if game_id else "None",

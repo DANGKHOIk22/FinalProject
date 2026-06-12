@@ -29,38 +29,37 @@ class UnifiedPlanningNode:
         user_query = str(messages[-1].text) if messages else ""
         # Copy — never mutate the dict held by the graph state
         additional_material = dict(state.get("additional_material") or {})
+        conversation_history = state.get("conversation_history") or "No previous conversation."
+        retrieved_cases = state.get("retrieved_cases") or "No examples available."
 
         # Extract additional material UUIDs from messages if media registry is available
         media_registry = config.get("configurable", {}).get("media_registry")
         if media_registry and messages:
-            extracted_uuids = media_registry.extract_uuids_from_message(messages[-1])
-            if extracted_uuids:
-                existing = additional_material.get("image_id") or []
-                new_ids = [u for u in extracted_uuids if u not in existing]
-                if new_ids:
-                    additional_material["image_id"] = existing + new_ids
-                    logger.info(f"Extracted SAS URL UUIDs from message: {new_ids}")
+            extracted_media = media_registry.extract_uuids_from_message(messages[-1])
+            
+            # Process image_id list
+            extracted_images = extracted_media.get("image_ids") or []
+            if extracted_images:
+                existing_images = additional_material.get("image_id") or []
+                new_images = [u for u in extracted_images if u not in existing_images]
+                if new_images:
+                    additional_material["image_id"] = existing_images + new_images
+                    logger.info(f"Extracted SAS URL image UUIDs from message: {new_images}")
+            else:
+                additional_material["image_id"] = []
 
-        conversation_history = state.get("conversation_history") or "No previous conversation."
-        retrieved_cases = state.get("retrieved_cases") or "No examples available."
+            # Process video_id (we support single video upload)
+            extracted_video = extracted_media.get("video_id")
+            if extracted_video:
+                additional_material["video_id"] = extracted_video
+                logger.info(f"Extracted SAS URL video UUID from message: {extracted_video}")
+            else:
+                additional_material["video_id"] = None
+        else:
+            additional_material["image_id"] = []
+            additional_material["video_id"] = None
 
-        toolbox_descriptions = "\n".join([f"- {t.name}: {t.description}" for t in self.tools])
-        try:
-            await adispatch_custom_event(
-                "manually_emit_tool_call",
-                data={
-                    "id": str(uuid.uuid4()),
-                    "name": "tool_chain_planning",
-                    "args": {"query": user_query[:50] + "..."}
-                },
-                config=config
-            )
-        except RuntimeError as e:
-            logger.warning(
-                f"Failed to dispatch custom event: {e}. "
-                "This is expected if running outside a LangChain/LangGraph run context (e.g., in unit tests)."
-            )
-
+        # Extract game_id and video_current_time from additional_material for prompt context
         video_current_time = state.get("video_current_time")
         game_id = additional_material.get("game_id")
         if game_id is None:
@@ -84,22 +83,37 @@ class UnifiedPlanningNode:
         # Persist the resolved video context so downstream nodes (trigger_workers,
         # cache, tools) read it from state instead of re-parsing the context blob.
         additional_material["game_id"] = game_id
-        video_context = (
-            f"HLS game_id={game_id}, current_time={video_current_time}s"
-            if game_id is not None
-            else "None"
-        )
-        
+
+        toolbox_descriptions = "\n".join([f"- {t.name}: {t.description}" for t in self.tools])
+        try:
+            await adispatch_custom_event(
+                "manually_emit_tool_call",
+                data={
+                    "id": str(uuid.uuid4()),
+                    "name": "tool_chain_planning",
+                    "args": {"query": user_query[:50] + "..."}
+                },
+                config=config
+            )
+        except RuntimeError as e:
+            logger.warning(
+                f"Failed to dispatch custom event: {e}. "
+                "This is expected if running outside a LangChain/LangGraph run context (e.g., in unit tests)."
+            )
+
+
         prompt_template = get_unified_planning_prompt_template()
         prompt_value = prompt_template.invoke({
             "user_query_msg": [messages[-1]] if messages else [],
-            "additional_material": ", ".join(additional_material.get("image_id") or []) or "None",
+            "image_ids": ", ".join(additional_material.get("image_id") or []) or "None",
+            "video_id": additional_material.get("video_id") or "None",
             "conversation_history": conversation_history,
             "toolbox_descriptions": toolbox_descriptions,
             "retrieved_cases": retrieved_cases,
             "long_term_context": state.get("long_term_context") or "No relevant long-term memory found.",
             "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "video_context": video_context,
+            "game_id": game_id or "No game context",
+            "video_current_time": video_current_time if video_current_time is not None else "No video context",
             "format_instructions": self.parser.get_format_instructions()
         })
         prompt_messages = prompt_value.to_messages()

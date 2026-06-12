@@ -38,7 +38,7 @@ class GuardrailVerdict(BaseModel):
 class AgentState(CopilotKitState):
     """Parent state structure for the planning agent. It is derived from CopilotKitState, which provides 'messages' list to store the conversation history"""
     clarified_query: str
-    additional_material: Optional[Dict[str, Any]]  # {"game_id": str | None, "image_id": List[str]}
+    additional_material: Optional[Dict[str, Any]]  # {"game_id": str | None, "image_id": List[str], "video_id": str | None}
     planning_output: Optional[UnifiedPlanningOutput]
     tool_chains: Optional[List[List[str]]]       # non-ambiguous chains unpacked from planned_chains
     sub_queries: Optional[List[str]]             # sub-queries for non-ambiguous chains
@@ -60,7 +60,7 @@ class AgentState(CopilotKitState):
 class WorkerState(CopilotKitState):
     """State for individual tool chain execution workers. It is derived from CopilotKitState, which provides 'messages' list to store the conversation history"""
     sub_query: str
-    additional_material: Optional[Dict[str, Any]]  # {"game_id": str | None, "image_id": List[str]}
+    additional_material: Optional[Dict[str, Any]]  # {"game_id": str | None, "image_id": List[str], "video_id": str | None}
     tool_chain: List[str]
     tool_calls_history: List[ToolCall]
     tool_results_history: List[ToolMessage]
