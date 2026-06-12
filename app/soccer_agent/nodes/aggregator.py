@@ -32,6 +32,16 @@ class AggregatorNode:
             questions = "\n".join(f"- {q}" for q in pending_clarifications)
             clarification_block = f"\n\n---\nNgoài ra, tôi cần thêm thông tin để trả lời đầy đủ:\n{questions}"
 
+        # Planning failed → surface a system error, never disguise it as user ambiguity
+        if state.get("planning_error"):
+            logger.error(f"Planning failed for this turn: {state['planning_error']}")
+            return {
+                "messages": [AIMessage(content=(
+                    "Xin lỗi, hệ thống gặp sự cố khi xử lý câu hỏi của bạn. "
+                    "Vui lòng thử lại sau ít phút."
+                ))],
+            }
+
         # No worker results at all → only clarifications
         if not results:
             logger.info("⚡ No worker results — returning clarification questions only.")
@@ -44,8 +54,15 @@ class AggregatorNode:
 
         # Single worker result → bypass LLM, append clarifications if any
         if len(results) == 1 and not pending_clarifications:
+            result = results[0]
+            # Internal error sentinels from worker_node must never reach the user verbatim
+            if isinstance(result, str) and result.startswith(("[Timeout]", "[Error]")):
+                logger.error(f"Single worker failed: {result}")
+                return {"messages": [AIMessage(content=(
+                    "Xin lỗi, đã có lỗi xảy ra khi xử lý câu hỏi của bạn. Vui lòng thử lại."
+                ))]}
             logger.info("⚡ Single worker result — bypassing aggregator LLM.")
-            return {"messages": [AIMessage(content=results[0])]}
+            return {"messages": [AIMessage(content=result)]}
 
         if results:
             worker_results_str = "\n".join([f"Worker {i+1} finding:\n{r}\n" for i, r in enumerate(results)])

@@ -55,18 +55,11 @@ class WorkerNodes:
 
     def trigger_workers(self, state: AgentState, config: RunnableConfig):
         """Map worker executions for each parallel tool chain."""
+        # game_id/video_current_time are resolved once by unified_planning_node
+        # (including the CopilotKit context fallback) and persisted into state.
         additional_material = state.get("additional_material") or {}
         game_id = additional_material.get("game_id")
         video_current_time = state.get("video_current_time")
-        if game_id is None:
-            import json
-            for ctx_item in state.get("copilotkit", {}).get("context", []):
-                raw = ctx_item.value if hasattr(ctx_item, "value") else ctx_item.get("value")
-                value = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else None
-                if isinstance(value, dict) and value.get("game_id"):
-                    game_id = value["game_id"]
-                    video_current_time = value.get("current_time", video_current_time)
-                    break
         logger.info(f"[trigger_workers] game_id={game_id!r}, video_current_time={video_current_time!r}")
         # Read from top-level state — always freshly written by unified_planning_node.
         # Do NOT read from planning_output: it may be stale (from a previous turn's checkpointed state).
@@ -149,7 +142,6 @@ class WorkerNodes:
         tool_results_history = state.get("tool_results_history", [])
         messages = state.get("messages", [])
         game_id = additional_material.get("game_id")
-        print(f"[Execution Node] Starting execution for sub_query='{sub_query}', tool_chain={tool_chain}, game_id={game_id}, image_id_list={image_id_list}")
         logger.info(f"🔧 Running TOOL EXECUTION STEP: Step {len(tool_calls_history)}")
 
         last_artifact = state.get("last_tool_artifact")
@@ -198,12 +190,14 @@ class WorkerNodes:
                 execution_failed = True
 
             # Only cache successful tool-chain results — never cache failures.
+            # set() does sync embedding + Redis I/O, so run it off the event loop.
             if sub_query and worker_result and not execution_failed:
-                sub_query_cache.set(
+                await asyncio.to_thread(
+                    sub_query_cache.set,
                     sub_query,
                     worker_result,
                     additional_material,
-                    current_time=state.get("video_current_time"),
+                    state.get("video_current_time"),
                 )
 
             for message in messages:
@@ -236,7 +230,7 @@ class WorkerNodes:
         )
         
         if cached_result:
-            logger.info("⚡ Skipping worker execution due to cache hit (>0.9 similarity).")
+            logger.info(f"⚡ Skipping worker execution due to cache hit (cosine distance <= {sub_query_cache.threshold}).")
             return {
                 "worker_result": [cached_result]
             }

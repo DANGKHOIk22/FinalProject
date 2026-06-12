@@ -1,8 +1,6 @@
 import logging
 import asyncio
-import json
 from datetime import datetime
-import uuid
 from langgraph.graph.state import RunnableConfig
 from langchain.messages import HumanMessage
 from app.config.settings import settings
@@ -10,7 +8,6 @@ from app.schema.soccer_agent.state import AgentState
 from app.soccer_agent.memory.long_term_memory import long_term_memory_manager
 from app.soccer_agent.case_bank.retriever import CaseBankRetriever
 from app.soccer_agent.case_bank.cache import case_bank_cache
-from app.cache.semantic_cache import context_cache
 
 logger = logging.getLogger(__name__)
 
@@ -26,30 +23,12 @@ class ContextRetrievalNode:
         # 1. Identify User Query
         messages = state.get("messages", [])
         user_query = str(messages[-1].text) if isinstance(messages[-1], HumanMessage) else None
-        metadata = config.get("metadata", {})
-        thread_id = metadata.get("thread_id", str(uuid.uuid4()))
-        user_id = str(config.get("configurable", {}).get("user_id"))
-        has_media = bool(state.get("additional_material"))
-        
-        if not user_query:
-            return {"long_term_context": "", "retrieved_cases": ""}
-
-        # --- SEMANTIC CACHE CHECK (Internal) ---
-        try:
-            cached_res = context_cache.check(user_query)
-            if cached_res:
-                logger.info(f"🎯 [ContextRetrieval] Semantic Cache HIT for: '{user_query[:50]}'")
-                return json.loads(cached_res)
-        except Exception as e:
-            logger.warning(f"Semantic cache error: {e}")
-
-        metadata = config.get("metadata", {})
-        thread_id = metadata.get("thread_id", str(uuid.uuid4()))
         user_id = config.get("configurable", {}).get("user_id")
         additional_material = state.get("additional_material") or {}
         has_media = bool(additional_material.get("game_id") or additional_material.get("image_id"))
 
-        logger.info(f"🔍 [ContextRetrieval] Cache MISS. Searching DBs for: '{user_query[:50]}...'")
+        if not user_query:
+            return {"long_term_context": "", "retrieved_cases": ""}
 
         # 2. Get Embedding ONCE
         try:
@@ -59,10 +38,23 @@ class ContextRetrievalNode:
             query_embedding = None
 
         # 3. Parallel Retrieval
+        # Only the case-bank examples are cached (global knowledge, keyed by
+        # query + has_media). Long-term memory is per-user and must NOT be
+        # cached without user scoping.
         async def fetch_cases():
             try:
-                # Case Bank already has its own internal cache check
-                return await self.case_bank_retriever.retrieve(user_query, has_media)
+                cached_cases = await asyncio.to_thread(
+                    case_bank_cache.get, user_query, has_media
+                )
+                if cached_cases:
+                    return cached_cases
+
+                cases = await self.case_bank_retriever.retrieve(user_query, has_media)
+                if cases:
+                    await asyncio.to_thread(
+                        case_bank_cache.set, user_query, has_media, cases
+                    )
+                return cases
             except Exception as e:
                 logger.error(f"Error fetching cases: {e}")
                 return ""
@@ -98,15 +90,7 @@ class ContextRetrievalNode:
             logger.error(f"Parallel retrieval failed: {e}")
             cases_text, long_term_text = "", ""
 
-        result = {
+        return {
             "retrieved_cases": cases_text or "No examples available.",
             "long_term_context": long_term_text or "No relevant long-term memory found."
         }
-
-        # --- SEMANTIC CACHE SET (Internal) ---
-        try:
-            context_cache.set(user_query, json.dumps(result))
-        except Exception as e:
-            logger.warning(f"Failed to update semantic cache: {e}")
-
-        return result

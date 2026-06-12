@@ -74,11 +74,35 @@ async def test_execution_node_returns_text(worker_nodes, mock_execution_llm):
     
     with patch('app.soccer_agent.nodes.worker.sub_query_cache') as mock_cache:
         result = await worker_nodes._execution_node(state, config)
-        
+
         assert "worker_result" in result
         assert result["worker_result"] == ["Final Answer"]
         assert len(result["messages"]) == 2  # Added system prompt or human prompt + AIMessage
         assert isinstance(result["messages"][-1], AIMessage)
+        # Successful result must be cached
+        mock_cache.set.assert_called_once_with("q1", "Final Answer", {}, None)
+
+@pytest.mark.asyncio
+async def test_execution_node_error_not_cached(worker_nodes, mock_execution_llm):
+    """Error responses must never be written to the semantic cache."""
+    mock_execution_llm.ainvoke = AsyncMock(side_effect=Exception("LLM down"))
+
+    state = {
+        "sub_query": "q1",
+        "tool_chain": ["tool1"],
+        "messages": [],
+        "tool_calls_history": [],
+        "tool_results_history": []
+    }
+    config = {}
+
+    with patch('app.soccer_agent.nodes.worker.sub_query_cache') as mock_cache:
+        result = await worker_nodes._execution_node(state, config)
+
+        assert result["worker_result"] == [
+            "The execution has been stopped due to an error. Please try again later."
+        ]
+        mock_cache.set.assert_not_called()
 
 def test_should_execute_worker(worker_nodes):
     # If worker_result exists (cache hit), it should return "end"

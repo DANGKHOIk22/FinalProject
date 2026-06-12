@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Any, Dict, List, Optional
 class ChatRequest(BaseModel):
     """Schema cho input của người dùng."""
@@ -19,3 +19,11 @@ class ChatRequest(BaseModel):
             "image_id: list of media file paths (e.g. image/video frame paths)."
         )
     )
+
+    @field_validator("additional_material", mode="before")
+    @classmethod
+    def _migrate_legacy_list(cls, v: Any) -> Any:
+        # Backward compatibility: older clients send a bare list of image paths.
+        if isinstance(v, list):
+            return {"game_id": None, "image_id": v}
+        return v

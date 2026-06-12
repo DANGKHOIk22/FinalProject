@@ -8,14 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Core Technology Stack
 - **Framework**: FastAPI (Python 3.11)
-- **AI/LLM**: Google Gemini 2.0/2.5 Flash & Flash Lite, LangChain, LangGraph
+- **AI/LLM**: LiteLLM router — `openai/gpt-5.4-nano` primary with `gemini-3.1-flash-lite` fallback (see `app/soccer_agent/factory/llm_config.yaml`); LangChain, LangGraph
 - **Databases**: 
-  - PostgreSQL (raw conversation history)
+  - PostgreSQL (raw conversation history + LangGraph checkpointer)
   - MongoDB (soccer entity information)
-  - Qdrant (vector embeddings for RAG)
-  - Redis (session memory caching and semantic cache)
+  - Qdrant (vector embeddings for RAG + case bank)
+  - Redis (semantic cache + standard cache)
 - **Video/Image Processing**: OpenCV, FFmpeg
-- **Computer Vision Models**: DeepFace, CLIP, GroundingDINO (deployed to Azure endpoints)
+- **Computer Vision Models**: Qwen-VL (DashScope) for entity localization, InsightFace (Azure ML endpoint) for face embeddings
 - **Observability**: Langfuse (tracing, monitoring, evaluation)
 
 ## Project Structure
@@ -42,11 +42,14 @@ FinalProject/
 │   │   └── soccerwiki_entities.py  # Entity schemas
 │   └── soccer_agent/          # Core agent implementation
 │       ├── agent.py           # Main SoccerAgent class (LangGraph)
-│       ├── factory/           # Agent factory patterns
-│       ├── memory/            # Conversation & system memory
-│       │   ├── chat_history.py # PostgreSQL integration
-│       │   ├── session_memory.py # History summarization & Redis cache
-│       │   └── query_understanding.py # Pronoun resolution pipeline
+│       ├── factory/           # LLM router config (llm_config.yaml)
+│       ├── nodes/             # LangGraph nodes (guardrail, planning, worker, aggregator, ...)
+│       ├── case_bank/         # Few-shot planning example retriever + cache
+│       ├── memory/            # Conversation & long-term memory
+│       │   ├── chat_history.py        # PostgreSQL integration
+│       │   ├── checkpointer.py        # LangGraph Postgres checkpointer
+│       │   ├── conversation_memory.py # Conversation context management
+│       │   └── long_term_memory.py    # pgvector user-scoped knowledge
 │       ├── prompts/           # LLM prompts
 │       └── toolbox/           # Agent tools
 ├── scripts/
@@ -63,55 +66,41 @@ FinalProject/
 The **SoccerAgent** implements a parallel multi-worker architecture using LangGraph:
 
 #### State Management
-- **AgentState**: Parent state containing user query, `claried_query` (pronoun-resolved query), tool chains, parallel results
+- **AgentState**: Parent state containing user query, `clarified_query` (pronoun-resolved query), tool chains, parallel results, guardrail verdict (`is_off_topic`), `video_current_time`
 - **WorkerState**: Individual worker state for parallel tool execution
 
-#### Agent Flow
-1. **Query Understanding** (`QueryUnderstandingPipeline`): Resolves pronouns/abbreviations and handles domain jargon. Detects ambiguity and can short-circuit to ask clarifying questions.
-2. **Planning Node** (`_tool_chain_planning`): Analyzes `claried_query`, checks history, plans parallel tool chains (`PlanningOutput`).
-3. **Cache Node** (`_check_cache_node`): Checks Semantic Cache for similar previous queries to bypass execution.
-4. **Worker Dispatch** (`_trigger_workers`): Dispatches sub-queries to parallel workers via `Send` commands; uses `claried_query` as fallback.
-5. **Execution Workers** (`_execution_node`): Each executes a tool chain independently; supports Thinking models with a thinking budget.
-6. **Aggregator Node** (`_aggregator_node`): Synthesizes parallel results into a final definitive response; uses `claried_query` as effective user query.
-
-#### Key Methods
-- `run(request: ChatRequest)` - Main entry point. Handles memory loading, query clarification, graph execution, and background memory saving.
-- `_tool_chain_planning()` - Query decomposition, pronoun resolution, and tool chain planning.
-- `_worker_node()` / `_execution_node()` - Individual tool chain execution.
-- `_aggregator_node()` - Result aggregation.
-- `_trigger_workers()` - Dispatches to workers or direct response.
-- `_build_tool_summary_for_memory()` - Formats tool details for saving into conversation memory.
-- `_background_save_memory()` - Asynchronously saves results to PostgreSQL and updates Session Memory.
+#### Agent Flow (see `SoccerAgent._build_graph`)
+1. **Parallel fan-out from START**: `get_history` (ConversationHistoryNode), `context_retrieval` (case bank + long-term memory), `guardrail_classify` (soccer-topic classifier, fail-open with timeout).
+2. **Guardrail Gate** (`guardrail_gate`): joins the three branches; off-topic queries route to `guardrail_refusal` → `save_memory`. On-topic queries proceed.
+3. **Unified Planning** (`UnifiedPlanningNode.unified_planning_node`): combined query understanding + tool chain planning with per-chain confidence; low-confidence chains become clarifying questions (unless an active `game_id` anchors them); resolves `game_id`/`video_current_time` from CopilotKit context.
+4. **Worker Dispatch** (`WorkerNodes.trigger_workers`): dispatches sub-queries to parallel workers via `Send`; short-circuits to aggregator when no tools needed.
+5. **Worker Graph** (`WorkerNodes`): per-worker semantic cache check (`_check_cache_node`) → iterative tool execution (`_execution_node`); successful results cached to `sub_query_cache`, errors never cached.
+6. **Aggregator** (`AggregatorNode.aggregator_node`): synthesizes parallel results; surfaces system errors explicitly (planning_error, worker error sentinels) instead of disguising them.
+7. **Memory Saving** (`SaveToMemoryNode.save_to_memory_node`): persists the turn to PostgreSQL in the background.
 
 ### Toolbox (`app/soccer_agent/toolbox/`)
 
-Available tools for the agent:
+Active tools (see `tool_registry` in `app/soccer_agent/agent.py`):
 
 #### Text/Knowledge Tools
-- **textual_entity_search**: Search for soccer entities (players, teams, coaches)
-- **textual_retrieval_augment**: RAG-based retrieval from knowledge base
-- **game_history_retrieval**: Get historical match data
-- **game_info_retrieval**: Get specific match information
-- **game_search**: Search matches by criteria
+- **entity_augment**: Entity lookup (MongoDB) with internal Tavily wiki fallback
+- **game_history_retrieval**: Historical match event log (goals, cards, subs); Tavily match-report fallback; video-position grounding for the active stream
+- **game_info_retrieval**: Match metadata (score, lineup, venue); fast path for the active video; Tavily fallback
+- **web_news_search**: Recent soccer news via Tavily
 
 #### Visual Tools
-- **segment**: Segment images to detect objects (uses GroundingDINO)
-- **commentary_generation**: Generate commentary from visual analysis
-- ~~**entity_recognition**~~: *Currently disabled* (uses DeepFace) — commented out in `tool_registry`
-- ~~**frame_selection**~~: *Currently disabled* (uses CLIP) — commented out in `tool_registry`
+- **entity_recognition**: Identify people in images — Qwen-VL localization → OpenCV face refine → InsightFace embeddings → Qdrant voting search. Disabled at startup (tool skipped, app still boots) if the InsightFace endpoint is unreachable.
+- **commentary_generation**: Generate commentary from a video clip (vision LLM via `retrieval-augment` route)
 
-#### Utility Tools
-- **choice_selection**: Select best option from choices
+> `segment`, `frame_selection`, `choice_selection`, `textual_entity_search`, `textual_retrieval_augment`, `game_search` have been **removed** from the codebase.
 
 ### 3. Memory System (`app/soccer_agent/memory/`)
 
-- **PostgreSQL Context**: Stores raw message history via `langchain-postgres`.
-- **Query Understanding** (`query_understanding.py`): A single-pass Flash Lite call that resolves "it", "they", "that team" to specific entities.
-- **Session Memory** (`session_memory.py`):
-    - **Path A**: If history < threshold, uses raw text context.
-    - **Path B**: If history > threshold, loads a structured summary from Redis.
-    - **Background Tasks**: Triggers summarization of old messages and incremental updates of "tool findings" to keep history compact.
-- **System Prompt Memory** (`CustomSystemPromptMemory`): Manages conversation context and clarifications; trims to last `max_history=15` messages.
+- **Chat History** (`chat_history.py`): Stores raw message history in PostgreSQL via `langchain-postgres`, scoped per session.
+- **Checkpointer** (`checkpointer.py`): LangGraph `AsyncPostgresSaver` — agent state persisted per `thread_id`.
+- **Conversation Memory** (`conversation_memory.py`): Manages the conversation context injected into prompts.
+- **Long-term Memory** (`long_term_memory.py`): pgvector store of user-scoped knowledge (entities, news findings); retrieved by `context_retrieval` each turn, never cached across users.
+- **Query understanding** now happens inside `unified_planning_node` (no separate pipeline/file).
 - **Tool-enriched history**: Each turn stores: tool usage summary (step details) + final response. This lets future turns see what tools were used.
 
 ### 4. API Endpoints (`app/api/`)
@@ -122,9 +111,13 @@ Available tools for the agent:
     "user_id": "string",
     "session_id": "string (optional)",
     "user_query": "string",
-    "additional_material": ["image_url or path (optional)"]
+    "additional_material": {            # optional
+        "game_id": "string or null",    # from POST /hls/sessions when watching a stream
+        "image_id": ["media path/uuid"]
+    }
 }
 ```
+Legacy clients sending `additional_material` as a bare list of paths are auto-converted to `{"game_id": null, "image_id": [...]}` by a `field_validator` on `ChatRequest`.
 
 Response:
 ```python
@@ -141,8 +134,13 @@ Required environment variables in `.env`:
 
 ```env
 # LLM
-GOOGLE_API_KEY=
-DASHSCOPE_API_KEY=          # Required — SoccerAgent is None without it; /chat returns 503
+OPENAI_API_KEY=             # Primary LLM route (gpt-5.4-nano via LiteLLM)
+GOOGLE_API_KEY=             # Gemini fallback route + embeddings
+DASHSCOPE_API_KEY=          # Required — Qwen-VL/ASR; SoccerAgent is None without it; /chat returns 503
+
+# Computer vision
+INSIGHTFACE_ENDPOINT_URI=   # Azure ML endpoint for face embeddings
+INSIGHTFACE_ENDPOINT_KEY=
 
 # Databases
 MONGO_SRV=
@@ -151,18 +149,18 @@ SOCCER_COLLECTION_NAME=EntityInformation
 QDRANT_URL=
 QDRANT_API_KEY=
 QDRANT_COLLECTION_NAME=
-QDRANT_CASE_BANK_COLLECTION_NAME=planning_case_bank
+QDRANT_CASE_BANK_COLLECTION_NAME=Soccer_Case_Bank
 QDRANT_HLS_COLLECTION_NAME=hls_frame_index
 POSTGRES_DATABASE_URL=
 REDIS_URL=redis://localhost:6379/0
+
+# Auth
+JWT_SECRET_KEY=             # 64-char hex string, required at startup
 
 # Tavily (web search + wiki extract fallback)
 # Comma-separated list of keys for round-robin + 429 failover.
 # Single key also accepted: TAVILY_API_KEY=...
 TAVILY_API_KEYS=key1,key2,key3
-
-# Optional
-DEEPFACE_HOME=./temporary/cache
 ```
 
 ## Database Schema
@@ -212,29 +210,32 @@ uvicorn main:app --reload --port 8000
 4. Update agent initialization in `agent.py`
 
 ### Modifying Agent Behavior
-- **Planning prompts**: `app/soccer_agent/prompts/agent.py` - `get_planning_prompt_template()`
-- **Execution prompts**: `app/soccer_agent/prompts/agent.py` - `get_execution_prompt_template()`
+- **Planning prompts**: `app/soccer_agent/prompts/agent.py` - `get_unified_planning_prompt_template()`
+- **Execution prompts**: `app/soccer_agent/prompts/agent.py` - `get_execution_system_prompt()` / `get_execution_human_prompt()`
 - **Aggregation prompts**: `app/soccer_agent/prompts/agent.py` - `get_aggregator_prompt_template()`
+- **Guardrail prompt**: `app/soccer_agent/prompts/agent.py` - `get_guardrail_prompt_template()`
 
 ### Testing
 ```bash
-# Run unit tests
-pytest unit_test/
+# Run the full suite — pyproject testpaths covers both tests/ and unit_test/
+pytest
 
 # Test specific components
-pytest unit_test/agent/test_parallel_architecture.py
-pytest unit_test/tools/test_entity_recognition.py
+pytest tests/test_worker.py
+pytest unit_test/nodes/test_guardrail.py
 ```
 
 ## AI Model Configuration
 
-Models are configured in `app/config/config.py`:
+LLM routing lives in `app/soccer_agent/factory/llm_config.yaml` (LiteLLM router). Roles: `planning`, `execution`, `retrieval-augment`, `aggregator`, `tool`, `guardrail`. Every role uses `openai/gpt-5.4-nano` as primary with `gemini/gemini-3.1-flash-lite` fallback — except `guardrail`, which uses Gemini flash-lite as primary (≈1s latency) with the OpenAI model as backup. Gemini fallbacks use `thinking_level` (not `thinking_budget`).
+
+Constants in `app/config/config.py`:
 
 ```python
-GEMINI_2_5_FLASH = "gemini-2.5-flash"
-GEMINI_2_5_FLASH_LITE = "gemini-2.5-flash-lite"
-DEFAULT_MODEL = GEMINI_2_5_FLASH
-MODEL_TEMPERATURE = 0.2
+GEMINI_3_1_FLASH = "gemini-3.1-flash-preview"
+GEMINI_3_1_FLASH_LITE = "gemini-3.1-flash-lite-preview"
+DEFAULT_MODEL = GEMINI_3_1_FLASH_LITE
+MODEL_TEMPERATURE = 1.0
 MODEL_TOP_P = 0.95
 MAX_COMPLETION_TOKENS = 8000
 ```
@@ -302,25 +303,23 @@ print(result["agent_response"])
 
 ## Important Notes for Claude
 
-1. **LangGraph Architecture**: State-based routing with conditional edges. Flow: planning → dispatch → workers → aggregation.
+1. **LangGraph Architecture**: State-based routing with conditional edges. Flow: `[get_history ∥ context_retrieval ∥ guardrail_classify] → guardrail_gate → (blocked → guardrail_refusal → save_memory) | (proceed → unified_planning → trigger_workers → workers → aggregator → save_memory)`.
 
-2. **Async/Await**: Most operations are async. The agent uses `asyncio` for parallel worker execution.
+2. **Async/Await**: Most operations are async. The agent uses `asyncio` for parallel worker execution; sync cache/embedding I/O runs via `asyncio.to_thread`.
 
 3. **Tool Calling**: Tools are registered with the LLM via `bind_tools`. The execution LLM decides which tool to call at each step; only one tool is called per generation cycle.
 
-4. **Memory Management**: Conversation history saved to PostgreSQL via `CustomSystemPromptMemory`. Each turn stores: tool usage summary (name + args + response + artifact per step) + final response as a single assistant message.
+4. **Memory Management**: Conversation history saved to PostgreSQL. Each turn stores: tool usage summary (name + args + response + artifact per step) + final response as a single assistant message.
 
-5. **Pronoun Resolution (`claried_query`)**: Managed by `QueryUnderstandingPipeline` before graph entry. It resolves pronouns/abbreviations using recent context and Session Memory. The resolved query is used by workers and the aggregator.
+5. **Query Understanding (`clarified_query`)**: Handled inside `unified_planning_node` — pronouns/abbreviations resolved in the same LLM call that plans tool chains. The resolved query is used by workers and the aggregator.
 
-6. **Thinking Models**: The agent utilizes Gemini 2.0/2.5 Thinking models with specific `thinking_budget` (3000-4000) for complex reasoning during planning and execution.
+6. **LLM Routing**: All roles route through LiteLLM (`llm_config.yaml`); primary `gpt-5.4-nano`, Gemini 3.1 flash-lite fallback (with `thinking_level`). Guardrail is the exception (Gemini primary for latency).
 
-7. **Semantic Cache**: Queries with >0.9 similarity bypass workers via Redis-backed semantic cache.
+7. **Semantic Cache** (`sub_query_cache`, Redis vector index): cosine distance threshold 0.15 (≈0.85 similarity) bypasses workers. Video queries filter by `game_id` + a 5s timestamp window; image queries filter by an md5 hash of the sorted `image_id` list. Error results are never cached.
 
-8. **Incremental Memory**: After turns with tools, key facts are distilled into `SessionMemory.tool_findings` in the background.
+8. **Error Handling**: Most errors are caught and logged. Worker timeouts are 120 seconds; worker/planning failures surface as explicit system-error messages from the aggregator, never disguised as user ambiguity.
 
-9. **Error Handling**: Most errors are caught and logged. Check `logger.error()` calls for debugging. Worker timeouts are set to 120 seconds.
-
-7. **Configuration Priority**: Environment variables > `settings.py` > `config.py` defaults
+9. **Configuration Priority**: Environment variables > `settings.py` > `config.py` defaults
 
 ## Contact & Support
 
@@ -331,7 +330,7 @@ For questions about this codebase, review:
 
 ---
 
-**Last Updated**: 2026-04-05
+**Last Updated**: 2026-06-12
 **Python Version**: 3.11+
 **Framework Version**: FastAPI 0.118.2, LangGraph (latest)
 

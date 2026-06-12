@@ -90,7 +90,7 @@ model_list:
 
   - model_name: guardrail-backup
     litellm_params:
-      model: openai/gpt-4o-mini
+      model: openai/gpt-5.4-nano
       api_key: os.environ/OPENAI_API_KEY
       temperature: 0
       max_completion_tokens: 200

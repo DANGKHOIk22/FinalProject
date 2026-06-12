@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 from datetime import datetime
@@ -26,7 +27,8 @@ class UnifiedPlanningNode:
         """
         messages = state.get("messages", [])
         user_query = str(messages[-1].text) if messages else ""
-        additional_material = state.get("additional_material") or {}
+        # Copy — never mutate the dict held by the graph state
+        additional_material = dict(state.get("additional_material") or {})
 
         # Extract additional material UUIDs from messages if media registry is available
         media_registry = config.get("configurable", {}).get("media_registry")
@@ -62,14 +64,26 @@ class UnifiedPlanningNode:
         video_current_time = state.get("video_current_time")
         game_id = additional_material.get("game_id")
         if game_id is None:
-            import json
             for ctx_item in state.get("copilotkit", {}).get("context", []):
                 raw = ctx_item.value if hasattr(ctx_item, "value") else ctx_item.get("value")
-                value = raw if isinstance(raw, dict) else json.loads(raw) if isinstance(raw, str) else None
+                if isinstance(raw, dict):
+                    value = raw
+                elif isinstance(raw, str):
+                    # Frontend-controlled payload — never trust it to be valid JSON
+                    try:
+                        value = json.loads(raw)
+                    except (json.JSONDecodeError, ValueError):
+                        logger.warning(f"Skipping malformed CopilotKit context value: {raw[:100]!r}")
+                        value = None
+                else:
+                    value = None
                 if isinstance(value, dict) and value.get("game_id"):
                     game_id = value["game_id"]
                     video_current_time = value.get("current_time", video_current_time)
                     break
+        # Persist the resolved video context so downstream nodes (trigger_workers,
+        # cache, tools) read it from state instead of re-parsing the context blob.
+        additional_material["game_id"] = game_id
         video_context = (
             f"HLS game_id={game_id}, current_time={video_current_time}s"
             if game_id is not None
@@ -97,6 +111,8 @@ class UnifiedPlanningNode:
             output: UnifiedPlanningOutput = self.parser.parse(response_text)
         except Exception as e:
             logger.error(f"Failed to parse UnifiedPlanningOutput: {e}")
+            # Mark the failure explicitly — the aggregator must surface a system
+            # error, not disguise it as "your question is unclear".
             return {
                 "clarified_query": user_query,
                 "planning_output": None,
@@ -104,6 +120,9 @@ class UnifiedPlanningNode:
                 "sub_queries": [],
                 "need_call_tools": False,
                 "pending_clarifications": [],
+                "planning_error": str(e),
+                "additional_material": additional_material,
+                "video_current_time": video_current_time,
             }
 
         # Split planned_chains into dispatchable vs ambiguous
@@ -141,5 +160,7 @@ class UnifiedPlanningNode:
             "sub_queries": sub_queries,
             "need_call_tools": need_call_tools,
             "pending_clarifications": pending_clarifications,
+            "planning_error": None,  # clear any checkpointed error from a previous turn
             "additional_material": additional_material,
+            "video_current_time": video_current_time,
         }

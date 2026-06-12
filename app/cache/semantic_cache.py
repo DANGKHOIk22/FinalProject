@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from typing import List, Optional
 from redisvl.query.filter import Tag, Num
@@ -9,6 +10,17 @@ logger = logging.getLogger(__name__)
 
 _NO_VIDEO = "__none__"
 _VIDEO_TIME_WINDOW = 5.0  # seconds — cache hit valid only within this window before current_time
+
+
+def _image_tag(image_id: Optional[List[str]]) -> str:
+    """Build a stable tag value for an image_id list.
+
+    Hashed because RediSearch splits tag values on commas and the tag
+    must not depend on list order.
+    """
+    if not image_id:
+        return "None"
+    return hashlib.md5("|".join(sorted(image_id)).encode()).hexdigest()
 
 
 class SemanticCache:
@@ -73,7 +85,7 @@ class SemanticCache:
                 )
             else:
                 # Non-video path: filter by image_id, exclude video-scoped entries
-                image_id_str = ", ".join(image_id) if image_id else "None"
+                image_id_str = _image_tag(image_id)
                 filter_condition = (Tag("image_id") == image_id_str) & (Tag("game_id") == _NO_VIDEO)
                 logger.debug(f"Checking Semantic cache | image_id='{image_id_str}' query='{query}'")
 
@@ -92,46 +104,6 @@ class SemanticCache:
             logger.error(f"Semantic cache lookup error: {e}")
 
         return None
-
-    def cache(self, ttl: Optional[int] = None):
-        """Decorator for semantic caching. Works for async functions."""
-        import functools
-        def decorator(func):
-            @functools.wraps(func)
-            async def wrapper(*args, **kwargs):
-                query = kwargs.get("user_query") or kwargs.get("query")
-                if not query and args:
-                    for arg in args:
-                        if isinstance(arg, str):
-                            query = arg
-                            break
-
-                if not query:
-                    return await func(*args, **kwargs)
-
-                cached_res = self.check(query)
-                if cached_res:
-                    if cached_res.startswith("{") and cached_res.endswith("}"):
-                        try:
-                            import json
-                            return json.loads(cached_res)
-                        except Exception:
-                            pass
-                    return cached_res
-
-                result = await func(*args, **kwargs)
-
-                res_to_store = result
-                if isinstance(result, dict):
-                    import json
-                    res_to_store = json.dumps(result)
-
-                if res_to_store:
-                    self.set(query, res_to_store)
-
-                return result
-            return wrapper
-        return decorator
 
     def set(
         self,
@@ -160,7 +132,7 @@ class SemanticCache:
                     f"timestamp={metadata['timestamp']} query='{query}'"
                 )
             else:
-                image_id_str = ", ".join(image_id) if image_id else "None"
+                image_id_str = _image_tag(image_id)
                 metadata = {
                     "response": response,
                     "image_id": image_id_str,
@@ -174,7 +146,7 @@ class SemanticCache:
             logger.error(f"Semantic cache update error: {e}")
 
 
-# Two isolated indexes — no cross-reads between worker results and context-retrieval payloads.
-# After deploying, flush the old shared index: redis-cli DEL semantic_cache
+# Worker answers only. Context retrieval caches few-shot cases via CaseBankCache
+# (per query + has_media) and never caches per-user long-term memory.
+# After deploying, drop the old shared index: FT.DROPINDEX semantic_cache DD
 sub_query_cache = SemanticCache(index_name="sub_query_cache", threshold=0.15, ttl=3600)
-context_cache   = SemanticCache(index_name="context_cache",   threshold=0.15, ttl=3600)
