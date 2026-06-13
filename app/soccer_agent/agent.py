@@ -118,7 +118,7 @@ class SoccerAgent:
             self.guardrail_node.gate_router,
             {"proceed": "unified_planning", "blocked": "guardrail_refusal"}
         )
-        workflow.add_edge("guardrail_refusal", "save_memory")
+        workflow.add_edge("guardrail_refusal", END)
 
         # Execution Path
         workflow.add_conditional_edges(
