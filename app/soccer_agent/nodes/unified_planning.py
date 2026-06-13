@@ -62,24 +62,27 @@ class UnifiedPlanningNode:
         # Extract game_id and video_current_time from additional_material for prompt context
         video_current_time = state.get("video_current_time")
         game_id = additional_material.get("game_id")
-        if game_id is None:
-            for ctx_item in state.get("copilotkit", {}).get("context", []):
-                raw = ctx_item.value if hasattr(ctx_item, "value") else ctx_item.get("value")
-                if isinstance(raw, dict):
-                    value = raw
-                elif isinstance(raw, str):
-                    # Frontend-controlled payload — never trust it to be valid JSON
-                    try:
-                        value = json.loads(raw)
-                    except (json.JSONDecodeError, ValueError):
-                        logger.warning(f"Skipping malformed CopilotKit context value: {raw[:100]!r}")
-                        value = None
-                else:
+        # Always scan CopilotKit context for the latest current_time — even when game_id is
+        # already known from a prior checkpoint. Without this, video_current_time freezes at
+        # the value persisted during the first turn and never updates across turns.
+        for ctx_item in state.get("copilotkit", {}).get("context", []):
+            raw = ctx_item.value if hasattr(ctx_item, "value") else ctx_item.get("value")
+            if isinstance(raw, dict):
+                value = raw
+            elif isinstance(raw, str):
+                # Frontend-controlled payload — never trust it to be valid JSON
+                try:
+                    value = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    logger.warning(f"Skipping malformed CopilotKit context value: {raw[:100]!r}")
                     value = None
-                if isinstance(value, dict) and value.get("game_id"):
+            else:
+                value = None
+            if isinstance(value, dict) and value.get("game_id"):
+                if game_id is None:
                     game_id = value["game_id"]
-                    video_current_time = value.get("current_time", video_current_time)
-                    break
+                video_current_time = value.get("current_time", video_current_time)
+                break
         # Persist the resolved video context so downstream nodes (trigger_workers,
         # cache, tools) read it from state instead of re-parsing the context blob.
         additional_material["game_id"] = game_id
