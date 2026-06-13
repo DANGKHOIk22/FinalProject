@@ -104,7 +104,8 @@ class UnifiedPlanningNode:
                 "This is expected if running outside a LangChain/LangGraph run context (e.g., in unit tests)."
             )
 
-
+        if additional_material.get("image_id") or additional_material.get("video_id"):
+            game_id = None
         prompt_template = get_unified_planning_prompt_template()
         prompt_value = prompt_template.invoke({
             "user_query_msg": [messages[-1]] if messages else [],
