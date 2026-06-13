@@ -231,7 +231,7 @@ class AzureMLDeepFaceDeployment:
     def _try_get_model(self) -> Optional[Model]:
         """Try to get existing model from registry."""
         try:
-            return self.ml_client.models.get(
+            return self.ml_client.models.get( # type: ignore
                 name=self.model_name,
                 version=self.model_version
             )
@@ -301,7 +301,7 @@ class AzureMLDeepFaceDeployment:
             description="DeepFace model weights (facenet512 + retinaface)",
         )
         
-        created = self.ml_client.models.create_or_update(model_asset)
+        created = self.ml_client.models.create_or_update(model_asset) # type: ignore
         logger.info(f"Created model: {created.name}:{created.version}")
         return created
     
@@ -361,7 +361,7 @@ class AzureMLDeepFaceDeployment:
             auth_mode="key",
         )
         
-        poller = self.ml_client.online_endpoints.begin_create_or_update(endpoint)
+        poller = self.ml_client.online_endpoints.begin_create_or_update(endpoint) # type: ignore
         
         if isinstance(poller, LROPoller):
             result = poller.result()
@@ -419,7 +419,7 @@ class AzureMLDeepFaceDeployment:
             app_insights_enabled=True,
         )
         
-        poller = self.ml_client.online_deployments.begin_create_or_update(deployment)
+        poller = self.ml_client.online_deployments.begin_create_or_update(deployment) # type: ignore
         
         if isinstance(poller, LROPoller):
             logger.info(f"Waiting for deployment '{self.deployment_name}' to complete...")
@@ -438,9 +438,9 @@ class AzureMLDeepFaceDeployment:
         """
         deployment_name = deployment_name or self.deployment_name
         
-        endpoint = self.ml_client.online_endpoints.get(name=self.endpoint_name)
+        endpoint = self.ml_client.online_endpoints.get(name=self.endpoint_name) # type: ignore
         endpoint.traffic = {deployment_name: 100}
-        self.ml_client.online_endpoints.begin_create_or_update(endpoint).result()
+        self.ml_client.online_endpoints.begin_create_or_update(endpoint).result() # type: ignore
         
         logger.info(f"Traffic for {self.endpoint_name} set to: {endpoint.traffic}")
     
@@ -451,8 +451,8 @@ class AzureMLDeepFaceDeployment:
         Returns:
             Tuple of (scoring_uri, api_key)
         """
-        endpoint = self.ml_client.online_endpoints.get(name=self.endpoint_name)
-        keys = self.ml_client.online_endpoints.get_keys(name=self.endpoint_name)
+        endpoint = self.ml_client.online_endpoints.get(name=self.endpoint_name) # type: ignore
+        keys = self.ml_client.online_endpoints.get_keys(name=self.endpoint_name) # type: ignore
         
         return endpoint.scoring_uri, keys.primary_key
     

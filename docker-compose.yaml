@@ -1,0 +1,36 @@
+services:
+  # Thêm Redis Stack Server Service
+  redis:
+    image: redis/redis-stack-server:latest
+    container_name: soccer-redis
+    ports:
+      - "6379:6379"
+    environment:
+      # Cấu hình lưu trữ dữ liệu định kỳ và Append-only file
+      - REDIS_ARGS=--save 60 1 --appendonly yes
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: soccer-agent:latest
+    container_name: soccer-agent
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis_data:

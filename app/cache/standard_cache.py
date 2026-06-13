@@ -49,7 +49,10 @@ class StandardCache:
         
         prefix = "soccer_agent:cache"
         key = f"{prefix}:{module_name}:{func_name}:{dumped_args}:{dumped_kwargs}"
-        logger.info(f"Checking Standard Cache for [{module_name}.{func_name}] with key: {key}")
+        
+        # Truncate long key for display
+        display_key = (key[:100] + "...") if len(key) > 100 else key
+        logger.debug(f"Checking Standard Cache for [{module_name}.{func_name}] with key: {display_key}")
 
         try:
             cached_result = self.client.get(key)
@@ -68,7 +71,7 @@ class StandardCache:
                     return None, None
             return "hit", data
 
-        logger.info(f"⏳ Standard Cache MISS for [{module_name}.{func_name}] -> Executing function.")
+        logger.debug(f"⏳ Standard Cache MISS for [{module_name}.{func_name}] -> Executing function.")
         return "miss", key
 
     def cache(self, *, ttl: int = 60 * 60, validatedModel: Any = None):
@@ -83,8 +86,10 @@ class StandardCache:
             if is_async:
                 @wraps(func)
                 async def async_wrapper(*args, **kwargs):
-                    cache_result, data = self._cache_logic(
-                        func, args, kwargs, ttl, validatedModel, True
+                    # Redis client is sync — run cache I/O in a thread so it
+                    # never blocks the event loop.
+                    cache_result, data = await asyncio.to_thread(
+                        self._cache_logic, func, args, kwargs, ttl, validatedModel, True
                     )
 
                     if cache_result is None:
@@ -93,7 +98,7 @@ class StandardCache:
                         return data
                     else:
                         result = await func(*args, **kwargs)
-                        self._store_result(data, result, ttl, validatedModel)
+                        await asyncio.to_thread(self._store_result, data, result, ttl, validatedModel)
                         return result
 
                 return async_wrapper
@@ -136,11 +141,13 @@ class StandardCache:
             return
 
         self.set_key(key, serialized_result, ttl)
-        logger.info(f"💾 Standard Cache STORED for key: {key}")
+        # Truncate long key for display
+        display_key = (key[:100] + "...") if len(key) > 100 else key
+        logger.debug(f"💾 Standard Cache STORED for key: {display_key}")
 
     def set_key(self, key: str, value: Any, ttl: int = 60 * 60):
-        self.client.set(key, value)
-        self.client.expire(key, ttl)
+        # Single atomic command so the key can never be left without a TTL
+        self.client.set(key, value, ex=ttl)
 
     def remove_key(self, key: str):
         self.client.delete(key)

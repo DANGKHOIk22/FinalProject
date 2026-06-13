@@ -1,0 +1,105 @@
+# Tool configuration for Soccer Agent toolbox.
+# Each entry declares the tool name, a short description (shown to the planning LLM),
+# and per-input descriptions (shown in the tool schema).
+
+tools:
+
+  entity_augment:
+    description: >
+      Look up a soccer entity (player, team, venue, or referee) in the local knowledge base
+      and synthesise a final answer in one step. If the local DB is insufficient, automatically
+      falls back to fetching the entity's Wikipedia page via Tavily and saves the result to DB.
+      Use for: player biography, career history, achievements, awards, trophies, season-level stats,
+      transfer history, club history, stadium facts, coach profile, referee profile, and entity comparisons.
+      Do NOT use for: current news, live scores, upcoming fixtures, or recent events — use web_news_search.
+      Do NOT use for: specific historical match data (score, lineup, events) — use game_info_retrieval or game_history_retrieval.
+      IMPORTANT: Pass only ONE entity per call. If the user asks about multiple entities, use parallel chains.
+    inputs:
+      entity_names: >
+        List containing exactly ONE soccer entity name (player, team, venue, or referee).
+        Rules:
+        - Core name only — DO NOT include suffixes FC, AFC, CF, SC, SSC, AC, EC, FK or prefixes FC, AFC.
+          Write "Manchester City" not "Manchester City FC", "Barcelona" not "FC Barcelona".
+        - Capitalize the first letter of each word.
+        - No raw questions, pronouns, or type labels — just the name.
+        Examples: ["Lionel Messi"], ["Manchester City"], ["Old Trafford"], ["Howard Webb"].
+      query: >
+        The user's question or a focused retrieval query used to shape the final answer.
+        The query MUST be in English regardless of the user's input language.
+
+  web_news_search:
+    description: >
+      Search the web for recent soccer/football news articles (transfers, injuries, match results,
+      upcoming fixtures, league standings updates, manager appointments, etc.).
+      Use when the user asks about anything that requires up-to-date information not in the
+      static knowledge base.
+      Do NOT use for: player career bios or team founding history — use entity_augment.
+      Do NOT use for: specific historical match data — use game tools.
+    inputs:
+      query: >
+        Specific news search query including the entity name and news angle.
+        The query MUST be in English regardless of the user's input language.
+        Examples: "Erling Haaland injury update", "Real Madrid summer transfer news",
+        "Premier League top scorer 2025".
+      time_range: >
+        Recency filter: "day" (last 24 h, breaking news), "week" (last 7 days, default),
+        "month" (last 30 days, background context).
+
+  game_info_retrieval:
+    description: >
+      Retrieve static pre-match and post-match summary data for a specific match:
+      teams, date, venue, final score, starting lineups, formations, substitutions, attendance.
+      Use when the question asks for match metadata, final result, or who played/started.
+      Do NOT use for: in-game events (goals, cards, substitution timestamps) — use game_history_retrieval.
+      Do NOT use for: player career stats across seasons — use entity_augment.
+    inputs:
+      query: >
+        A natural-language description of the match to look up.
+        Should include team names and the match date or season for best retrieval accuracy.
+        The query MUST be in English regardless of the user's input language.
+        Example: "Arsenal vs Chelsea 2024-03-16", "Champions League final 2023".
+
+  game_history_retrieval:
+    description: >
+      Retrieve the detailed in-game event log for a specific match: goal timestamps and scorers,
+      yellow/red cards, substitution events, and other match incidents.
+      Use when the question asks about who scored, when a goal was scored, which players
+      received cards, or other in-game events.
+      Do NOT use for: pre-match lineup or static match summary — use game_info_retrieval.
+    inputs:
+      query: >
+        A natural-language description of the match to look up.
+        Include team names and date/season.
+        The query MUST be in English regardless of the user's input language.
+        Example: "goals scored in Man United vs Liverpool 2024-04-07".
+
+  commentary_generation:
+    description: >
+      Given a soccer match video clip, this tool generates an approximately 500-word
+      match commentary and extract key events as structured annotations.
+      After using this tool, you can use the 'game_history_retrieval' tool for answering questions about the match history.
+    inputs:
+      video_id: >
+        UUID of the video media to generate commentary for.
+      query: >
+        Optional user query/context to guide commentary (usually None).
+
+  entity_recognition:
+    description: >
+      Identify a specific soccer player or person in an image using visual description-based localization
+      followed by face recognition. Provide a plain-English description of the person's visual attributes
+      (kit color, jersey number, position in frame) and the source image UUID.
+      Internally: uses Qwen-VL to locate the described region, OpenCV to refine to the face,
+      InsightFace to extract the face embedding, and Qdrant vector search + MongoDB to return the entity's
+      full wiki profile.
+      Use for: "Who is the person wearing the red shirt?", "Identify the goalkeeper in this frame."
+      Do NOT use for: questions about match events or statistics — use game tools.
+      IMPORTANT: One entity per call. For multiple people, use parallel chains.
+      Requires visual media input (image UUID).
+    inputs:
+      image_id: >
+        UUID of the source image to search in.
+      query_entity_recognition_task: >
+        Visual description of the single person to locate and identify. Must be in English.
+        Include object class noun (person/man/woman) and visual attributes (color, clothing, position).
+        Do NOT include proper names — the localization model does not recognize names.

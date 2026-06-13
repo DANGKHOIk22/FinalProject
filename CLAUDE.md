@@ -1,318 +1,285 @@
-# CLAUDE.md - Soccer Agent Project Guide
+# CLAUDE.md
 
-## Project Overview
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-This is a **Soccer Agent** application - an intelligent AI-powered chatbot that answers soccer-related questions using a multi-agent architecture built with LangGraph. The system can handle complex queries about soccer matches, players, teams, and analyze video/image content.
+## Commands
 
-### Core Technology Stack
-- **Framework**: FastAPI (Python 3.11)
-- **AI/LLM**: Google Gemini 2.5 Flash, LangChain, LangGraph
-- **Databases**: 
-  - PostgreSQL (conversation history)
-  - MongoDB (entity information)
-  - Qdrant (vector embeddings)
-- **Video/Image Processing**: OpenCV, FFmpeg
-- **Computer Vision Models**: DeepFace, CLIP, GroundingDINO (deployed to Azure endpoints)
+```bash
+# Install (use uv, not pip)
+uv sync
 
-## Project Structure
+# Run dev server
+uv run uvicorn main:app --reload --port 8000
 
-```
-FinalProject/
-├── app/
-│   ├── api/                    # FastAPI routes
-│   │   ├── chat.py            # Main chat endpoint
-│   │   └── user.py            # User management
-│   ├── config/                # Configuration management
-│   │   ├── config.py          # App-wide constants
-│   │   └── settings.py        # Environment variables loader
-│   ├── database/              # Database models and connections
-│   │   ├── db.py              # PostgreSQL connection
-│   │   ├── models.py          # SQLAlchemy models
-│   │   └── Game_dataset/      # Soccer match data (10 years, multiple leagues)
-│   ├── schema/                # Pydantic schemas
-│   │   ├── chat.py            # Chat request/response models
-│   │   ├── match.py           # Match data models
-│   │   └── soccerwiki_entities.py  # Entity schemas
-│   └── soccer_agent/          # Core agent implementation
-│       ├── agent.py           # Main SoccerAgent class (LangGraph)
-│       ├── factory/           # Agent factory patterns
-│       ├── memory/            # Conversation & system memory
-│       ├── prompts/           # LLM prompts
-│       └── toolbox/           # Agent tools
-├── scripts/
-│   ├── init_db.py            # Database initialization
-│   └── host_model/           # Model deployment scripts (Azure ML)
-├── unit_test/                # Test suites
-└── main.py                   # FastAPI application entry point
+# Run Celery worker (required for HLS background tasks)
+# -P solo is required on Windows — the default prefork pool is POSIX-only
+python -m celery -A app.celery_app worker --loglevel=info -P solo
+
+# Purge all pending Celery tasks
+python -m celery -A app.celery_app purge -f
+
+# Initialize PostgreSQL long-term memory tables
+uv run python scripts/init_long_term_memory_db.py
+# Qdrant collections are seeded via notebooks:
+#   scripts/database/init_case_bank/case_bank_manager.ipynb
+#   scripts/database/init_game_db/game_data_manager.ipynb
+
+# Run all tests  ← pyproject.toml has testpaths=["tests"] which is wrong; always pass path explicitly
+uv run pytest unit_test/
+
+# Run a single test file
+uv run pytest unit_test/tools/test_video_streaming.py
+
+# Async tests require @pytest.mark.asyncio (asyncio_mode = "strict" in pyproject.toml)
 ```
 
-## Key Components
+## Agent Execution Flow
 
-### 1. Agent Architecture (`app/soccer_agent/agent.py`)
-
-The **SoccerAgent** implements a parallel multi-worker architecture using LangGraph:
-
-#### State Management
-- **AgentState**: Parent state containing user query, `claried_query` (pronoun-resolved query), tool chains, parallel results
-- **WorkerState**: Individual worker state for parallel tool execution
-
-#### Agent Flow
-1. **Planning Node** (`_tool_chain_planning`): Analyzes user query, resolves pronouns → `claried_query`, decomposes into sub-queries, plans tool chains
-2. **Worker Dispatch** (`_trigger_workers`): Routes sub-queries to parallel workers; uses `claried_query` as fallback when no sub_queries
-3. **Execution Workers** (`_execution_node`): Each executes a tool chain independently
-4. **Aggregator Node** (`_aggregator_node`): Combines parallel results into final response; uses `claried_query` as effective user query
-
-#### Key Methods
-- `run(request: ChatRequest)` - Main entry point for processing user queries
-- `_tool_chain_planning()` - Query decomposition, pronoun resolution, and tool chain planning
-- `_worker_node()` / `_execution_node()` - Individual tool chain execution
-- `_aggregator_node()` - Result aggregation
-- `_trigger_workers()` - Dispatches to workers or direct response
-- `_build_tool_summary_for_memory()` - Formats tool call details (name, args, response, artifact) for saving into conversation memory
-
-### 2. Toolbox (`app/soccer_agent/toolbox/`)
-
-Available tools for the agent:
-
-#### Text/Knowledge Tools
-- **textual_entity_search**: Search for soccer entities (players, teams, coaches)
-- **textual_retrieval_augment**: RAG-based retrieval from knowledge base
-- **game_history_retrieval**: Get historical match data
-- **game_info_retrieval**: Get specific match information
-- **game_search**: Search matches by criteria
-
-#### Visual Tools
-- **segment**: Segment images to detect objects (uses GroundingDINO)
-- **commentary_generation**: Generate commentary from visual analysis
-- ~~**entity_recognition**~~: *Currently disabled* (uses DeepFace) — commented out in `tool_registry`
-- ~~**frame_selection**~~: *Currently disabled* (uses CLIP) — commented out in `tool_registry`
-
-#### Utility Tools
-- **choice_selection**: Select best option from choices
-
-### 3. Memory System (`app/soccer_agent/memory/`)
-
-- **PostgreSQL Memory**: Stores conversation history with `langchain-postgres`
-- **System Prompt Memory** (`CustomSystemPromptMemory`): Manages conversation context and clarifications; trims to last `max_history=15` messages
-- **Tool-enriched history**: Each saved turn includes tool call details (tool name, input args, response content, artifact if any) formatted via `_build_tool_summary_for_memory()`, followed by the final response. This lets future turns see what tools were used and what they returned.
-
-### 4. API Endpoints (`app/api/`)
-
-#### POST `/chat`
-```python
-{
-    "user_id": "string",
-    "session_id": "string (optional)",
-    "user_query": "string",
-    "additional_material": ["image_url or path (optional)"]
-}
+```
+User Query
+  → get_history          (PostgreSQL conversation history)    ─┐
+  → context_retrieval    (Qdrant case bank, top-3 positive)   ─┤ parallel
+  → guardrail_classify   (soccer-topic classifier, fail-open) ─┘
+  → guardrail_gate       (fan-in join)
+      ├─ is_off_topic=True  → guardrail_refusal → save_memory → END
+      └─ is_off_topic=False → unified_planning
+  → unified_planning     (pronoun resolution + chain decomposition → UnifiedPlanningOutput)
+      ├─ need_call_tools=False → aggregator (direct response from history)
+      └─ need_call_tools=True  → worker_graph (LangGraph Send → N parallel worker subgraphs)
+            worker subgraph:
+              → check_cache_node  (Redis sub_query_cache, cosine threshold=0.15, ttl=3600)
+                  ├─ cache hit → END (skip execution)
+                  └─ miss    → execution_node (LLM + tool calls, loops until done)
+                                   └─ tool_node (ToolNode executes one tool per cycle)
+  → aggregator           (merges parallel_results using clarified_query)
+  → save_memory          (PostgreSQL + Redis, background-async)
 ```
 
-Response:
-```python
-{
-    "status": "success",
-    "user_query": "original query",
-    "agent_response": "AI response"
-}
+**Critical**: Workers and aggregator always use `clarified_query`, never `user_query`. Set by `unified_planning` after pronoun resolution.
+
+**Guardrail**: Runs in parallel with `get_history` / `context_retrieval`. Classifies the query as soccer-related using a fast LLM (`guardrail` role in `llm_config.yaml`). Fails open on any error or timeout (`GUARDRAIL_TIMEOUT_SECONDS = 10.0`). Off-topic queries get a canned refusal (`GUARDRAIL_REFUSAL_MESSAGE`) and skip planning/workers/aggregator entirely.
+
+**`unified_planning` reads `game_id`** from `additional_material` dict in state, or from the CopilotKit context blob (JSON under `state.copilotkit.context`) if not set on state directly. `video_current_time` is a top-level `AgentState` field (float, seconds). All planned chains are dispatched regardless of confidence — the `PLANNING_CONFIDENCE_THRESHOLD` ambiguity check is currently disabled (commented out in `unified_planning.py`).
+
+**`trigger_workers` resolves `game_id`** from `additional_material` dict (not a top-level state field), then merges it into each worker's `additional_material` dict before dispatch.
+
+**Streaming UI events**: `unified_planning` emits a `manually_emit_tool_call` custom LangGraph event (via `adispatch_custom_event`) so the frontend CopilotKit adapter can render planning progress in real time.
+
+## LLM Model Routing
+
+Actual models are defined in `app/soccer_agent/factory/llm_config.yaml` via LiteLLM Router — this file is authoritative.
+
+| Role | Primary | Fallback |
+|------|---------|----------|
+| planning | `openai/gpt-5.4-nano` (reasoning_effort: high) | `gemini/gemini-3.1-flash-lite` |
+| execution | `openai/gpt-5.4-nano` | `gemini/gemini-3.1-flash-lite` |
+| retrieval-augment | `openai/gpt-5.4-nano` (streaming) | `gemini/gemini-3.1-flash-lite` |
+| aggregator | `openai/gpt-5.4-nano` (reasoning_effort: medium, streaming) | `gemini/gemini-3.1-flash-lite` |
+| tool | `openai/gpt-5.4-nano` | `gemini/gemini-3.1-flash-lite` |
+
+`OPENAI_API_KEY` is required for the primary path. `GOOGLE_API_KEY` enables the fallback.
+
+## Current Tool Registry
+
+All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`):
+
+| Tool | File | Purpose |
+|------|------|---------|
+| `entity_augment` | `entity_augment.py` | Search + RAG for soccer entities (players, teams, coaches) |
+| `game_history_retrieval` | `game_retrieval.py` | Historical match data lookup |
+| `game_info_retrieval` | `game_retrieval.py` | Specific match info lookup |
+| `entity_recognition` | `entity_recognition.py` | Player recognition via face recognition (InsightFace) + Qdrant |
+| `commentary_generation` | `commentary_generation.py` | Visual commentary from frame analysis |
+| `web_news_search` | `web_search.py` | Tavily web search for post-2024 or news queries |
+
+## Storage Layer
+
+| Store | Purpose |
+|-------|---------|
+| MongoDB | Soccer entities (players, teams, coaches) |
+| Qdrant | RAG knowledge base, HLS frame embeddings, case bank |
+| PostgreSQL | Chat history, LangGraph checkpoints |
+| Redis | Semantic cache (`sub_query_cache`, `context_cache`), session memory summaries, Celery broker |
+
+## Critical Gotchas
+
+**`testpaths = ["tests"]` in pyproject.toml is misconfigured.** Real tests are in `unit_test/`. Always pass path explicitly.
+
+**`SoccerAgent` is `None` at startup if `DASHSCOPE_API_KEY` is missing.** `/chat` returns 503 — not a bug.
+
+**Semantic cache is split into two isolated Redis indexes** (`sub_query_cache` and `context_cache`), both `SemanticCache` instances in `app/cache/semantic_cache.py`. Reads and writes are fully active (`threshold=0.15`, `ttl=3600`). The cache filters by `game_id` + `timestamp` window for video queries and by `image_id` + `game_id == "__none__"` for non-video queries. **If you have a stale `semantic_cache` index from before the split, flush it**: `redis-cli DEL semantic_cache`.
+
+**`additional_material` is now a dict**, not a list. Structure: `{"game_id": str | None, "image_id": List[str]}`. The `game_id` key in this dict is the canonical place `trigger_workers` and the cache use to route video-aware execution. Do not pass `additional_material` as `List[str]`.
+
+**Celery on Windows requires `-P solo`.** The default prefork pool is POSIX-only.
+
+**ffmpeg and ffprobe must be in `$PATH`.** Hard-required for segment generation; ffprobe falls back to OpenCV if missing.
+
+**HLS sessions are in-memory only.** `_videos` dict in `app/api/hls_stream.py` is lost on restart. Task status is preserved in Redis (`hls:task:<task_id>` key, 7-day TTL).
+
+**`STT_BACKEND=stub` by default.** Set to `gemini` / `whisper_api` / `whisper_local` plus the appropriate API key for real transcription.
+
+**`VIDEO_SEGMENT_DURATION` defaults to 5 seconds** (not 30 — the `.env` default and config value differ from older docs).
+
+**`IncrementalSegmentIndexer` uses VLM captions + `text-embedding-v4`.** Each frame is captioned by `qwen3-vl-flash-2026-01-22` then embedded with `dashscope.TextEmbedding` (`text-embedding-v4`). The `hls_frame_index` Qdrant collection uses `dense_caption` (not `dense_image`). **Breaking**: if you have an existing `hls_frame_index` collection from the old vision-embedding schema, drop and recreate it.
+
+**`processor.py` is HLS-only.** It no longer downloads or splits full videos — it assumes HLS segments already exist on disk and only does per-segment frame/audio extraction.
+
+**Do not remove `@observe` decorators** (Langfuse) — they are the primary production debugging tool.
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `app/soccer_agent/agent.py` | `SoccerAgent` — builds graph, registers tools, entry point `run()` |
+| `app/soccer_agent/nodes/unified_planning.py` | Pronoun resolution + tool chain decomposition in one LLM call |
+| `app/soccer_agent/nodes/worker.py` | `WorkerNodes` — cache check, execution loop, `trigger_workers` dispatch |
+| `app/soccer_agent/nodes/aggregator.py` | Merges parallel worker results into final response |
+| `app/soccer_agent/nodes/conversation_history.py` | Loads PostgreSQL chat history into state |
+| `app/soccer_agent/nodes/context_retrieval.py` | Qdrant case bank few-shot retrieval |
+| `app/soccer_agent/nodes/memory_saving.py` | Async background save to PostgreSQL + Redis |
+| `app/soccer_agent/nodes/guardrail.py` | `GuardrailNode` — soccer-topic classifier; `classify_node` (parallel), `gate_node` (fan-in), `gate_router`, `refusal_node` |
+| `app/schema/soccer_agent/state.py` | `AgentState`, `WorkerState`, `UnifiedPlanningOutput`, `PlannedChain` |
+| `app/soccer_agent/factory/llm_config.yaml` | **Authoritative** LiteLLM router config — actual model names |
+| `app/soccer_agent/prompts/agent.py` | Planning, execution, and aggregator prompt templates |
+| `app/config/config.py` | Numeric thresholds, model alias constants, `TEMPORARY_DIR` |
+| `app/config/settings.py` | Env-var loader — `.env` anchored to `FinalProject/` to survive Celery CWD changes |
+| `app/soccer_agent/toolbox/__init__.py` | Tool imports — add new tools here |
+| `app/cache/semantic_cache.py` | `SemanticCache`, `sub_query_cache`, `context_cache` instances |
+| `app/celery_app.py` | Celery app instance; Redis broker+backend; includes `hls_tasks` |
+| `app/api/hls_stream.py` | HLS session registration, playlist proxy, segment proxy, status polling |
+| `app/video_processing/processor.py` | `VideoStreamingProcessor`, `HLSSegmentWatcher`, `VideoSegment` |
+| `app/video_processing/segment_index.py` | `IncrementalSegmentIndexer` — DashScope vision embeddings → Qdrant |
+| `app/video_processing/speech_to_text.py` | `SpeechToTextService` — DashScope Qwen3-ASR |
+| `app/video_processing/services/match_indexing_service.py` | Orchestrates watcher + indexer per HLS session |
+| `app/video_processing/tasks/hls_tasks.py` | Celery task `hls.process_video_session` |
+| `app/services/media_registry.py` | `MediaRegistryService` — Azure Blob Storage + Redis media registry |
+| `scripts/case_bank_manager.ipynb` | Manage planning few-shot examples in `planning_case_bank` Qdrant collection |
+
+## Environment Variables
+
+In `FinalProject/.env`. `Settings.validate()` exists but is **not** called at startup — missing vars cause runtime errors, not startup failures.
+
 ```
+# LLM
+OPENAI_API_KEY=             # Required — primary LLM provider (gpt-5.4-nano)
+GOOGLE_API_KEY=             # Required for Gemini fallback + semantic cache embeddings
+DASHSCOPE_API_KEY=          # Required — SoccerAgent is None without it; /chat returns 503
 
-## Environment Configuration
-
-Required environment variables in `.env`:
-
-```env
-# LLM API Keys
-GOOGLE_API_KEY=your_gemini_api_key
-DASHSCOPE_API_KEY=your_dashscope_key (optional)
-
-# MongoDB (Entity Storage)
-MONGO_SRV=mongodb+srv://...
+# Databases
+MONGO_SRV=
 SOCCER_DB_NAME=SoccerWikiDemo
 SOCCER_COLLECTION_NAME=EntityInformation
+QDRANT_URL=
+QDRANT_API_KEY=
+QDRANT_COLLECTION_NAME=
+QDRANT_CASE_BANK_COLLECTION_NAME=Soccer_Case_Bank
+QDRANT_HLS_COLLECTION_NAME=hls_frame_index
+POSTGRES_DATABASE_URL=
+REDIS_URL=redis://localhost:6379/0
 
-# Qdrant (Vector DB)
-QDRANT_URL=https://your-qdrant-instance
-QDRANT_API_KEY=your_api_key
-QDRANT_COLLECTION_NAME=your_collection
+# Tavily (web search)
+TAVILY_API_KEYS=key1,key2   # Comma-separated for round-robin + 429 failover
 
-# PostgreSQL (Conversation History)
-POSTGRES_DATABASE_URL=postgresql://user:pass@host:port/db
+# Azure ML endpoints (vision tools)
+DEEPFACE_ENDPOINT_URI=
+DEEPFACE_ENDPOINT_KEY=
+INSIGHTFACE_ENDPOINT_URI=
+INSIGHTFACE_ENDPOINT_KEY=
+GROUNDINGDINO_ENDPOINT_URI=
+GROUNDINGDINO_ENDPOINT_KEY=
+CLIP_ENDPOINT_URI=
+CLIP_GROUNDINGDINO_ENDPOINT_URI=
+CLIP_GROUNDINGDINO_ENDPOINT_KEY=
 
-# Azure ML Endpoints (Computer Vision)
-DEEPFACE_ENDPOINT_URI=https://...
-DEEPFACE_ENDPOINT_KEY=...
-GROUNDINGDINO_ENDPOINT_URI=https://...
-GROUNDINGDINO_ENDPOINT_KEY=...
-CLIP_ENDPOINT_URI=https://...
-CLIP_ENDPOINT_KEY=...
-CLIP_GROUNDINGDINO_ENDPOINT_URI=https://...
-CLIP_GROUNDINGDINO_ENDPOINT_KEY=...
+# Azure Storage (MediaRegistryService — upload endpoint)
+AZURE_STORAGE_ACCOUNT_URL=
+AZURE_CONTAINER_NAME=
+UMRS_REDIS_URL=             # Redis URL for media registry (can be same as REDIS_URL)
 
-# Optional
-DEEPFACE_HOME=./temporary/cache
+# Video
+STT_BACKEND=stub            # gemini | whisper_api | whisper_local | stub
+VIDEO_SEGMENT_DURATION=5    # Seconds per HLS segment
+VIDEO_MAX_DOWNLOAD_DURATION=600
+VIDEO_DIR=../video/
+
+# JWT (required — startup raises ValueError if missing unless CI=true or TESTING=true)
+JWT_SECRET_KEY=
+JWT_ALGORITHM=HS256
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=10080
+
+# Observability (optional)
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+LANGSMITH_API_KEY=
 ```
 
-## Database Schema
+## API Endpoints
 
-### PostgreSQL (SQLAlchemy Models in `app/database/models.py`)
-- **Users**: User authentication and profiles
-- **Conversations**: Chat session metadata
-- **Messages**: Individual chat messages (managed by langchain-postgres)
+- `POST /chat` — Main agent endpoint (`user_id`, `user_query`, optional `additional_material: dict`, `session_id`)
+- AG-UI streaming endpoint — mounted at `/soccer_agent/copilotkit`; used by the frontend CopilotKit adapter
+- `GET /` — Health check (shows DB connection status)
+- `POST /hls/sessions` — Register HLS directory for streaming
+- `GET /hls/{id}/playlist.m3u8` — Rewritten HLS playlist
+- `GET /hls/{id}/{file}.ts` — Proxy TS segment bytes
+- `POST /hls/{id}/analyze` — Enqueue Celery background analysis task
+- `GET /hls/{id}/analyze/status` — Poll Celery task status
+- `DELETE /hls/sessions/{id}` — Revoke Celery task (SIGTERM)
+- `/upload` — Media upload router (Azure Blob via `MediaRegistryService`)
+- `/user` — User CRUD
 
-### MongoDB Collections
-- **EntityInformation**: Soccer entities (players, teams, coaches, competitions)
+## HLS Video Processing Pipeline
 
-### Qdrant Collections
-- Vector embeddings for semantic search
-
-## Running the Application
-
-### Development Setup
-```bash
-# Create virtual environment
-python3.11 -m venv .venv
-source .venv/bin/activate  # macOS/Linux
-
-# Install dependencies
-pip install -e .
-
-# Initialize database
-python scripts/init_db.py
-
-# Run the application
-python main.py
-# or
-uvicorn main:app --reload --port 8000
+```
+POST /hls/sessions
+  → Celery task: hls.process_video_session
+      ├─ ffmpeg: video → HLS segments (seg000.ts, …) in temporary/hls_sessions/{game_id}/
+      │   stderr drained in background thread to prevent pipe-buffer deadlock on Windows
+      └─ MatchIndexingService.process_hls_session (concurrent with ffmpeg)
+            → HLSSegmentWatcher polls playlist, yields segments as ffmpeg writes them
+            → VideoStreamingProcessor.extract_frames_from_segment
+                  → 3 frames/segment (start/mid/end for seg 0; mid/end for others)
+            → VideoStreamingProcessor.extract_audio_from_segment (ffmpeg -vn → 16kHz WAV)
+            → SpeechToTextService.transcribe (DashScope qwen3-asr-flash)
+            → IncrementalSegmentIndexer.index_segment_frames  ─┐ → Qdrant hls_frame_index
+            → IncrementalSegmentIndexer.index_transcript_chunk ─┘
 ```
 
-### Application Lifecycle
-- **Startup**: Initializes database connections (MongoDB, Qdrant, PostgreSQL), validates configurations
-- **Runtime**: Agent service processes chat requests asynchronously
-- **Shutdown**: Gracefully closes database connections
+**Qdrant `hls_frame_index` schema**: named vectors `dense_caption` (`text-embedding-v4` of VLM caption) + `dense_text` (`text-embedding-v4` of transcript) + `sparse` (BM25 of caption + transcript). All points carry `game_id` for filtering.
 
-## Development Guidelines
+## Adding a Tool
 
-### Adding New Tools
-1. Create tool file in `app/soccer_agent/toolbox/`
-2. Implement as `BaseTool` from LangChain
-3. Register in `app/soccer_agent/toolbox/__init__.py`
-4. Update agent initialization in `agent.py`
+1. Create `app/soccer_agent/toolbox/my_tool.py` as a `BaseTool` subclass.
+2. Import and export it in `app/soccer_agent/toolbox/__init__.py`.
+3. Add it to `self.tool_registry` in `SoccerAgent.__init__()` (`app/soccer_agent/agent.py`).
 
-### Modifying Agent Behavior
-- **Planning prompts**: `app/soccer_agent/prompts/agent.py` - `get_planning_prompt_template()`
-- **Execution prompts**: `app/soccer_agent/prompts/agent.py` - `get_execution_prompt_template()`
-- **Aggregation prompts**: `app/soccer_agent/prompts/agent.py` - `get_aggregator_prompt_template()`
+## Key Config Values (`app/config/config.py`)
 
-### Testing
-```bash
-# Run unit tests
-pytest unit_test/
+- `SESSION_MEMORY_TOKEN_THRESHOLD = 12_600` — triggers Redis compression
+- `SESSION_MEMORY_RECENT_KEEP = 5` — messages kept verbatim post-compression
+- `PLANNING_CONFIDENCE_THRESHOLD = 0.5` — disabled; all chains dispatch regardless of confidence
+- `QDRANT_SEARCH_SCORE_THRESHOLD = 0.5`
+- `GUARDRAIL_RECENT_TURNS = 4` — trailing messages the guardrail classifier sees for context
+- `GUARDRAIL_TIMEOUT_SECONDS = 10.0` — fail-open ceiling for the classifier
+- `GUARDRAIL_REFUSAL_MESSAGE` — canned off-topic refusal string
 
-# Test specific components
-pytest unit_test/agent/test_parallel_architecture.py
-pytest unit_test/tools/test_entity_recognition.py
-```
+## GitNexus — Code Intelligence
 
-## AI Model Configuration
+This project is indexed by GitNexus as **FinalProject**. Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
-Models are configured in `app/config/config.py`:
+> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
-```python
-DEFAULT_MODEL = "gemini-2.0-flash-exp"
-GEMINI_2_5_FLASH = "gemini-2.0-flash-exp"
-GEMINI_2_5_FLASH_LITE = "gemini-2.0-flash-lite"
-MODEL_TEMPERATURE = 0.7
-MODEL_TOP_P = 0.95
-MAX_COMPLETION_TOKENS = 8192
-```
+**Always do before editing:**
+- Run `gitnexus_impact({target: "symbolName", direction: "upstream"})` — report blast radius, warn on HIGH/CRITICAL
+- Run `gitnexus_detect_changes()` before committing — verify only expected symbols changed
 
-## Logging & Monitoring
+**Never do:**
+- Edit a function/class/method without first running `gitnexus_impact`
+- Rename symbols with find-and-replace — use `gitnexus_rename` (call-graph aware)
+- Commit without running `gitnexus_detect_changes()`
 
-- **Logging**: Python's standard logging + structlog
-- **Tracing**: Langfuse integration for LLM call tracking
-- **Observability**: `@observe` decorator on key agent methods
-
-## Data Sources
-
-### Game Dataset (`app/database/Game_dataset/`)
-Contains 10 years of match data from:
-- England EPL (2014-2024)
-- Europe Champions League (2014-2024)
-- France Ligue 1 (2014-2024)
-- Germany Bundesliga (2014-2024)
-- And more leagues...
-
-Each match includes: teams, scores, lineups, statistics, events, etc.
-
-## Common Issues & Solutions
-
-### Database Connection Errors
-- Verify `.env` file has correct credentials
-- Check MongoDB/Qdrant/PostgreSQL services are running
-- Test connections before agent initialization
-
-### Tool Execution Failures
-- Check Azure ML endpoints are deployed and accessible
-- Verify API keys for external services
-- Review tool input/output schemas
-
-### Memory Issues with Video Processing
-- Videos are processed frame-by-frame
-- Frames stored temporarily in `temporary/frames/`
-- Cleanup happens after processing
-
-## API Integration Example
-
-```python
-import requests
-
-response = requests.post(
-    "http://localhost:8000/chat",
-    json={
-        "user_id": "user123",
-        "user_query": "Who scored in the last Manchester United vs Liverpool match?",
-        "session_id": "session456"
-    }
-)
-
-result = response.json()
-print(result["agent_response"])
-```
-
-## Future Enhancements
-
-- [ ] Streaming responses for long-running queries
-- [ ] Multi-language support
-- [ ] Real-time match data integration
-- [ ] Enhanced video analysis capabilities
-- [ ] Performance optimization for parallel workers
-
-## Important Notes for Claude
-
-1. **LangGraph Architecture**: State-based routing with conditional edges. Flow: planning → dispatch → workers → aggregation.
-
-2. **Async/Await**: Most operations are async. The agent uses `asyncio` for parallel worker execution.
-
-3. **Tool Calling**: Tools are registered with the LLM via `bind_tools`. The execution LLM decides which tool to call at each step; only one tool is called per generation cycle.
-
-4. **Memory Management**: Conversation history saved to PostgreSQL via `CustomSystemPromptMemory`. Each turn stores: tool usage summary (name + args + response + artifact per step) + final response as a single assistant message.
-
-5. **Pronoun Resolution (`claried_query`)**: The planning node resolves pronouns in the user query by checking conversation history. The resolved query is stored in `AgentState.claried_query` and used by workers (as sub_query fallback) and the aggregator (as the effective user query). The original `user_query` is preserved for traceability.
-
-6. **Error Handling**: Most errors are caught and logged. Check `logger.error()` calls for debugging. Worker timeouts are set to 120 seconds.
-
-7. **Configuration Priority**: Environment variables > `settings.py` > `config.py` defaults
-
-## Contact & Support
-
-For questions about this codebase, review:
-- Agent implementation: [app/soccer_agent/agent.py](app/soccer_agent/agent.py)
-- API endpoints: [app/api/chat.py](app/api/chat.py)
-- Configuration: [app/config/settings.py](app/config/settings.py)
-
----
-
-**Last Updated**: 2026-03-28
-**Python Version**: 3.11
-**Framework Version**: FastAPI 0.118.2, LangGraph (latest)
+| Resource | Use for |
+|----------|---------|
+| `gitnexus://repo/FinalProject/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/FinalProject/processes` | All execution flows |
+| `gitnexus://repo/FinalProject/process/{name}` | Step-by-step execution trace |

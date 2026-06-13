@@ -1,10 +1,12 @@
 from contextlib import asynccontextmanager
 import logging
-import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from copilotkit import LangGraphAGUIAgent
 from langfuse import get_client
+from langchain_core.runnables import RunnableConfig
+from langfuse.langchain import CallbackHandler
 
 import pymongo
 from pymongo.server_api import ServerApi
@@ -19,10 +21,14 @@ from app.database.db import engine
 
 # Import SoccerAgent (but don't initialize yet)
 from app.soccer_agent.agent import SoccerAgent
+from app.soccer_agent.memory.checkpointer import init_checkpointer, close_checkpointer
+from app.services.media_registry import MediaRegistryService
 
 # Chỉ import router chat và user
 from app.api.chat import router as chat_router
+from app.api.chat import get_copilotkit_router
 from app.api.user import router as user_router
+from app.api.upload import router as upload_router
 
 # Cấu hình logging đơn giản thay vì structlog
 logging.basicConfig(
@@ -30,6 +36,12 @@ logging.basicConfig(
     format=LOG_FORMAT
 )
 logger = logging.getLogger(__name__)
+
+# Suppress noisy third-party loggers
+logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+logging.getLogger("LiteLLM Router").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 # Global variables for database connections
 mongo_client = None
 qdrant_client = None
@@ -37,6 +49,10 @@ postgres_connected = False
 
 # Global variable for agent service
 agent_service = None
+
+# Langfuse callback handler for tracing
+class InlineCallbackHandler(CallbackHandler):
+    run_inline = True
 
 # --- 1. Lifespan: Quản lý khởi động/tắt app ---
 @asynccontextmanager
@@ -87,11 +103,49 @@ async def lifespan(app: FastAPI):
             postgres_connected = False
             logger.error(f"❌ Postgres connection failed: {e}")
 
+        # Initialize LangGraph checkpointer (async Postgres pool)
+        checkpointer = None
+        if postgres_connected:
+            try:
+                checkpointer = await init_checkpointer()
+                logger.info("✅ LangGraph checkpointer initialized")
+            except Exception as e:
+                logger.error(f"❌ Checkpointer init failed: {e}")
+
         # Initialize SoccerAgent AFTER all models and databases are loaded
         if settings.DASHSCOPE_API_KEY:
             logger.info("Initializing SoccerAgent...")
-            agent_service = SoccerAgent()
+            agent_service = SoccerAgent(checkpointer=checkpointer)
             logger.info("✅ SoccerAgent initialized successfully")
+
+            # Initialize MediaRegistryService
+            media_service = MediaRegistryService(
+                redis_url=settings.UMRS_REDIS_URL,
+                azure_storage_url=settings.AZURE_STORAGE_ACCOUNT_URL,
+                azure_container_name=settings.AZURE_CONTAINER_NAME
+            )
+            app.state.media_registry = media_service
+            logger.info("✅ MediaRegistryService initialized successfully")
+
+            # Create a RunnableConfig containing the Langfuse callback handler for tracing
+            langfuse_handler = InlineCallbackHandler()
+            config = RunnableConfig(
+                callbacks=[langfuse_handler],
+                configurable={"media_registry": media_service}
+            )
+
+            # Create LangGraph Endpoint for Copilotkit Integration
+            app.include_router(
+                get_copilotkit_router(
+                    agent=LangGraphAGUIAgent(
+                        name="SoccerAgent",
+                        graph=agent_service.graph, 
+                        config=config
+                    )
+                ),
+                prefix="/soccer_agent/copilotkit",
+                tags=["CopilotKit"]
+            )
         else:
             logger.warning("⚠️ DASHSCOPE_API_KEY not set, skipping SoccerAgent initialization")
             agent_service = None
@@ -118,6 +172,9 @@ async def lifespan(app: FastAPI):
         qdrant_client.close()
         logger.info("Qdrant connection closed")
     
+    # Close checkpointer pool
+    await close_checkpointer()
+
     # Clear agent service
     agent_service = None
     
@@ -150,9 +207,11 @@ app.add_middleware(
 )
 
 # --- 4. Đăng ký Router ---
-# Đăng ký chat và user router
 app.include_router(chat_router, tags=["Soccer Chat Agent"])
 app.include_router(user_router, prefix="/user", tags=["User"])
+app.include_router(upload_router,  tags=["Upload"])
+
+
 
 # --- 5. Helper Functions để truy cập preloaded models ---
 def get_mongo_client():
@@ -178,6 +237,7 @@ def root():
 
 # --- 7. Chạy server ---
 if __name__ == "__main__":
+
     uvicorn.run(
         "main:app", 
         host="0.0.0.0", 

@@ -1,0 +1,15 @@
+name: insightface_online_endpoint
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - cmake
+  - setuptools
+  - wheel
+  - pip
+  - cython
+  - conda-forge::onnxruntime
+  - pip:
+      - azureml-inference-server-http
+      - insightface>=0.7.3

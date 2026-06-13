@@ -20,22 +20,22 @@ def get_commentary_generation_prompt_template() -> ChatPromptTemplate:
                         "type": "text",
                         "text": """### TASK
 Generate:
-1) A natural-language commentary (~500 words, concise, not repetitive) about what happens in the provided soccer video clips.
+1) A natural-language commentary (~500 words, concise, not repetitive, IN ENGLISH) about what happens in the provided soccer video clips.
 2) A list of structured event annotations.
 
 ### IMPORTANT
 - If the video clips are not soccer-related or you are not confident they depict a soccer match, set annotations to an empty list.
 - The annotations must be grounded in the video content.
-
+{query_context}
 ### OUTPUT FORMAT
 {output_format}
 """
                     },
                     {
-                        "type": "media",
-                        "source_type": "base64",
-                        "mime_type": "{mime_type}",
-                        "data": "{video_base64}",
+                        "type": "video_url",
+                        "video_url": {
+                            "url": "{video_url}"
+                        }
                     }
                 ]
                 
