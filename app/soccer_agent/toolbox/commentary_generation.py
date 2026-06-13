@@ -111,7 +111,6 @@ class CommentaryGenerationTool(BaseTool):
                 [],
             )
 
-    @standard_cache.cache(ttl=60 * 60, validatedModel=_CommentaryGenerationOutput)
     def _cached_generate_commentary(self, media_id: str, query: Optional[str] = None, media_registry: Any = None, user_id: str = "default_user", thread_id: str = "default_thread") -> _CommentaryGenerationOutput:
         """Internal method to handle the VLM generation with caching."""
         self.validate_tool_input(media_id, media_registry, user_id, thread_id)
