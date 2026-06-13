@@ -1,37 +1,44 @@
 model_list:
-  # ── Planning: heavy reasoning, query decomposition ───────────────────────────
+  # ── Planning: query decomposition + tool-chain selection ─────────────────────
+  # reasoning_effort low (was high): tool-chain selection benefits from some
+  # reasoning but `high` burns thousands of hidden reasoning tokens → 2-6s.
+  # Bump back to medium only if planning quality regresses.
   - model_name: planning
     litellm_params:
       model: openai/gpt-5.4-nano
       api_key: os.environ/OPENAI_API_KEY
-      max_completion_tokens: 10000
-      reasoning_effort: high
+      max_completion_tokens: 1000
+      reasoning_effort: medium
       stream: false
 
+  # NOTE: Gemini thinking is controlled via `reasoning_effort` (LiteLLM maps it to
+  # thinkingLevel for Gemini 3+). `thinking_level` is NOT a LiteLLM param — it was
+  # silently dropped by litellm.drop_params, so these backups were running at
+  # Gemini's default thinking. `minimal` is the floor for gemini-3.1-flash.
   - model_name: planning-backup
     litellm_params:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
-      max_completion_tokens: 10000
-      thinking_level: high
+      max_completion_tokens: 1000
+      reasoning_effort: low
       stream: false
 
   # ── Execution: iterative tool calling inside workers ─────────────────────────
+  # minimal reasoning — picking which tool to call next is not a reasoning task.
   - model_name: execution
     litellm_params:
       model: openai/gpt-5.4-nano
       api_key: os.environ/OPENAI_API_KEY
-      temperature: 0.5
-      top_p: 0.95
-      max_completion_tokens: 5000
+      max_completion_tokens: 1000
+      reasoning_effort: minimal
       stream: false
 
   - model_name: execution-backup
     litellm_params:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
-      max_completion_tokens: 5000
-      thinking_level: low
+      max_completion_tokens: 1000
+      reasoning_effort: minimal
       stream: false
 
   # ── Retrieval-Augment: retrieve and augment information ─────────────────────
@@ -39,44 +46,44 @@ model_list:
     litellm_params:
       model: openai/gpt-5.4-nano
       api_key: os.environ/OPENAI_API_KEY
-      temperature: 0.5
-      top_p: 0.95
-      max_completion_tokens: 10000
+      max_completion_tokens: 1000
+      reasoning_effort: minimal
       stream: true
 
   - model_name: retrieval-augment-backup
     litellm_params:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
-      max_completion_tokens: 10000
-      thinking_level: low
+      max_completion_tokens: 1000
+      reasoning_effort: minimal
       stream: true
 
   # ── Aggregator: synthesise parallel worker results ───────────────────────────
+  # reasoning_effort low (was medium) + 8k budget (was 50k): synthesis is mostly
+  # rewriting worker outputs, not deep reasoning. Streaming kept for TTFT.
   - model_name: aggregator
     litellm_params:
       model: openai/gpt-5.4-nano
       api_key: os.environ/OPENAI_API_KEY
-      max_completion_tokens: 50000
-      reasoning_effort: medium
+      max_completion_tokens: 1000
+      reasoning_effort: minimal
       stream: true
 
   - model_name: aggregator-backup
     litellm_params:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
-      max_completion_tokens: 50000
-      thinking_level: low
+      max_completion_tokens: 1000
+      reasoning_effort: minimal
       stream: true
 
-  # ── Tool: shared by tools, query-understanding pipeline, guardrails ───────────
+  # ── Tool: shared by tools, query-understanding pipeline ──────────────────────
   - model_name: tool
     litellm_params:
       model: openai/gpt-5.4-nano
       api_key: os.environ/OPENAI_API_KEY
-      temperature: 0.2
-      top_p: 0.95
-      max_completion_tokens: 8000
+      max_completion_tokens: 1000
+      reasoning_effort: minimal
 
   # ── Guardrail: soccer-topic classification before planning ───────────────────
   # Primary is Gemini flash-lite — measured ~1s here vs ~7-8s on the OpenAI path.
@@ -86,6 +93,7 @@ model_list:
       api_key: os.environ/GOOGLE_API_KEY
       temperature: 0
       max_completion_tokens: 200
+      reasoning_effort: minimal
       stream: false
 
   - model_name: guardrail-backup
@@ -94,6 +102,7 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
       temperature: 0
       max_completion_tokens: 200
+      reasoning_effort: minimal
       stream: false
 
   # ── Fallbacks (Gemini as backup now) ────────────────────────────────────────
@@ -101,6 +110,8 @@ model_list:
     litellm_params:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
+      max_completion_tokens: 1000
+      reasoning_effort: minimal
 
 router_settings:
   fallbacks:
