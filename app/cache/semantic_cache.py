@@ -166,4 +166,4 @@ class SemanticCache:
 # Worker answers only. Context retrieval caches few-shot cases via CaseBankCache
 # (per query + has_media) and never caches per-user long-term memory.
 # After deploying, drop the old shared index: FT.DROPINDEX semantic_cache DD
-sub_query_cache = SemanticCache(index_name="sub_query_cache", threshold=0.15, ttl=3600)
+sub_query_cache = SemanticCache(index_name="sub_query_cache", threshold=0.1, ttl=3600)
