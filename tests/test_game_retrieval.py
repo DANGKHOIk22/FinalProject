@@ -495,7 +495,7 @@ class TestAboutCurrentGameFastPath:
                 about_current_game=True,
             )
         self.history_tool._finder.find.assert_not_called()
-        mock_db.assert_called_once_with(active_id)
+        mock_db.assert_called_once_with(active_id, active_vct=None)
         assert game_id == active_id
 
     def test_info_flag_true_but_no_game_id_falls_through_to_search(self):
