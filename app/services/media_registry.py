@@ -160,22 +160,34 @@ class MediaRegistryService:
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
     @staticmethod
-    def extract_uuids_from_message(message: Any) -> list[str]:
+    def extract_uuids_from_message(message: Any) -> dict[str, Any]:
         """
         Extracts media UUIDs from a LangChain message.
-        Looks for content parts of type 'image_url' and takes the filename
+        Looks for content parts of type 'image_url' and 'video_url' and takes the filename
         (excluding extension) of the last segment in the URL path.
+        Returns a dict: {"image_ids": list[str], "video_id": str | None}
         """
-        uuids = []
+        image_ids = []
+        video_id = None
         if not message or not hasattr(message, "content"):
-            return uuids
+            return {"image_ids": image_ids, "video_id": video_id}
             
         content = message.content
         if isinstance(content, list):
             for part in content:
-                if isinstance(part, dict) and part.get("type") == "image_url":
-                    image_url_obj = part.get("image_url") or {}
-                    url = image_url_obj.get("url")
+                if isinstance(part, dict):
+                    url = None
+                    is_image = False
+                    is_video = False
+                    if part.get("type") == "image_url":
+                        image_url_obj = part.get("image_url") or {}
+                        url = image_url_obj.get("url")
+                        is_image = True
+                    elif part.get("type") == "video_url":
+                        video_url_obj = part.get("video_url") or {}
+                        url = video_url_obj.get("url")
+                        is_video = True
+                    
                     if url and isinstance(url, str):
                         try:
                             from urllib.parse import urlparse
@@ -183,9 +195,11 @@ class MediaRegistryService:
                             path = parsed.path
                             filename = path.split("/")[-1]
                             uuid_str = filename.split(".")[0]
-                            if uuid_str and uuid_str not in uuids:
-                                uuids.append(uuid_str)
+                            if uuid_str:
+                                if is_image and uuid_str not in image_ids:
+                                    image_ids.append(uuid_str)
+                                elif is_video:
+                                    video_id = uuid_str
                         except Exception as e:
                             logger.error(f"Error parsing media URL in message: {e}")
-        # TODO: extract from video_url type if needed in the future
-        return uuids
+        return {"image_ids": image_ids, "video_id": video_id}
