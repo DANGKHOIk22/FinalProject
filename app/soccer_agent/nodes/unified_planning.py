@@ -19,20 +19,12 @@ class UnifiedPlanningNode:
         self.tools = tools
         self.parser = PydanticOutputParser(pydantic_object=UnifiedPlanningOutput)
 
-    async def unified_planning_node(self, state: AgentState, config: RunnableConfig):
+    @staticmethod
+    def extract_media_uuids(messages: list, config: RunnableConfig, additional_material: dict) -> dict:
         """
-        Combined node for Query Understanding and Tool Chain Planning.
-        Produces per-chain confidence scores and splits chains into
-        dispatchable (non-ambiguous) vs pending_clarifications (ambiguous).
+        Extract additional material UUIDs from messages if media registry is available
+        and update the additional_material dictionary.
         """
-        messages = state.get("messages", [])
-        user_query = str(messages[-1].text) if messages else ""
-        # Copy — never mutate the dict held by the graph state
-        additional_material = dict(state.get("additional_material") or {})
-        conversation_history = state.get("conversation_history") or "No previous conversation."
-        retrieved_cases = state.get("retrieved_cases") or "No examples available."
-
-        # Extract additional material UUIDs from messages if media registry is available
         media_registry = config.get("configurable", {}).get("media_registry")
         if media_registry and messages:
             extracted_media = media_registry.extract_uuids_from_message(messages[-1])
@@ -40,11 +32,8 @@ class UnifiedPlanningNode:
             # Process image_id list
             extracted_images = extracted_media.get("image_ids") or []
             if extracted_images:
-                existing_images = additional_material.get("image_id") or []
-                new_images = [u for u in extracted_images if u not in existing_images]
-                if new_images:
-                    additional_material["image_id"] = existing_images + new_images
-                    logger.info(f"Extracted SAS URL image UUIDs from message: {new_images}")
+                additional_material["image_id"] = extracted_images
+                logger.info(f"Extracted SAS URL image UUIDs from message: {extracted_images}")
             else:
                 additional_material["image_id"] = []
 
@@ -58,8 +47,14 @@ class UnifiedPlanningNode:
         else:
             additional_material["image_id"] = []
             additional_material["video_id"] = None
+        return additional_material
 
-        # Extract game_id and video_current_time from additional_material for prompt context
+    @staticmethod
+    def extract_game_context(state: AgentState, additional_material: dict) -> tuple:
+        """
+        Extract game_id and video_current_time from additional_material/state/copilotkit context.
+        Also persists game_id in additional_material.
+        """
         video_current_time = state.get("video_current_time")
         game_id = additional_material.get("game_id")
         # Always scan CopilotKit context for the latest current_time — even when game_id is
@@ -86,6 +81,26 @@ class UnifiedPlanningNode:
         # Persist the resolved video context so downstream nodes (trigger_workers,
         # cache, tools) read it from state instead of re-parsing the context blob.
         additional_material["game_id"] = game_id
+        return game_id, video_current_time
+
+    async def unified_planning_node(self, state: AgentState, config: RunnableConfig):
+        """
+        Combined node for Query Understanding and Tool Chain Planning.
+        Produces per-chain confidence scores and splits chains into
+        dispatchable (non-ambiguous) vs pending_clarifications (ambiguous).
+        """
+        messages = state.get("messages", [])
+        user_query = str(messages[-1].text) if messages else ""
+        # Copy — never mutate the dict held by the graph state
+        additional_material = dict(state.get("additional_material") or {})
+        conversation_history = state.get("conversation_history") or "No previous conversation."
+        retrieved_cases = state.get("retrieved_cases") or "No examples available."
+
+        # Extract additional material UUIDs from messages if media registry is available
+        additional_material = self.extract_media_uuids(messages, config, additional_material)
+
+        # Extract game_id and video_current_time from additional_material for prompt context
+        game_id, video_current_time = self.extract_game_context(state, additional_material)
 
         toolbox_descriptions = "\n".join([f"- {t.name}: {t.description}" for t in self.tools])
         try:
@@ -106,6 +121,7 @@ class UnifiedPlanningNode:
 
         if additional_material.get("image_id") or additional_material.get("video_id"):
             game_id = None
+            
         prompt_template = get_unified_planning_prompt_template()
         prompt_value = prompt_template.invoke({
             "user_query_msg": [messages[-1]] if messages else [],
