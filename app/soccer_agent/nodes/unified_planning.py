@@ -83,6 +83,36 @@ class UnifiedPlanningNode:
         additional_material["game_id"] = game_id
         return game_id, video_current_time
 
+    @staticmethod
+    def remove_video_content(message: HumanMessage) -> HumanMessage:
+        """
+        Remove content parts of type 'video_url' from the HumanMessage content
+        so that the video block is not seen by the planning node.
+        """
+        if not message or not hasattr(message, "content"):
+            return message
+
+        content = message.content
+        if isinstance(content, list):
+            new_content = [
+                part for part in content
+                if not (isinstance(part, dict) and part.get("type") == "video_url")
+            ]
+            import copy
+            try:
+                return message.model_copy(update={"content": new_content})
+            except Exception:
+                try:
+                    return message.copy(update={"content": new_content})
+                except Exception:
+                    try:
+                        new_msg = copy.copy(message)
+                        new_msg.content = new_content
+                        return new_msg
+                    except Exception:
+                        return message
+        return message
+
     async def unified_planning_node(self, state: AgentState, config: RunnableConfig):
         """
         Combined node for Query Understanding and Tool Chain Planning.
@@ -124,7 +154,7 @@ class UnifiedPlanningNode:
             
         prompt_template = get_unified_planning_prompt_template()
         prompt_value = prompt_template.invoke({
-            "user_query_msg": [messages[-1]] if messages else [],
+            "user_query_msg": [self.remove_video_content(messages[-1])] if messages else [],
             "image_ids": ", ".join(additional_material.get("image_id") or []) or "None",
             "video_id": additional_material.get("video_id") or "None",
             "conversation_history": conversation_history,
