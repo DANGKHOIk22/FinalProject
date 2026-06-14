@@ -13,8 +13,7 @@ from langgraph.graph.state import RunnableConfig
 
 from app.config import settings
 from app.schema.soccer_agent.state import AgentState
-from app.soccer_agent.memory.chat_history import get_postgres_memory
-from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
+from app.soccer_agent.memory.chat_history import ConversationHistoryManager
 from app.soccer_agent.memory.long_term_memory import long_term_memory_manager
 from app.soccer_agent.services.content_cleaner import extract_summary, strip_summary
 
@@ -37,25 +36,16 @@ class SaveToMemoryNode:
     # ------------------------------------------------------------------
 
     async def _background_save_memory(
-        self, session_id: str, user_query: str, final_response: str
+        self, session_id: str, user_message: HumanMessage, ai_message: AIMessage
     ) -> None:
         """Save clean conversation context in background."""
         try:
-            mem, conn, pool = get_postgres_memory(session_id)
-            mem_obj = CustomSystemPromptMemory(
-                memory_key="history",
-                chat_memory=mem.chat_memory,
-                return_messages=True,
-                max_history=15,
-            )
+            manager = ConversationHistoryManager(session_id=session_id)
             await asyncio.to_thread(
-                mem_obj.save_context,
-                {"input": user_query},
-                {"output": final_response},
+                manager.save_messages,
+                user_message,
+                ai_message
             )
-            if conn and pool:
-                conn.commit()
-                pool.putconn(conn)
             logger.debug(f"[BackgroundSave] Successfully saved chat turn for session {session_id}")
         except Exception as e:
             logger.warning(f"[BackgroundSave] Failed for session {session_id}: {e}")
@@ -204,8 +194,8 @@ class SaveToMemoryNode:
             asyncio.create_task(
                 self._background_save_memory(
                     session_id=thread_id,
-                    user_query=last_user_message.text,
-                    final_response=last_ai_message.text
+                    user_message=last_user_message,
+                    ai_message=last_ai_message
                 )
             )
 

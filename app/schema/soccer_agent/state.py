@@ -51,8 +51,6 @@ class AgentState(CopilotKitState):
     conversation_history: Optional[str]
     long_term_context: Optional[str]
     retrieved_cases: Optional[List[str]]
-    recent_msgs_for_qu: Optional[List[Any]]
-    effective_memory: Optional[Any]
     time_context: Optional[str]
     video_current_time: Optional[float] # Current HLS video playback position in seconds (synced from frontend)
     is_off_topic: Optional[bool] # Set by the guardrail node: True = query is not soccer-related, hard-stop to refusal
