@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import List, Optional
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_redis import RedisConfig, RedisVectorStore
@@ -47,19 +47,30 @@ class CaseBankCache:
             logger.error(f"Failed to initialize CaseBankCache: {e}")
             self.is_active = False
 
-    def get(self, query: str, has_media: bool) -> Optional[str]:
+    def get(
+        self, query: str, has_media: bool, precomputed_embedding: Optional[List[float]] = None
+    ) -> Optional[str]:
         if not self.is_active or not query:
             return None
         media_tag = "true" if has_media else "false"
         logger.info(f"🔍 CaseBankCache check: '{query[:80]}' has_media={has_media}")
         try:
             filter_condition = Tag("has_media") == media_tag
-            docs = self.vector_store.similarity_search_with_score(
-                query=query,
-                k=1,
-                filter=filter_condition,
-                distance_threshold=self.threshold,
-            )
+            # Reuse the shared query embedding when provided — avoids re-embedding.
+            if precomputed_embedding is not None:
+                docs = self.vector_store.similarity_search_with_score_by_vector(
+                    embedding=precomputed_embedding,
+                    k=1,
+                    filter=filter_condition,
+                    distance_threshold=self.threshold,
+                )
+            else:
+                docs = self.vector_store.similarity_search_with_score(
+                    query=query,
+                    k=1,
+                    filter=filter_condition,
+                    distance_threshold=self.threshold,
+                )
             if docs:
                 logger.info("🎯 CaseBankCache HIT")
                 return docs[0][0].metadata.get("examples")

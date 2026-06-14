@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from collections import Counter
-from typing import List
+from typing import List, Optional
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from qdrant_client import AsyncQdrantClient
@@ -44,12 +44,19 @@ class CaseBankRetriever:
             self._client = AsyncQdrantClient(
                 url=settings.QDRANT_URL,
                 api_key=settings.QDRANT_API_KEY,
+                prefer_grpc=True,
+                check_compatibility=False,
             )
         return self._client
 
     @standard_cache.cache(ttl=60*60*24) # Cache embeddings for 24h
     async def _embed(self, text: str) -> List[float]:
         return await self._embeddings.aembed_query(text)
+
+    async def embed_query(self, text: str) -> List[float]:
+        """Public RETRIEVAL_QUERY embedding (24h cached). Shared by context_retrieval
+        so the same query vector feeds the cache, the retriever, and long-term memory."""
+        return await self._embed(text)
 
     async def _search(
         self, vector: List[float], has_media: bool, label: str, top_k: int
@@ -97,8 +104,10 @@ class CaseBankRetriever:
                 )
         return "\n".join(parts)
 
-    async def retrieve(self, query: str, has_media: bool) -> str:
-        vector = await self._embed(query)
+    async def retrieve(
+        self, query: str, has_media: bool, precomputed_embedding: Optional[List[float]] = None
+    ) -> str:
+        vector = precomputed_embedding if precomputed_embedding is not None else await self._embed(query)
 
         positive_hits, negative_hits = await asyncio.gather(
             self._search(vector, has_media, "positive", TOP_POSITIVE),

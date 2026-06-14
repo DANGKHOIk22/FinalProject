@@ -37,6 +37,11 @@ PLANNING_CONFIDENCE_THRESHOLD: float = 0.5
 # Game tools — Tavily fallback result count when DB has no match
 GAME_FALLBACK_TOP_K: int = 10
 
+# entity_augment — entity freshness gate
+# If a found entity's LAST_UPDATED is within this many days of the query time,
+# trust the DB answer and skip the Tavily fallback entirely.
+ENTITY_FRESHNESS_DAYS: int = 5
+
 # Soccer-topic guardrail
 GUARDRAIL_RECENT_TURNS: int = 4          # trailing messages the classifier sees for context
 GUARDRAIL_TIMEOUT_SECONDS: float = 10.0  # fail-open ceiling; primary (gemini flash-lite) is ~1s, headroom covers failover to the gpt-4o-mini backup

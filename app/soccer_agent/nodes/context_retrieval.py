@@ -25,14 +25,20 @@ class ContextRetrievalNode:
         user_query = str(messages[-1].text) if isinstance(messages[-1], HumanMessage) else None
         user_id = config.get("configurable", {}).get("user_id")
         additional_material = state.get("additional_material") or {}
-        has_media = bool(additional_material.get("game_id") or additional_material.get("image_id"))
+        has_media = bool(
+            additional_material.get("game_id")
+            or additional_material.get("image_id")
+            or additional_material.get("video_id")
+        )
 
         if not user_query:
             return {"long_term_context": "", "retrieved_cases": ""}
 
-        # 2. Get Embedding ONCE
+        # 2. Embed the query ONCE (RETRIEVAL_QUERY) and share the vector with all
+        #    three consumers below — the case-bank cache, the case-bank retriever,
+        #    and long-term memory — instead of embedding the same query 3 times.
         try:
-            query_embedding = await long_term_memory_manager._get_embedding(user_query)
+            query_embedding = await self.case_bank_retriever.embed_query(user_query)
         except Exception as e:
             logger.error(f"Failed to get query embedding: {e}", exc_info=True)
             query_embedding = None
@@ -44,12 +50,14 @@ class ContextRetrievalNode:
         async def fetch_cases():
             try:
                 cached_cases = await asyncio.to_thread(
-                    case_bank_cache.get, user_query, has_media
+                    case_bank_cache.get, user_query, has_media, query_embedding
                 )
                 if cached_cases:
                     return cached_cases
 
-                cases = await self.case_bank_retriever.retrieve(user_query, has_media)
+                cases = await self.case_bank_retriever.retrieve(
+                    user_query, has_media, precomputed_embedding=query_embedding
+                )
                 if cases:
                     await asyncio.to_thread(
                         case_bank_cache.set, user_query, has_media, cases

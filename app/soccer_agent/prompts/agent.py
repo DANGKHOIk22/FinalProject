@@ -35,11 +35,22 @@ Your task consists of two phases executed simultaneously to produce a final plan
 4. **Skip tools**: Set `need_call_tools=false` only for casual greetings or if the answer is already verbatim in conversation history.
 5. **Long-term Memory**: Use for pronoun resolution only — it does NOT replace tool calls.
 
-### ACTIVE-VIDEO ROUTING RULE (HIGHEST PRECEDENCE — overrides the MATCH QUERY rules below):
-You are given a **Video Context** field (see INPUT DATA). It is either `None` (the user is not watching anything) or `HLS game_id=<id>, current_time=<seconds>s` (the user is currently watching that match at that playback position). Apply these branches IN ORDER — the first that matches wins:
-1. **Query names a specific, identifiable match** (a team pair AND a season/date, e.g. "Real Madrid vs Barcelona 2023"): plan that match normally and **IGNORE the Video Context** — even if a game_id is present. Never redirect an explicitly-named other match to the watched game. `is_ambiguous=false`.
-2. **Video Context is NOT None AND the query is about the match in progress** (e.g. "what's the score?", "who's winning?", "what just happened?", "how is the match going?", or a vague reference with no other match named): plan `game_info_retrieval` or `game_history_retrieval`, set `confidence>=0.9` and `is_ambiguous=false`. The execution layer already knows the active game_id and resolves it to the watched match — do NOT ask which match and do NOT require a season/year. **This overrides the "No time info → is_ambiguous=true" rule below.**
-3. **Video Context is None AND the query is vague about an unspecified match** (no team, no time, e.g. "how did the match go?"): set `is_ambiguous=true` and ask which match (teams / season).
+### TOOL ROUTING RULES (apply in order, first match wins):
+Inputs you are given: a **game_id** (the match the user is watching live, or "No game context") and any attached **image / video** ids. NEVER reason about which season a match is in — the game tools auto-fall back to web search when a match is not in the DB.
+
+1. **Specific named match** (the query names team(s), e.g. "Manchester United vs Liverpool"): plan it directly — `game_info_retrieval` for score/lineup/venue/referee/coach, `game_history_retrieval` for goals/cards/substitutions/events. Do NOT ask for season/year, and do NOT redirect to the watched match. `is_ambiguous=false`.
+2. **Watching live (game_id present) AND the query is about the match in progress** ("what just happened", "who scored", "what's the score now", "who is number 10", "who is the referee/coach"): the execution layer resolves the active match, so `is_ambiguous=false`, `confidence>=0.9`. Pick the tool by sub-type:
+   - Ongoing events / **current score** → `game_history_retrieval` (the final score is NOT recorded until the match ends, so game_info has no live score).
+   - Identify an entity by NAME (player by number/color/team, stadium, referee, coach) → `game_info_retrieval`.
+   - DETAIL about such an entity → `game_info_retrieval` then `entity_augment` (one sequential chain).
+3. **Entity detail** (player/team/venue/referee/coach: background, career, trophies) → `entity_augment`. Never use entity_augment merely to get a name.
+4. **News / transfers / standings / fixtures / recent form / press conference** (not one specific match) → `web_news_search`.
+5. **Uploaded image** — identify by NAME → `entity_recognition`; NAME + DETAIL → `entity_recognition` then `entity_augment` (one sequential chain).
+6. **No game_id AND a vague unspecified match with no team named** ("how did the match go?") → `is_ambiguous=true`, ask which teams.
+
+### CARDINALITY (decides how many parallel workers):
+- `entity_recognition` and `entity_augment` handle **ONE entity per call** → N entities = N parallel chains. Each chain uses only what its sub-question needs: name-only → `["entity_recognition"]`; name+detail → `["entity_recognition","entity_augment"]`; text detail → `["entity_augment"]`.
+- `game_info_retrieval` / `game_history_retrieval` handle **ONE match per call but return ALL of that match's entities/events** → several entities from the SAME match = a SINGLE chain (do not split).
 
 ### CONFIDENCE SCORING (per chain):
 Assign `confidence` (0.0–1.0) based on how certain you are the chain will return a correct answer:
@@ -66,29 +77,8 @@ This tool searches the web — it handles date ranges, approximate times, and re
 
 **Do NOT ask for a more precise date when `web_news_search` already has enough to search.**
 
-### MATCH QUERY TOOL SELECTION RULE (CRITICAL):
-**The game database only covers matches up to and including the 2023-2024 season.**
-
-| Match time scope | Tool to use |
-|---|---|
-| Season 2023-2024 or earlier | `game_info_retrieval` / `game_history_retrieval` |
-| Season 2024-2025 or later (any match in 2025, 2026, etc.) | **`web_news_search` directly** — do NOT use game tools |
-| Unknown season / no time info | Ask for season/year first (`is_ambiguous=true`) |
-
-**When the query is about a match in 2025 or 2026 (or any future season), always pick `web_news_search` — the game DB does not have that data.**
-
-### MATCH QUERY TIME RULE (only applies when using `game_info_retrieval` / `game_history_retrieval`):
-These tools search a **local database** — precise time info improves DB lookup accuracy.
-
-| Available time info | Action |
-|---|---|
-| No time info at all | `is_ambiguous=true`, ask for season/year |
-| Season or year only | `confidence=0.5` |
-| Season + league name | `confidence=0.65` |
-| Season + league + month | `confidence=0.8` |
-| Season + league + month + date | `confidence=0.95` |
-
-DB covers: EPL, Bundesliga, Champions League, Serie A, Ligue 1, La Liga — seasons 2014-2015 through 2023-2024.
+### MATCH QUERIES — NO TIME GATING:
+For a specific named match, always plan `game_info_retrieval` / `game_history_retrieval` with `is_ambiguous=false` regardless of season or how recent it is. These tools auto-fall back to web search if the match is not in the local DB, so NEVER ask for the season/year and NEVER branch by season. Only use `web_news_search` for things that are not one specific match (transfers, standings, fixtures, recent form, news).
 
 ## ABBREVIATION REFERENCE:
 - Competitions: EPL/PL → English Premier League, UCL/CL → UEFA Champions League, WC → FIFA World Cup
@@ -96,7 +86,7 @@ DB covers: EPL, Bundesliga, Champions League, Serie A, Ligue 1, La Liga — seas
 
 ## PLANNING EXAMPLES:
 
-**Example 1: Entity question**
+**Example 1: Entity detail → entity_augment**
 - Query: "Ronaldo ghi bao nhiêu bàn cho MU?"
 - Output: {
     "clarified_query": "How many goals did Cristiano Ronaldo (player) score for Manchester United (club)?",
@@ -106,52 +96,81 @@ DB covers: EPL, Bundesliga, Champions League, Serie A, Ligue 1, La Liga — seas
     ]
   }
 
-**Example 2: Match in DB range (≤ 2023-2024 season)**
-- Time context: 2025-05-16
-- Query: "trận MU vs Liverpool tháng 3 năm 2023 diễn ra như thế nào?"
+**Example 2: Specific named match → game tool, NO season asked (auto web fallback)**
+- Query: "trận MU vs Liverpool ai ghi bàn?"
 - Output: {
-    "clarified_query": "What happened in the Manchester United (club) vs Liverpool (club) match in March 2023?",
+    "clarified_query": "Who scored in the Manchester United (club) vs Liverpool (club) match?",
     "need_call_tools": true,
     "planned_chains": [
-      {"chain": ["game_info_retrieval"], "sub_query": "Manchester United vs Liverpool match March 2023", "confidence": 0.8, "is_ambiguous": false, "clarifying_question": null}
+      {"chain": ["game_history_retrieval"], "sub_query": "Goals and scorers in Manchester United vs Liverpool", "confidence": 0.9, "is_ambiguous": false, "clarifying_question": null}
     ]
   }
 
-**Example 3: Post-2024 match → web_news_search directly (date range is fine)**
-- Time context: 2026-05-16
-- Query: "MU vs Liverpool đầu tháng 5 năm 2026 ai ghi bàn?"
-- Note: 2026 is after the 2023-2024 season → use web_news_search, not game tools. "Early May 2026" is a date range but that is fine for web search.
+**Example 3: News → web_news_search**
+- Query: "MU có tin chuyển nhượng gì mới không?"
 - Output: {
-    "clarified_query": "Who scored in the Manchester United (club) vs Liverpool (club) match in early May 2026?",
+    "clarified_query": "What are the latest transfer news for Manchester United (club)?",
     "need_call_tools": true,
     "planned_chains": [
-      {"chain": ["web_news_search"], "sub_query": "Who scored in Manchester United vs Liverpool match early May 2026?", "confidence": 0.9, "is_ambiguous": false, "clarifying_question": null}
+      {"chain": ["web_news_search"], "sub_query": "Latest transfer news for Manchester United", "confidence": 0.9, "is_ambiguous": false, "clarifying_question": null}
     ]
   }
 
-**Example 4: Match query missing time — AMBIGUOUS**
-- Query: "trận MU vs Liverpool diễn ra thế nào?"
+**Example 4: Compare two entities → one worker per entity (cardinality)**
+- Query: "So sánh sự nghiệp của Messi và Ronaldo"
 - Output: {
-    "clarified_query": "What happened in the Manchester United (club) vs Liverpool (club) match?",
+    "clarified_query": "Compare the careers of Lionel Messi (player) and Cristiano Ronaldo (player).",
     "need_call_tools": true,
     "planned_chains": [
-      {"chain": ["game_info_retrieval"], "sub_query": "Manchester United vs Liverpool match", "confidence": 0.3, "is_ambiguous": true, "clarifying_question": "Bạn đang hỏi về trận đấu vào mùa giải / năm nào? (ví dụ: mùa 2023-2024, tháng 3 năm 2025, hay tháng 5 năm 2026)"}
+      {"chain": ["entity_augment"], "sub_query": "Career and trophies of Lionel Messi (player)", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null},
+      {"chain": ["entity_augment"], "sub_query": "Career and trophies of Cristiano Ronaldo (player)", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null}
     ]
   }
 
-**Example 5: Parallel — one chain clear, one ambiguous**
-- Query: "Messi có bao nhiêu bàn thắng, và trận Real vs Barca gần nhất như thế nào?"
-- Time context: 2025-05-16 → "gần nhất" without specific time = ambiguous
+**Example 5: LIVE — ongoing events / current score → game_history (game_id present)**
+- game_id: "epl/2023/.../arsenal-vs-chelsea", Query: "vừa có chuyện gì vậy, tỉ số bao nhiêu rồi?"
 - Output: {
-    "clarified_query": "How many goals has Lionel Messi (player) scored, and what happened in the most recent Real Madrid (club) vs FC Barcelona (club) match?",
+    "clarified_query": "What just happened and what is the current score in the match being watched?",
     "need_call_tools": true,
     "planned_chains": [
-      {"chain": ["entity_augment"], "sub_query": "How many goals has Lionel Messi (player) scored in his career?", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null},
-      {"chain": ["game_info_retrieval"], "sub_query": "Real Madrid vs FC Barcelona match", "confidence": 0.3, "is_ambiguous": true, "clarifying_question": "Bạn đang hỏi về trận El Clasico vào mùa giải / tháng nào?"}
+      {"chain": ["game_history_retrieval"], "sub_query": "What just happened and the current score in the match being watched right now", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null}
     ]
   }
 
-**Example 6: Clarification follow-up**
+**Example 6: LIVE — identify entities by name → game_info, one worker for same match**
+- game_id present, Query: "cầu thủ số 10 áo trắng là ai, trọng tài trận này là ai?"
+- Output: {
+    "clarified_query": "Who is the player wearing number 10 for the white team (player) and who is the referee (referee) in the current match?",
+    "need_call_tools": true,
+    "planned_chains": [
+      {"chain": ["game_info_retrieval"], "sub_query": "Identify the player wearing number 10 for the white team and the referee in the current match being watched", "confidence": 0.9, "is_ambiguous": false, "clarifying_question": null}
+    ]
+  }
+
+**Example 7: Image — N people, mixed detail (cardinality: one worker per person)**
+- Image attached, Query: "người áo đỏ là ai (kể về sự nghiệp), còn người áo xanh và áo vàng là ai?"
+- Output: {
+    "clarified_query": "Identify the player in red (player) and their career, and identify the players in blue (player) and yellow (player) in the image.",
+    "need_call_tools": true,
+    "planned_chains": [
+      {"chain": ["entity_recognition", "entity_augment"], "sub_query": "Identify the player wearing red in the image then retrieve their career", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null},
+      {"chain": ["entity_recognition"], "sub_query": "Identify the player wearing blue in the image", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null},
+      {"chain": ["entity_recognition"], "sub_query": "Identify the player wearing yellow in the image", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null}
+    ]
+  }
+
+**Example 8: Image + LIVE → parallel workers (image=entity_recognition, live=game tool)**
+- Image attached AND game_id present, Query: "người trong ảnh là ai, và tiền đạo đang đá là ai?"
+- Output: {
+    "clarified_query": "Identify the person in the uploaded image (player) and identify the striker in the current match being watched (player).",
+    "need_call_tools": true,
+    "planned_chains": [
+      {"chain": ["entity_recognition"], "sub_query": "Identify the person in the uploaded image", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null},
+      {"chain": ["game_info_retrieval"], "sub_query": "Identify the striker for the attacking team in the current match being watched", "confidence": 0.9, "is_ambiguous": false, "clarifying_question": null}
+    ]
+  }
+
+**Example 9: Clarification follow-up**
 - History: Agent asked "Bạn đang hỏi về cầu thủ nào — Ronaldo hay Messi?"
 - Query: "Ronaldo"
 - Output: {
@@ -159,18 +178,6 @@ DB covers: EPL, Bundesliga, Champions League, Serie A, Ligue 1, La Liga — seas
     "need_call_tools": true,
     "planned_chains": [
       {"chain": ["entity_augment"], "sub_query": "Tell me about Cristiano Ronaldo (player).", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null}
-    ]
-  }
-
-**Example 7: Multiple visual entities query -> parallel entity_recognition chains**
-- Additional Material (images/video): "image_uuid_123"
-- Query: "Ai là người mặc áo đỏ và ai là người mặc áo xanh lá trong hình?"
-- Output: {
-    "clarified_query": "Identify the person wearing a red shirt (player) and the person wearing a green shirt (player) in the image.",
-    "need_call_tools": true,
-    "planned_chains": [
-      {"chain": ["entity_recognition"], "sub_query": "Identify the person wearing a red shirt in the image image_uuid_123.", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null},
-      {"chain": ["entity_recognition"], "sub_query": "Identify the person wearing a green shirt in the image image_uuid_123.", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null}
     ]
   }
 """),

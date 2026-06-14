@@ -88,7 +88,12 @@ async def lifespan(app: FastAPI):
         qdrant_url = settings.QDRANT_URL
         qdrant_api_key = settings.QDRANT_API_KEY
         if qdrant_url and qdrant_api_key:
-            qdrant_client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+            qdrant_client = QdrantClient(
+                url=qdrant_url,
+                api_key=qdrant_api_key,
+                prefer_grpc=True,
+                check_compatibility=False,
+            )
             logger.info("✅ Qdrant client initialized successfully")
         else:
             logger.warning("⚠️ Qdrant credentials not configured, skipping Qdrant initialization")

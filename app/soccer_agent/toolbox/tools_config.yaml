@@ -90,8 +90,8 @@ tools:
       followed by face recognition. Provide a plain-English description of the person's visual attributes
       (kit color, jersey number, position in frame) and the source image UUID.
       Internally: uses Qwen-VL to locate the described region, OpenCV to refine to the face,
-      InsightFace to extract the face embedding, and Qdrant vector search + MongoDB to return the entity's
-      full wiki profile.
+      InsightFace to extract the face embedding, and Qdrant vector search to recognize the entity.
+      Returns the recognized entity NAME only. For detailed info about that entity, follow up with entity_augment.
       Use for: "Who is the person wearing the red shirt?", "Identify the goalkeeper in this frame."
       Do NOT use for: questions about match events or statistics — use game tools.
       IMPORTANT: One entity per call. For multiple people, use parallel chains.
