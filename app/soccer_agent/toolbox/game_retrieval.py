@@ -451,7 +451,7 @@ class GameHistoryRetrievalTool(BaseTool):
         self._collection = _get_collection()
         self._finder = _GameFinder(self._llm, self._collection)
 
-    def _history_from_game_id(self, game_id: str) -> str:
+    def _history_from_game_id(self, game_id: str, active_vct: Optional[float] = None) -> str:
         doc = self._collection.find_one({"game_id": game_id}, {"raw": 1, "_id": 0})
         if not doc:
             raise RuntimeError(f"Game not found in database: {game_id}")
@@ -469,6 +469,9 @@ class GameHistoryRetrievalTool(BaseTool):
                 ))
         elif "comments" in data:
             for comment in data.get("comments", []):
+                t = comment.get("time_stamp")
+                if active_vct is not None and isinstance(t, (int, float)) and t > active_vct:
+                    continue
                 processed.append(Annotation(
                     description=comment.get("comments_text", ""),
                     label=comment.get("comments_type", "unknown"),
@@ -493,6 +496,7 @@ class GameHistoryRetrievalTool(BaseTool):
         last_artifact: Union[List[Annotation], str, None],
         active_game_id: Optional[str] = None,
         about_current_game: bool = False,
+        active_vct: Optional[float] = None,
     ) -> Tuple[str, Optional[str]]:
         """
         Return (history_json, game_id).
@@ -518,7 +522,7 @@ class GameHistoryRetrievalTool(BaseTool):
         # Fast path: sub-query is about the currently-playing video — skip search entirely.
         if about_current_game and active_game_id:
             logger.info(f"⚡ game_history_retrieval fast path — active video game_id={active_game_id}")
-            return self._history_from_game_id(active_game_id), active_game_id
+            return self._history_from_game_id(active_game_id, active_vct=active_vct), active_game_id
 
         # Search from query
         result = self._finder.find(query)
@@ -528,7 +532,7 @@ class GameHistoryRetrievalTool(BaseTool):
             # Safety net: an active video is a strong signal — degrade to it instead of failing.
             if active_game_id:
                 logger.info(f"↩️ game_history_retrieval search miss — falling back to active video game_id={active_game_id}")
-                return self._history_from_game_id(active_game_id), active_game_id
+                return self._history_from_game_id(active_game_id, active_vct=active_vct), active_game_id
             raise ValueError(result.reason)
         return self._history_from_game_id(result.game_id), result.game_id
 
@@ -552,8 +556,10 @@ class GameHistoryRetrievalTool(BaseTool):
             )
             logger.info(f"📖 GameHistoryRetrieval artifact: {artifact_preview}")
 
+            on_active = active_game_id is not None
             history_context, game_id = self._resolve_history_context(
-                query, last_artifact, active_game_id, about_current_game
+                query, last_artifact, active_game_id, about_current_game,
+                active_vct=active_vct if on_active else None,
             )
 
             # Ground the answer on the live playback position only when answering about the active video.
@@ -599,8 +605,10 @@ class GameHistoryRetrievalTool(BaseTool):
             logger.info(f"📖 GameHistoryRetrieval (async) artifact: {artifact_preview}")
 
             try:
+                on_active = active_game_id is not None
                 history_context, game_id = self._resolve_history_context(
-                    query, last_artifact, active_game_id, about_current_game
+                    query, last_artifact, active_game_id, about_current_game,
+                    active_vct=active_vct if on_active else None,
                 )
             except ValueError:
                 # _GameNotFound path — fallback to Tavily match report search (no active video to ground on)

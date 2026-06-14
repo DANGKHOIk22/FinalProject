@@ -18,8 +18,11 @@ python -m celery -A app.celery_app worker --loglevel=info -P solo
 # Purge all pending Celery tasks
 python -m celery -A app.celery_app purge -f
 
-# Initialize DB tables and Qdrant collections
-uv run python scripts/init_db.py
+# Initialize PostgreSQL long-term memory tables
+uv run python scripts/init_long_term_memory_db.py
+# Qdrant collections are seeded via notebooks:
+#   scripts/database/init_case_bank/case_bank_manager.ipynb
+#   scripts/database/init_game_db/game_data_manager.ipynb
 
 # Run all tests  ← pyproject.toml has testpaths=["tests"] which is wrong; always pass path explicitly
 uv run pytest unit_test/
