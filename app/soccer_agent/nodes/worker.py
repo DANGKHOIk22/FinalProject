@@ -82,7 +82,7 @@ class WorkerNodes:
                 "sub_query": sub_query,
                 # Carry the resolved game_id inside additional_material so InjectedState
                 # tools (game_retrieval) and the cache can read it from the dict.
-                "additional_material": {**additional_material, "game_id": game_id},
+                "additional_material": additional_material,
                 "tool_chain": chain,
                 "tool_calls_history": [],
                 "tool_results_history": [],
@@ -149,7 +149,9 @@ class WorkerNodes:
         if messages and isinstance(messages[-1], ToolMessage):
             last_tool_message = messages[-1]
             last_artifact = last_tool_message.artifact if hasattr(last_tool_message, 'artifact') else None
-
+        
+        if additional_material.get("image_id") or additional_material.get("video_id"):
+            game_id = None
         system_prompt = get_execution_system_prompt()
         if not messages:
             execution_prompt_template = get_execution_human_prompt()

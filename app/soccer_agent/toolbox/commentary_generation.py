@@ -87,7 +87,7 @@ class CommentaryGenerationTool(BaseTool):
             if not media_registry:
                 raise ValueError("MediaRegistryService not found in runtime config")
 
-            output = self._cached_generate_commentary(video_id, query, media_registry=media_registry, user_id=user_id, thread_id=thread_id)
+            output = self._generate_commentary(video_id, query, media_registry=media_registry, user_id=user_id, thread_id=thread_id)
 
             content_msg = (
                 "Successfully generated commentary from the provided video material. "
@@ -111,8 +111,7 @@ class CommentaryGenerationTool(BaseTool):
                 [],
             )
 
-    @standard_cache.cache(ttl=60 * 60, validatedModel=_CommentaryGenerationOutput)
-    def _cached_generate_commentary(self, media_id: str, query: Optional[str] = None, media_registry: Any = None, user_id: str = "default_user", thread_id: str = "default_thread") -> _CommentaryGenerationOutput:
+    def _generate_commentary(self, media_id: str, query: Optional[str] = None, media_registry: Any = None, user_id: str = "default_user", thread_id: str = "default_thread") -> _CommentaryGenerationOutput:
         """Internal method to handle the VLM generation with caching."""
         self.validate_tool_input(media_id, media_registry, user_id, thread_id)
         
