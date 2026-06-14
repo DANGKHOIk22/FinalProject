@@ -24,11 +24,11 @@ uv run python scripts/init_long_term_memory_db.py
 #   scripts/database/init_case_bank/case_bank_manager.ipynb
 #   scripts/database/init_game_db/game_data_manager.ipynb
 
-# Run all tests  ← pyproject.toml has testpaths=["tests"] which is wrong; always pass path explicitly
-uv run pytest unit_test/
+# Run all tests
+uv run pytest
 
 # Run a single test file
-uv run pytest unit_test/tools/test_video_streaming.py
+uv run pytest tests/test_guardrail.py
 
 # Async tests require @pytest.mark.asyncio (asyncio_mode = "strict" in pyproject.toml)
 ```
@@ -103,7 +103,7 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 
 ## Critical Gotchas
 
-**`testpaths = ["tests"]` in pyproject.toml is misconfigured.** Real tests are in `unit_test/`. Always pass path explicitly.
+**All tests live in `tests/`.** `testpaths = ["tests"]` in `pyproject.toml`. Guardrail unit tests are `tests/test_guardrail.py`; guardrail routing integration tests are `tests/test_guardrail_routing.py`.
 
 **`SoccerAgent` is `None` at startup if `DASHSCOPE_API_KEY` is missing.** `/chat` returns 503 — not a bug.
 
