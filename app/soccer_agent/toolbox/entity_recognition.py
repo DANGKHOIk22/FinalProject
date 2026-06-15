@@ -4,13 +4,11 @@ import logging
 import re as _re
 from collections import defaultdict
 from io import BytesIO
-from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Type
+from typing import Annotated, Any, Dict, List, Literal, Optional, Type
 
 import cv2
 import numpy as np
-import pymongo
 import requests
-from dns import resolver
 from langsmith import get_current_run_tree
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
@@ -19,14 +17,10 @@ from langgraph.prebuilt import ToolRuntime
 from openai import OpenAI
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
-from pymongo.server_api import ServerApi
 from qdrant_client import QdrantClient
 
-from app.cache.standard_cache import standard_cache
 from app.config.config import QDRANT_SEARCH_SCORE_THRESHOLD as THRESHOLD
 from app.config.settings import settings
-from app.schema.soccerwiki_entities import PlayerSchema, RefereeSchema, TeamSchema, VenueSchema
-from app.schema.textual_entity_search import SearchingResult
 from app.soccer_agent.toolbox._config_loader import tool_description
 
 logger = logging.getLogger(__name__)
@@ -58,12 +52,11 @@ class EntityRecognitionInput(BaseModel):
 class EntityRecognitionTool(BaseTool):
     name: str = "entity_recognition"
     description: str = ""
-    response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
+    response_format: Literal["content"] = "content"
     args_schema: Type[BaseModel] = EntityRecognitionInput
 
     _vl_client: Any = PrivateAttr(default=None)
     _qdrant_client: Optional[QdrantClient] = PrivateAttr(default=None)
-    _mongo_client: Optional[pymongo.MongoClient] = PrivateAttr(default=None)
     _insight_endpoint_uri: str = PrivateAttr(default="")
     _insight_payload_header: Dict[str, str] = PrivateAttr(default_factory=dict)
 
@@ -82,13 +75,11 @@ class EntityRecognitionTool(BaseTool):
             base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         )
 
-        # Qdrant + MongoDB — prefer preloaded clients from lifespan
+        # Qdrant — prefer the preloaded client from lifespan
         try:
             import main
             if main.qdrant_client is not None:
                 self._qdrant_client = main.qdrant_client
-            if main.mongo_client is not None:
-                self._mongo_client = main.mongo_client
         except (ImportError, AttributeError):
             pass
 
@@ -99,13 +90,6 @@ class EntityRecognitionTool(BaseTool):
                 prefer_grpc=True,
                 check_compatibility=False,
                 timeout=20,
-            )
-
-        if self._mongo_client is None and settings.MONGO_SRV:
-            resolver.default_resolver = resolver.Resolver(configure=False)
-            resolver.default_resolver.nameservers = ["8.8.8.8", "1.1.1.1"]
-            self._mongo_client = pymongo.MongoClient(
-                settings.MONGO_SRV, server_api=ServerApi("1")
             )
 
         # InsightFace Azure endpoint
@@ -332,51 +316,6 @@ class EntityRecognitionTool(BaseTool):
         return soccer_entities
 
     # ------------------------------------------------------------------
-    # Step 4: Fetch detailed entity info from MongoDB
-    # ------------------------------------------------------------------
-
-    @standard_cache.cache(ttl=60 * 60, validatedModel=SearchingResult)
-    def _query_database(self, soccer_entities: List[Dict]) -> SearchingResult:
-        """Look up detailed entity information in MongoDB."""
-        result = SearchingResult()
-        if not self._mongo_client:
-            logger.error("MongoDB client not initialized")
-            return result
-
-        schema_map = {
-            "venue": VenueSchema,
-            "player": PlayerSchema,
-            "team": TeamSchema,
-            "referee": RefereeSchema,
-        }
-        try:
-            collection = self._mongo_client.get_database(settings.SOCCER_DB_NAME).get_collection(
-                settings.SOCCER_COLLECTION_NAME
-            )
-            for entity in soccer_entities:
-                entity_data = collection.find_one(
-                    {"$and": [{"ENTITY_TYPE": entity["ENTITY_TYPE"]}, {"NAME": entity["NAME"]}]}
-                )
-                if entity_data:
-                    entity_data["_id"] = str(entity_data["_id"])
-                    schema_cls = schema_map.get(entity["ENTITY_TYPE"])
-                    if schema_cls:
-                        try:
-                            result.found_entities.append(schema_cls(**entity_data))
-                            logger.info(f"✅ Found {entity['ENTITY_TYPE']}: {entity['NAME']}")
-                        except Exception as e:
-                            logger.warning(f"Failed to parse {entity['NAME']}: {e}")
-                            result.missing_entities.append(entity["NAME"])
-                    else:
-                        result.missing_entities.append(entity["NAME"])
-                else:
-                    result.missing_entities.append(entity["NAME"])
-        except Exception as e:
-            raise RuntimeError(f"Database query error: {e}") from e
-
-        return result
-
-    # ------------------------------------------------------------------
     # Entry point
     # ------------------------------------------------------------------
 
@@ -386,7 +325,7 @@ class EntityRecognitionTool(BaseTool):
         image_id: str,
         run_manager: Optional[CallbackManagerForToolRun] = None,
         runtime: Optional[ToolRuntime] = None,
-    ) -> Tuple[str, SearchingResult]:
+    ) -> str:
         run_tree = get_current_run_tree()
         try:
             user_id, thread_id, media_registry = "default_user", "default_thread", None
@@ -405,8 +344,7 @@ class EntityRecognitionTool(BaseTool):
             if crop is None:
                 return (
                     "Could not locate the described entity in the image. "
-                    "Try rephrasing the visual description.",
-                    SearchingResult(),
+                    "Try rephrasing the visual description."
                 )
 
             # 2. Get face embeddings from crop via InsightFace
@@ -414,33 +352,20 @@ class EntityRecognitionTool(BaseTool):
             if not embeddings:
                 return (
                     "No faces detected in the localized region. "
-                    "Try rephrasing the visual description.",
-                    SearchingResult(),
+                    "Try rephrasing the visual description."
                 )
 
-            # 3. Search Qdrant
+            # 3. Search Qdrant — the match gives the entity name, which is the result
             entities = self._search_qdrant(embeddings)
             if not entities:
-                return "No matching entities found in the database.", SearchingResult()
+                return "No matching entity found."
 
-            # 4. Fetch detailed info from MongoDB
-            db_result = self._query_database(entities)
-
-            parts = []
-            if db_result.found_entities:
-                found = ", ".join(e.NAME for e in db_result.found_entities)
-                parts.append(f"Found: {found}.")
-            if db_result.missing_entities:
-                missing = ", ".join(db_result.missing_entities)
-                parts.append(f"Not in database: {missing}.")
-            return "Successfully identified soccer entity. " + " ".join(parts), db_result
+            names = ", ".join(e["NAME"] for e in entities)
+            return f"Recognized: {names}."
 
         except Exception as e:
             error_msg = f"Error in entity_recognition: {e}"
             logger.error(error_msg, exc_info=True)
             if run_tree:
                 run_tree.end(error=error_msg)
-            return (
-                f"An error occurred. Try rephrasing the description. Error: {error_msg}",
-                SearchingResult(),
-            )
+            return f"An error occurred. Try rephrasing the description. Error: {error_msg}"

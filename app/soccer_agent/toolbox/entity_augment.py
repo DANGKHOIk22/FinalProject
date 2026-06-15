@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import re
 from typing import Any, List, Literal, Optional, Tuple, Type
@@ -14,6 +14,7 @@ from pymongo.server_api import ServerApi
 
 from app.cache.standard_cache import standard_cache
 from app.config import settings
+from app.config.config import ENTITY_FRESHNESS_DAYS
 from app.schema.soccerwiki_entities import (
     PlayerSchema,
     RefereeSchema,
@@ -134,6 +135,46 @@ def _detect_entity_type(entity_name: str, query: str) -> str:
         if f"{name} ({label})" in q:
             return entity_type
     return "unknown"
+
+
+def _parse_dt(value: Optional[str]) -> Optional[datetime]:
+    """Parse a "%Y-%m-%d %H:%M:%S" timestamp, tolerating a trailing " UTC".
+
+    Returns None when the value is empty or cannot be parsed — callers treat
+    that as "unknown freshness" (stale).
+    """
+    if not value:
+        return None
+    cleaned = str(value).strip()
+    if cleaned.endswith(" UTC"):
+        cleaned = cleaned[:-4].strip()
+    try:
+        return datetime.strptime(cleaned, "%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_fresh(searching_result: "SearchingResult", time_context: Optional[str]) -> bool:
+    """True when every found entity's LAST_UPDATED is within ENTITY_FRESHNESS_DAYS.
+
+    Conservative: any found entity missing or with an unparseable LAST_UPDATED
+    makes the whole result stale, so we fetch fresh data. Uses the oldest
+    LAST_UPDATED among found entities as the reference point.
+    """
+    if not searching_result.found_entities:
+        return False
+
+    now = _parse_dt(time_context) or datetime.now()
+
+    oldest: Optional[datetime] = None
+    for entity in searching_result.found_entities:
+        parsed = _parse_dt(getattr(entity, "LAST_UPDATED", None))
+        if parsed is None:
+            return False
+        if oldest is None or parsed < oldest:
+            oldest = parsed
+
+    return (now - oldest) <= timedelta(days=ENTITY_FRESHNESS_DAYS)
 
 
 _tavily_service: Optional[TavilyService] = None
@@ -264,18 +305,56 @@ class EntityAugmentTool(BaseTool):
                 web_answer = await self._tavily_fallback(query, searching_result, time_context)
                 return web_answer, searching_result
 
-            # Step 2: LLM structured answer from DB data
-            db_answer = await self._generate_answer_from_db(query, searching_result, time_context)
-            logger.info(f"DB answer sufficient={db_answer.has_sufficient_info}")
-
-            if db_answer.has_sufficient_info:
-                logger.info("✅ entity_augment: DB answer sufficient, returning.")
+            # Step 2: Freshness gate. When DB data is recent enough, trust it
+            # and skip Tavily entirely — even if the LLM flags the answer as
+            # insufficient (it tends to second-guess freshness from LAST_UPDATED).
+            if _is_fresh(searching_result, time_context):
+                logger.info("✅ entity_augment: DB data is fresh — trusting DB answer, skipping Tavily.")
+                db_answer = await self._generate_answer_from_db(query, searching_result, time_context)
                 return db_answer.answer, searching_result
 
-            # Step 3: Tavily fallback
-            logger.info("DB answer insufficient — running Tavily fallback.")
-            web_answer = await self._tavily_fallback(query, searching_result, time_context)
-            return web_answer, searching_result
+            # Step 3: Stale DB data. Run the DB-answer LLM call and a fresh wiki
+            # fetch in parallel so the fallback adds no latency on the slow path.
+            logger.info("entity_augment: DB data stale — DB answer ∥ wiki fetch in parallel.")
+            db_answer, wiki = await asyncio.gather(
+                self._generate_answer_from_db(query, searching_result, time_context),
+                self._fetch_wiki_context(searching_result),
+                return_exceptions=True,
+            )
+
+            if isinstance(db_answer, BaseException):
+                logger.warning(f"DB answer failed on stale path: {db_answer}")
+                db_answer = _AugmentedAnswer(answer="", has_sufficient_info=False, unknown_entities=[])
+            if isinstance(wiki, BaseException):
+                logger.warning(f"Wiki fetch failed on stale path: {wiki}")
+                wiki = None
+
+            # Pick the final answer: trust the DB answer when sufficient,
+            # otherwise regenerate from the freshly fetched wiki markdown.
+            if db_answer.has_sufficient_info:
+                final_answer = db_answer.answer
+            elif wiki:
+                logger.info("DB answer insufficient — regenerating from fetched wiki content.")
+                final_answer = await self._generate_web_answer(query, wiki["web_context"], time_context)
+            else:
+                logger.info("DB answer insufficient and wiki fetch unavailable — returning DB answer.")
+                final_answer = db_answer.answer
+
+            # Refresh Mongo + LAST_UPDATED in the background whenever we fetched
+            # fresh wiki content (both sufficient and insufficient branches).
+            # SaveToMemoryNode picks this up and upserts off the main flow.
+            if wiki and wiki.get("source") == "wiki_extract":
+                searching_result._upsert_payload = {
+                    "source": "wiki_extract",
+                    "name": wiki["name"],
+                    "entity_type": wiki["entity_type"],
+                    "is_missing": wiki["is_missing"],
+                    "wiki_url": wiki["wiki_url"],
+                    "cleaned_content": wiki["cleaned"],
+                    "images": wiki["images"],
+                }
+
+            return final_answer, searching_result
 
         except Exception as e:
             error_msg = f"Error in entity_augment: {str(e)}"
@@ -307,6 +386,88 @@ class EntityAugmentTool(BaseTool):
         except Exception as e:
             logger.warning(f"Structured output failed ({e}), defaulting to Tavily fallback.")
             return _AugmentedAnswer(answer="", has_sufficient_info=False, unknown_entities=[])
+
+    # ------------------------------------------------------------------
+    # Fetch fresh wiki context (no answer generation) — used by the stale
+    # path so it can run in parallel with the DB-answer LLM call.
+    # ------------------------------------------------------------------
+
+    async def _fetch_wiki_context(self, searching_result: SearchingResult) -> Optional[dict]:
+        """Resolve + fetch web/wiki content for the first found entity.
+
+        Fetch only: resolves the wiki URL (from DB), extracts the page, and
+        falls back to a general web search. Returns a dict with the LLM-ready
+        ``web_context`` plus the metadata needed to build ``_upsert_payload``,
+        or None when nothing usable could be fetched. No LLM call is made here.
+        """
+        service = _get_tavily()
+
+        db_entity = searching_result.found_entities[0] if searching_result.found_entities else None
+        if not db_entity or not getattr(db_entity, "NAME", None):
+            logger.warning("[fetch_wiki] No found entity to resolve — aborting")
+            return None
+
+        name = db_entity.NAME
+        entity_type = getattr(db_entity, "ENTITY_TYPE", "unknown").lower() or "unknown"
+        url_field = _ENTITY_URL_FIELD.get(db_entity.ENTITY_TYPE)
+        wiki_url: Optional[str] = getattr(db_entity, url_field, None) if url_field else None
+        logger.info(f"[fetch_wiki] entity='{name}' type='{entity_type}' url={wiki_url}")
+
+        # No URL → general search only
+        if not wiki_url:
+            fallback = await service.search_general(name)
+            if not fallback:
+                logger.warning(f"[fetch_wiki] search_general empty for '{name}'")
+                return None
+            web_context = f"## {name}\nSource: web search (general)\n" + "\n".join(
+                r.get("content", "") for r in fallback[:3] if r.get("content")
+            )
+            return {
+                "web_context": web_context,
+                "source": "general_search",
+                "name": name,
+                "entity_type": entity_type,
+                "is_missing": False,
+                "wiki_url": "",
+                "cleaned": web_context,
+                "images": [],
+            }
+
+        # Extract wiki page
+        extract_result = await service.extract_wiki(wiki_url)
+        if extract_result and extract_result.markdown:
+            cleaned = clean_wiki_markdown(extract_result.markdown)
+            logger.info(f"[fetch_wiki] extract OK, cleaned_len={len(cleaned)}, images={len(extract_result.images)}")
+            return {
+                "web_context": f"## {name}\nSource: {wiki_url}\n{cleaned}",
+                "source": "wiki_extract",
+                "name": name,
+                "entity_type": entity_type,
+                "is_missing": False,
+                "wiki_url": wiki_url,
+                "cleaned": cleaned,
+                "images": extract_result.images,
+            }
+
+        # Extract failed → general search fallback
+        logger.warning(f"[fetch_wiki] extract failed for {wiki_url}, falling back to search_general")
+        fallback = await service.search_general(name)
+        if not fallback:
+            logger.warning(f"[fetch_wiki] search_general also empty for '{name}'")
+            return None
+        web_context = f"## {name}\nSource: web search\n" + "\n".join(
+            r.get("content", "") for r in fallback[:2] if r.get("content")
+        )
+        return {
+            "web_context": web_context,
+            "source": "general_search",
+            "name": name,
+            "entity_type": entity_type,
+            "is_missing": False,
+            "wiki_url": wiki_url,
+            "cleaned": web_context,
+            "images": [],
+        }
 
     # ------------------------------------------------------------------
     # Step 3: Tavily fallback
