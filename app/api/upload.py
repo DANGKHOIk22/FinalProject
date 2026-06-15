@@ -12,15 +12,21 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 @router.post("/upload")
-async def upload_image(
+async def upload_media(
     request: Request,
     file: UploadFile = File(...),
     thread_id: str = Query(..., description="ID của cuộc hội thoại CopilotKit"),
     current_user = Depends(get_current_user)  # Yêu cầu xác thực người dùng qua JWT
 ):
-    # Kiểm tra định dạng ảnh
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Chỉ cho phép tải hình ảnh!")
+    # Kiểm tra định dạng (ảnh hoặc video)
+    if not (file.content_type.startswith("image/") or file.content_type.startswith("video/")):
+        raise HTTPException(status_code=400, detail="Chỉ cho phép tải hình ảnh hoặc video!")
+
+    # Đọc tệp và kiểm tra kích thước (tối đa 25MB)
+    content = await file.read()
+    if len(content) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Kích thước tệp vượt quá giới hạn 25MB!")
+    await file.seek(0)
 
     try:
         # 1. Khởi tạo kết nối Azure

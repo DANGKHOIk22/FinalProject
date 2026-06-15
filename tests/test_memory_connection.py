@@ -8,14 +8,14 @@ dev có DB thì chạy bình thường.
 import logging
 import os
 import uuid
+import asyncio
 
 import psycopg
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_postgres.chat_message_histories import PostgresChatMessageHistory
 
-from app.soccer_agent.memory.chat_history import get_connection_pool, get_postgres_memory
-from app.soccer_agent.memory.conversation_memory import CustomSystemPromptMemory
+from app.soccer_agent.memory.chat_history import get_connection_pool, ConversationHistoryManager
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def ensure_table_exists(connection, table_name: str = "messages_agents"):
         # Tạo một instance tạm để gọi create_tables
         temp_history = PostgresChatMessageHistory(
             table_name=table_name,
-            session_id="temp",
+            session_id=str(uuid.uuid4()),  # Phải là UUID hợp lệ
             sync_connection=connection
         )
         # Gọi create_tables để tạo bảng nếu chưa có
@@ -85,21 +85,18 @@ async def test_memory_connection_add_and_get():
     """
     Test case kiểm tra:
     1. Kết nối đến PostgreSQL memory
-    2. Thêm dữ liệu vào memory
+    2. Thêm dữ liệu vào memory bằng ConversationHistoryManager
     3. Lấy dữ liệu từ memory
     4. Xác minh dữ liệu đã được lưu đúng
+    5. Xóa dữ liệu và kiểm tra
     """
-    # Tạo user_id ngẫu nhiên
-    user_id = str(uuid.uuid4())
-    logger.info(f"Testing với user_id: {user_id}")
+    # Tạo session_id ngẫu nhiên (phải là UUID)
+    session_id = str(uuid.uuid4())
+    logger.info(f"Testing với session_id: {session_id}")
     
     # Dữ liệu test
     test_user_query = "Ai là cầu thủ ghi bàn nhiều nhất trong lịch sử World Cup?"
     test_agent_response = "Cầu thủ ghi bàn nhiều nhất trong lịch sử World Cup là Miroslav Klose với 16 bàn thắng."
-    
-    connection = None
-    pool = None
-    memory_object = None
     
     try:
         # 0. Đảm bảo bảng tồn tại trước
@@ -111,76 +108,44 @@ async def test_memory_connection_add_and_get():
         finally:
             pool.putconn(temp_conn)
         
-        # 1. Test kết nối và tạo memory object
-        logger.info("Bước 1: Kiểm tra kết nối đến PostgreSQL memory...")
-        memory, connection, pool = get_postgres_memory(user_id)
+        # 1. Test kết nối và tạo ConversationHistoryManager
+        logger.info("Bước 1: Khởi tạo ConversationHistoryManager...")
+        manager = ConversationHistoryManager(session_id=session_id)
         
-        # Tạo CustomSystemPromptMemory wrapper
-        memory_object = CustomSystemPromptMemory(
-            memory_key="history",
-            chat_memory=memory.chat_memory,
-            return_messages=True,
-            max_history=15,
-        )
-        
-        # Kiểm tra kết nối thành công
-        assert memory is not None, "Memory object không được tạo"
-        assert connection is not None, "Connection không được tạo"
-        assert pool is not None, "Pool không được tạo"
-        assert memory_object is not None, "Memory object wrapper không được tạo"
-        logger.info("✅ Kết nối thành công!")
+        # Kiểm tra khởi tạo thành công
+        assert manager is not None
+        assert manager.session_id == session_id
+        logger.info("✅ Khởi tạo thành công!")
         
         # 2. Test thêm dữ liệu vào memory
         logger.info("Bước 2: Thêm dữ liệu vào memory...")
-        memory_object.save_context(
-            inputs={"input": test_user_query},
-            outputs={"output": test_agent_response}
-        )
+        user_msg = HumanMessage(content=test_user_query)
+        ai_msg = AIMessage(content=test_agent_response)
+        
+        await asyncio.to_thread(manager.save_messages, user_msg, ai_msg)
         logger.info("✅ Đã thêm dữ liệu vào memory!")
         
         # 3. Test lấy dữ liệu từ memory
         logger.info("Bước 3: Lấy dữ liệu từ memory...")
-        history = memory_object.load_memory_variables({})
-        retrieved_history = history.get("history", [])
+        retrieved_history = await asyncio.to_thread(manager.load_messages)
         
         # Kiểm tra dữ liệu đã được lưu
         assert retrieved_history is not None, "Không thể lấy history từ memory"
-        assert len(retrieved_history) > 0, "History rỗng sau khi thêm dữ liệu"
+        assert len(retrieved_history) == 2, f"History phải có 2 messages, nhưng có {len(retrieved_history)}"
         logger.info(f"✅ Đã lấy được {len(retrieved_history)} messages từ memory")
         
         # 4. Xác minh nội dung dữ liệu
         logger.info("Bước 4: Xác minh nội dung dữ liệu...")
         
-        # Tìm user message và assistant message
         user_messages = [msg for msg in retrieved_history if isinstance(msg, HumanMessage)]
         ai_messages = [msg for msg in retrieved_history if isinstance(msg, AIMessage)]
         
-        assert len(user_messages) > 0, "Không tìm thấy user message"
-        assert len(ai_messages) > 0, "Không tìm thấy assistant message"
+        assert len(user_messages) == 1, "Không tìm thấy user message"
+        assert len(ai_messages) == 1, "Không tìm thấy assistant message"
         
-        # Kiểm tra nội dung user query
-        found_user_query = False
-        for msg in user_messages:
-            if test_user_query in msg.content:
-                found_user_query = True
-                break
-        assert found_user_query, f"Không tìm thấy user query: {test_user_query}"
-        logger.info("✅ User query đã được lưu đúng!")
-        
-        # Kiểm tra nội dung agent response
-        found_agent_response = False
-        for msg in ai_messages:
-            if isinstance(msg.content, str) and test_agent_response in msg.content:
-                found_agent_response = True
-                break
-            elif isinstance(msg.content, list):
-                # Nếu content là list (có thể có thought signatures)
-                for content_item in msg.content:
-                    if isinstance(content_item, str) and test_agent_response in content_item:
-                        found_agent_response = True
-                        break
-        assert found_agent_response, f"Không tìm thấy agent response: {test_agent_response}"
-        logger.info("✅ Agent response đã được lưu đúng!")
+        assert user_messages[0].content == test_user_query
+        assert ai_messages[0].content == test_agent_response
+        logger.info("✅ Cả 2 messages đã được lưu đúng nội dung!")
         
         # 5. Test thêm nhiều messages
         logger.info("Bước 5: Test thêm nhiều messages...")
@@ -194,66 +159,29 @@ async def test_memory_connection_add_and_get():
         ]
         
         for query, response in zip(additional_queries, additional_responses):
-            memory_object.save_context(
-                inputs={"input": query},
-                outputs={"output": response}
+            await asyncio.to_thread(
+                manager.save_messages,
+                HumanMessage(content=query),
+                AIMessage(content=response)
             )
         
         # Lấy lại history sau khi thêm nhiều messages
-        updated_history = memory_object.load_memory_variables({})
-        updated_messages = updated_history.get("history", [])
-        
-        assert len(updated_messages) >= len(retrieved_history) + len(additional_queries) * 2, \
-            f"Không đủ messages sau khi thêm. Expected >= {len(retrieved_history) + len(additional_queries) * 2}, got {len(updated_messages)}"
+        updated_history = await asyncio.to_thread(manager.load_messages)
+        assert len(updated_history) == 6, f"Expected 6 messages, got {len(updated_history)}"
         logger.info(f"✅ Đã thêm thành công {len(additional_queries)} cặp messages mới!")
+        
+        # 6. Test clear history
+        logger.info("Bước 6: Test clear history...")
+        await asyncio.to_thread(manager.clear)
+        cleared_history = await asyncio.to_thread(manager.load_messages)
+        assert len(cleared_history) == 0, f"History phải trống sau khi clear, nhưng có {len(cleared_history)}"
+        logger.info("✅ Đã clear history thành công!")
         
         logger.info("=" * 70)
         logger.info("✅ TẤT CẢ CÁC TEST ĐÃ PASS!")
-        logger.info(f"User ID: {user_id}")
-        logger.info(f"Tổng số messages trong memory: {len(updated_messages)}")
+        logger.info(f"Session ID: {session_id}")
         logger.info("=" * 70)
         
     except Exception as e:
         logger.error(f"❌ Lỗi trong quá trình test: {e}", exc_info=True)
         raise
-    finally:
-        # Cleanup: Trả connection về pool
-        if connection and pool:
-            try:
-                # Commit any pending transactions
-                if not getattr(connection, "closed", False):
-                    connection.commit()
-                
-                # Return connection to pool
-                pool.putconn(connection)
-                logger.info("✅ Đã cleanup connection thành công!")
-            except Exception as cleanup_error:
-                logger.warning(f"Lỗi trong quá trình cleanup: {cleanup_error}")
-                # Fallback: close connection if pool return fails
-                try:
-                    if connection and not getattr(connection, "closed", False):
-                        connection.close()
-                except Exception:
-                    pass
-
-
-if __name__ == "__main__":
-    import asyncio
-    import sys
-    
-    # Cấu hình logging để hiển thị output
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
-    # Chạy test trực tiếp
-    try:
-        asyncio.run(test_memory_connection_add_and_get())
-        print("\n✅ Test completed successfully!")
-        sys.exit(0)
-    except Exception as e:
-        print(f"\n❌ Test failed: {e}")
-        sys.exit(1)
-

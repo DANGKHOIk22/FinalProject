@@ -6,15 +6,17 @@ conversation history in PostgreSQL. Uses psycopg connection pool for
 efficient connection reuse.
 """
 import logging
+from typing import List
 from psycopg_pool import ConnectionPool
 from psycopg import Connection
-from langchain_classic.memory.buffer import ConversationBufferMemory
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from langchain_postgres.chat_message_histories import PostgresChatMessageHistory
 
 from app.config import settings
 
 # Global connection pool (singleton pattern)
 _connection_pool = None
+logger = logging.getLogger(__name__)
 
 
 def get_connection_pool() -> ConnectionPool:
@@ -51,63 +53,118 @@ def get_connection_pool() -> ConnectionPool:
     return _connection_pool
 
 
-def get_postgres_memory(session_id: str) -> tuple:
+class ConversationHistoryManager:
     """
-    Create memory instance with connection from pool.
+    Interface quản lý tương tác giữa các Node trong Agent và PostgresChatMessageHistory.
     
-    This function:
-    1. Gets connection from pool
-    2. Ensures clean connection state (rollback, disable prepared statements)
-    3. Creates PostgresChatMessageHistory with the connection
-    4. Wraps it in ConversationBufferMemory
-    
-    Args:
-        session_id: Session ID for conversation history
-        
-    Returns:
-        Tuple of (memory, connection, pool):
-            - memory: ConversationBufferMemory instance
-            - connection: Database connection (for cleanup)
-            - pool: Connection pool (for cleanup)
-            
-    Note:
-        Caller is responsible for cleanup (returning connection to pool).
-        See agent cleanup() methods.
+    Nhiệm vụ:
+    - Quản lý kết nối và tự động rollback an toàn khi xảy ra lỗi.
+    - Thực hiện ghi/đọc tin nhắn gốc (Content Block) với cơ chế thử lại (retry).
+    - Không thực hiện fallback hay trim số lượng tin nhắn (việc trim được xử lý ở các node phía trên).
     """
-    pool = get_connection_pool()
-    
-    # Get connection from pool
-    sync_conn = pool.getconn()
-    
-    try:
-        # Ensure clean state: rollback any pending transactions
-        sync_conn.rollback()
-        
-        # Disable prepared statements to avoid conflicts
-        sync_conn.prepare_threshold = None
-        
-    except Exception as e:
-        logging.warning(f"Connection cleanup error: {e}")
-        # If connection is bad, close it and get a new one
+
+    def __init__(
+        self,
+        session_id: str,
+        table_name: str = "messages_agents",
+        max_history: int = 15,  # Unused, kept for backwards compatibility
+        system_prompt: str = "You are a helpful assistant."  # Unused, kept for backwards compatibility
+    ):
+        self.session_id = session_id
+        self.table_name = table_name
+        self.pool = get_connection_pool()
+
+    def _safe_rollback(self, conn: Connection):
+        """Thực hiện rollback giao dịch an toàn để giải phóng trạng thái lỗi."""
         try:
-            sync_conn.close()
-        except Exception:
-            pass
-        sync_conn = pool.getconn()
-        sync_conn.prepare_threshold = None
-    
-    # Create message history with the connection
-    message_history = PostgresChatMessageHistory(
-        "messages_agents",  # Table name for storing messages
-        session_id,          # Session ID for conversation isolation
-        sync_connection=sync_conn
-    )
-    
-    # Wrap in ConversationBufferMemory
-    memory = ConversationBufferMemory(
-        memory_key="chat_history",
-        chat_memory=message_history,
-        return_messages=True  # Return as message objects, not strings
-    )
-    
-    return memory, sync_conn, pool
+            if conn and not conn.closed:
+                conn.rollback()
+                if hasattr(conn, 'prepare_threshold'):
+                    conn.prepare_threshold = None
+                logger.debug("Database connection rolled back successfully.")
+        except Exception as e:
+            logger.debug(f"Error during rollback (ignored): {e}")
+
+    def load_messages(self) -> List[BaseMessage]:
+        """Tải lịch sử tin nhắn với cơ chế an toàn & thử lại. Lỗi được ném ra thay vì fallback."""
+        conn = self.pool.getconn()
+        try:
+            conn.rollback()
+            conn.prepare_threshold = None
+            
+            history_db = PostgresChatMessageHistory(
+                self.table_name,
+                self.session_id,
+                sync_connection=conn
+            )
+            return history_db.messages
+        except Exception as e:
+            logger.warning(f"DB load error: {e}. Attempting rollback and retry...")
+            self._safe_rollback(conn)
+            try:
+                history_db = PostgresChatMessageHistory(
+                    self.table_name,
+                    self.session_id,
+                    sync_connection=conn
+                )
+                return history_db.messages
+            except Exception as e2:
+                logger.error(f"Failed to load memory after retry: {e2}.")
+                raise e2
+        finally:
+            if conn:
+                self.pool.putconn(conn)
+
+    def save_messages(self, user_message: BaseMessage, ai_message: BaseMessage) -> None:
+        """Ghi nhận câu hỏi và câu trả lời gốc (Content Block) xuống DB một cách an toàn."""
+        conn = self.pool.getconn()
+        try:
+            conn.rollback()
+            conn.prepare_threshold = None
+            
+            history_db = PostgresChatMessageHistory(
+                self.table_name,
+                self.session_id,
+                sync_connection=conn
+            )
+            # Lưu trực tiếp các đối tượng tin nhắn gốc, bảo toàn toàn bộ Content Block (chứa image_id)
+            history_db.add_messages([user_message, ai_message])
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"DB save error: {e}. Attempting rollback and retry...")
+            self._safe_rollback(conn)
+            try:
+                history_db = PostgresChatMessageHistory(
+                    self.table_name,
+                    self.session_id,
+                    sync_connection=conn
+                )
+                history_db.add_messages([user_message, ai_message])
+                conn.commit()
+            except Exception as e2:
+                logger.error(f"Failed to save context after retry: {e2}")
+                raise e2
+        finally:
+            if conn:
+                self.pool.putconn(conn)
+
+    def clear(self) -> None:
+        """Xóa sạch lịch sử hội thoại của session."""
+        conn = self.pool.getconn()
+        try:
+            conn.rollback()
+            conn.prepare_threshold = None
+            history_db = PostgresChatMessageHistory(
+                self.table_name,
+                self.session_id,
+                sync_connection=conn
+            )
+            history_db.clear()
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Clear history error: {e}")
+            self._safe_rollback(conn)
+            raise e
+        finally:
+            if conn:
+                self.pool.putconn(conn)
