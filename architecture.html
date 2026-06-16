@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Kiến trúc hệ thống Hỏi–Đáp bóng đá</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#f4f6f9;font-family:Georgia,"Times New Roman",serif;color:#1f2937}
+  .wrap{max-width:1280px;margin:0 auto;padding:28px 20px 48px}
+  h1{font-size:22px;margin:4px 0 2px}
+  p.sub{margin:0 0 18px;color:#6b7280;font-size:14px;font-family:system-ui,Arial,sans-serif}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;
+         box-shadow:0 10px 30px rgba(15,23,42,.08);padding:14px;overflow:auto}
+  .card svg{display:block;width:100%;height:auto;min-width:1100px}
+  .hint{margin-top:14px;color:#94a3b8;font-size:12.5px;font-family:system-ui,Arial,sans-serif}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Kiến trúc hệ thống Hỏi–Đáp bóng đá</h1>
+    <p class="sub">FastAPI + LangGraph · luồng đồng bộ (1→9) · lane xử lý video · LiteLLM Gateway</p>
+    <div class="card">
+      <svg xmlns="http://www.w3.org/2000/svg" width="1840" height="1010" viewBox="0 0 1840 1010" font-family="DejaVu Serif">
+<defs>
+  <filter id="sh" x="-20%" y="-20%" width="140%" height="160%">
+    <feDropShadow dx="0" dy="1.4" stdDeviation="2.2" flood-color="#0f172a" flood-opacity="0.18"/>
+  </filter>
+  <filter id="shc" x="-30%" y="-30%" width="160%" height="180%">
+    <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.10"/>
+  </filter>
+  <marker id="abE" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#2f6df0"/></marker>
+  <marker id="abS" viewBox="0 0 10 10" refX="1.5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10 0L0 5L10 10z" fill="#2f6df0"/></marker>
+  <marker id="agE" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#64748b"/></marker>
+  <marker id="agS" viewBox="0 0 10 10" refX="1.5" refY="5" markerWidth="6.6" markerHeight="6.6" orient="auto"><path d="M10 0L0 5L10 10z" fill="#64748b"/></marker>
+  <marker id="atE" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#0d9488"/></marker>
+</defs>
+<rect x="0" y="0" width="1840" height="1010" fill="#ffffff"/>
+<rect x="196" y="300" width="262" height="412" rx="16" fill="#f1f5fd" stroke="#2563eb" stroke-width="2"/>
+<text x="327.0" y="330" font-family="DejaVu Serif" font-weight="bold" font-size="18" fill="#2563eb" text-anchor="middle">GIAO DIỆN NGƯỜI DÙNG</text>
+<rect x="505" y="150" width="657" height="794" rx="16" fill="#f3faf5" stroke="#16a34a" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="525" y="180" font-family="DejaVu Serif" font-weight="bold" font-size="18" fill="#16a34a" text-anchor="start">KHỐI MÁY CHỦ CHÍNH  ·  FastAPI + LangGraph</text>
+<rect x="1286" y="80" width="256" height="568" rx="16" fill="#fcf4f2" stroke="#e0654f" stroke-width="2"/>
+<text x="1414.0" y="110" font-family="DejaVu Serif" font-weight="bold" font-size="18" fill="#e0654f" text-anchor="middle">KHỐI XỬ LÝ VIDEO</text>
+<rect x="1238" y="680" width="366" height="182" rx="16" fill="#faf5ea" stroke="#ca8a04" stroke-width="2"/>
+<text x="1421.0" y="710" font-family="DejaVu Serif" font-weight="bold" font-size="18" fill="#ca8a04" text-anchor="middle">LLM Gateway  ·  LiteLLM</text>
+<rect x="1626" y="680" width="190" height="182" rx="16" fill="#eceef0" stroke="#475569" stroke-width="2"/>
+<text x="1721.0" y="710" font-family="DejaVu Serif" font-weight="bold" font-size="18" fill="#475569" text-anchor="middle">Nhà cung cấp</text>
+<polyline points="122.0,444.0 227.0,444.0" fill="none" stroke="#2f6df0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#abE)"/>
+<polyline points="227.0,468.0 122.0,468.0" fill="none" stroke="#2f6df0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#abE)"/>
+<polyline points="441.0,456.0 478.0,456.0 478.0,445.0 514.0,445.0" fill="none" stroke="#2f6df0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#abE)" marker-start="url(#abS)"/>
+<polyline points="595.0,409.0 595.0,255.0 772.0,255.0 772.0,264.0" fill="none" stroke="#2f6df0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#abE)"/>
+<polyline points="595.0,255.0 936.0,255.0 936.0,264.0" fill="none" stroke="#2f6df0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#abE)"/>
+<polyline points="772.0,336.0 772.0,375.0 854.0,375.0 854.0,392.0" fill="none" stroke="#2f6df0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#abE)"/>
+<polyline points="936.0,336.0 936.0,375.0 854.0,375.0" fill="none" stroke="#2f6df0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<polyline points="854.0,464.0 854.0,524.0" fill="none" stroke="#2f6df0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#abE)"/>
+<polyline points="940.0,560.0 980.0,562.0" fill="none" stroke="#2f6df0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#abE)" marker-start="url(#abS)"/>
+<polyline points="854.0,596.0 854.0,658.0" fill="none" stroke="#2f6df0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#abE)"/>
+<polyline points="854.0,730.0 854.0,789.0" fill="none" stroke="#2f6df0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#abE)"/>
+<polyline points="560.0,165.0 560.0,409.0" fill="none" stroke="#64748b" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#agE)" marker-start="url(#agS)"/>
+<polyline points="1018.0,165.0 1018.0,230.0 980.0,230.0 980.0,264.0" fill="none" stroke="#64748b" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#agE)" marker-start="url(#agS)"/>
+<polyline points="940.0,825.0 983.0,828.0" fill="none" stroke="#64748b" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#agE)" marker-start="url(#agS)"/>
+<polyline points="1065.0,610.0 1065.0,650.0 1300.0,650.0 1300.0,680.0" fill="none" stroke="#64748b" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#agE)"/>
+<polyline points="1604.0,771.0 1626.0,771.0" fill="none" stroke="#64748b" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#agE)"/>
+<polyline points="1150.0,562.0 1205.0,562.0 1205.0,905.0 1241.0,905.0" fill="none" stroke="#64748b" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#agE)"/>
+<polyline points="1399.0,905.0 1411.0,905.0" fill="none" stroke="#64748b" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#agE)"/>
+<polyline points="1514.0,455.0 1589.0,455.0" fill="none" stroke="#64748b" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#agE)" marker-start="url(#agS)"/>
+<polyline points="440.0,300.0 440.0,45.0 1414.0,45.0 1414.0,123.0" fill="none" stroke="#64748b" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#agE)" marker-start="url(#agS)"/>
+<polyline points="1414.0,193.0 1414.0,215.0" fill="none" stroke="#0d9488" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#atE)"/>
+<polyline points="1414.0,285.0 1414.0,307.0" fill="none" stroke="#0d9488" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#atE)"/>
+<polyline points="1414.0,377.0 1414.0,420.0" fill="none" stroke="#0d9488" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#atE)"/>
+<polyline points="1414.0,490.0 1414.0,512.0" fill="none" stroke="#0d9488" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#atE)"/>
+<path d="M485.0 86.0 A75.0 15.0 0 0 1 635.0 86.0 L635.0 150.0 A75.0 15.0 0 0 1 485.0 150.0 Z" fill="#f9dcdc" stroke="#dc2626" stroke-width="1.8" filter="url(#shc)"/>
+<ellipse cx="560.0" cy="86.0" rx="75.0" ry="15.0" fill="#f4bdbd" stroke="#dc2626" stroke-width="1.8"/>
+<g transform="translate(549.0,88.0) scale(0.9167)" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6.2c0-1.7 3.1-3.2 7-3.2s7 1.5 7 3.2-3.1 3.2-7 3.2-7-1.5-7-3.2z"/><path d="M5 6.2v11.6c0 1.7 3.1 3.2 7 3.2s7-1.5 7-3.2V6.2"/><path d="M5 12.2c0 1.7 3.1 3.2 7 3.2s7-1.5 7-3.2"/></g>
+<text x="560.0" y="128.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937" text-anchor="middle">Redis</text>
+<text x="560.0" y="143.0" font-family="DejaVu Sans" font-size="10.5" fill="#6b7280" text-anchor="middle">bộ nhớ đệm</text>
+<path d="M929.0 86.0 A89.0 15.0 0 0 1 1107.0 86.0 L1107.0 150.0 A89.0 15.0 0 0 1 929.0 150.0 Z" fill="#f8e9d7" stroke="#d97706" stroke-width="1.8" filter="url(#shc)"/>
+<ellipse cx="1018.0" cy="86.0" rx="89.0" ry="15.0" fill="#f3d6b4" stroke="#d97706" stroke-width="1.8"/>
+<g transform="translate(1007.0,88.0) scale(0.9167)" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6.2c0-1.7 3.1-3.2 7-3.2s7 1.5 7 3.2-3.1 3.2-7 3.2-7-1.5-7-3.2z"/><path d="M5 6.2v11.6c0 1.7 3.1 3.2 7 3.2s7-1.5 7-3.2V6.2"/><path d="M5 12.2c0 1.7 3.1 3.2 7 3.2s7-1.5 7-3.2"/></g>
+<text x="1018.0" y="128.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937" text-anchor="middle">Qdrant · pgvector</text>
+<text x="1018.0" y="143.0" font-family="DejaVu Sans" font-size="10.5" fill="#6b7280" text-anchor="middle">VectorDB</text>
+<path d="M987.0 796.7 A75.0 14.7 0 0 1 1137.0 796.7 L1137.0 859.3 A75.0 14.7 0 0 1 987.0 859.3 Z" fill="#d9eee4" stroke="#16955a" stroke-width="1.8" filter="url(#shc)"/>
+<ellipse cx="1062.0" cy="796.7" rx="75.0" ry="14.7" fill="#b9dfcd" stroke="#16955a" stroke-width="1.8"/>
+<g transform="translate(1051.0,798.7) scale(0.9167)" fill="none" stroke="#16955a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6.2c0-1.7 3.1-3.2 7-3.2s7 1.5 7 3.2-3.1 3.2-7 3.2-7-1.5-7-3.2z"/><path d="M5 6.2v11.6c0 1.7 3.1 3.2 7 3.2s7-1.5 7-3.2V6.2"/><path d="M5 12.2c0 1.7 3.1 3.2 7 3.2s7-1.5 7-3.2"/></g>
+<text x="1062.0" y="838.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937" text-anchor="middle">MongoDB</text>
+<text x="1062.0" y="853.0" font-family="DejaVu Sans" font-size="10.5" fill="#6b7280" text-anchor="middle">lịch sử chat</text>
+<g transform="translate(65.0,425.0) scale(2.2500)" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.6 20c0-3.1 2.5-5.2 5.4-5.2s5.4 2.1 5.4 5.2"/><circle cx="17" cy="9" r="2.6"/><path d="M15.2 14.9c2.4 0 4.4 1.9 4.4 4.6"/></g>
+<text x="92" y="500" font-family="DejaVu Serif" font-weight="bold" font-size="16" fill="#1f2937" text-anchor="middle">Người dùng</text>
+<rect x="229.0" y="333.0" width="212" height="70" rx="11" fill="#edf2fd" stroke="#7ca1f3" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(243.0,353.0) scale(1.2500)" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 19 4m-2.5.6 2 2m-3.6 1.4 2 2"/></g>
+<text x="284.0" y="366.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">Đăng nhập</text>
+<text x="284.0" y="383.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">JWT</text>
+<rect x="229.0" y="421.0" width="212" height="70" rx="11" fill="#edf2fd" stroke="#7ca1f3" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(243.0,441.0) scale(1.2500)" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16v9.5H10l-4.5 4v-4H4z"/></g>
+<text x="284.0" y="454.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">Thanh hội thoại</text>
+<text x="284.0" y="471.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">CopilotKit</text>
+<rect x="229.0" y="509.0" width="212" height="70" rx="11" fill="#edf2fd" stroke="#7ca1f3" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(243.0,529.0) scale(1.2500)" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 7.5 16.5 12 10 16.5z" fill="#2563eb" stroke="none"/></g>
+<text x="284.0" y="542.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">Trình phát HLS</text>
+<text x="284.0" y="559.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">hls.js</text>
+<rect x="229.0" y="597.0" width="212" height="70" rx="11" fill="#edf2fd" stroke="#7ca1f3" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(243.0,617.0) scale(1.2500)" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15.5V19h16v-3.5"/><path d="M12 4.5v9.6m-4.2-5.4L12 4.5l4.2 4.2"/></g>
+<text x="284.0" y="630.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">Tải lên</text>
+<text x="284.0" y="647.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">ảnh / video</text>
+<rect x="514.0" y="409.0" width="162" height="72" rx="11" fill="#eaf0fd" stroke="#82a7f6" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(528.0,430.0) scale(1.2500)" fill="none" stroke="#2f6df0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 4v2.3M12 17.7V20M20 12h-2.3M6.3 12H4M17.7 6.3l-1.6 1.6M7.9 16.1l-1.6 1.6M17.7 17.7l-1.6-1.6M7.9 7.9 6.3 6.3"/></g>
+<text x="569.0" y="443.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">API Layer</text>
+<text x="569.0" y="460.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">FastAPI</text>
+<rect x="694.0" y="264.0" width="156" height="72" rx="11" fill="#eaf0fd" stroke="#82a7f6" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(708.0,285.0) scale(1.2500)" fill="none" stroke="#2f6df0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 20 6v5.2C20 16 16.4 19 12 21 7.6 19 4 16 4 11.2V6z"/><path d="M8.8 11.8 11 14l4.3-4.4"/></g>
+<text x="749.0" y="298.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">Guardrail</text>
+<text x="749.0" y="315.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">kiểm soát chủ đề</text>
+<rect x="858.0" y="264.0" width="156" height="72" rx="11" fill="#eaf0fd" stroke="#82a7f6" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(872.0,285.0) scale(1.2500)" fill="none" stroke="#2f6df0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l4.6 4.6"/></g>
+<text x="913.0" y="298.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">Truy xuất ngữ cảnh</text>
+<text x="913.0" y="315.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">Retrieval</text>
+<rect x="768.0" y="392.0" width="172" height="72" rx="11" fill="#eaf0fd" stroke="#82a7f6" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(782.0,413.0) scale(1.2500)" fill="none" stroke="#2f6df0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.3"/><circle cx="6" cy="18" r="2.3"/><circle cx="18" cy="12" r="2.3"/><path d="M6 8.3v7.4M8.2 6h4.6a3 3 0 0 1 3 3v.6M8.2 18h4.6a3 3 0 0 0 3-3v-.6"/></g>
+<text x="823.0" y="426.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">Lập kế hoạch</text>
+<text x="823.0" y="443.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">hợp nhất</text>
+<rect x="768.0" y="524.0" width="172" height="72" rx="11" fill="#eaf0fd" stroke="#82a7f6" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(782.0,545.0) scale(1.2500)" fill="none" stroke="#2f6df0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6.3" y="8" width="11.4" height="9" rx="2.6"/><path d="M12 4.9V8"/><circle cx="12" cy="4.1" r="1.1" fill="#2f6df0" stroke="none"/><circle cx="9.7" cy="12" r="1.2" fill="#2f6df0" stroke="none"/><circle cx="14.3" cy="12" r="1.2" fill="#2f6df0" stroke="none"/><path d="M9.8 14.8h4.4"/></g>
+<text x="823.0" y="558.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">Worker</text>
+<text x="823.0" y="575.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">song song</text>
+<rect x="980.0" y="514.0" width="170" height="96" rx="11" fill="#eaf0fd" stroke="#82a7f6" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(994.0,547.0) scale(1.2500)" fill="none" stroke="#2f6df0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.6 6.4a3.7 3.7 0 0 0-4.8 4.5L4 17.6 6.4 20l6.7-6.8a3.7 3.7 0 0 0 4.5-4.8l-2.2 2.2-2.4-.6-.6-2.4z"/></g>
+<text x="1035.0" y="536.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">Hộp công cụ</text>
+<text x="1035.0" y="552.0" font-family="DejaVu Sans" font-size="10.3" fill="#6b7280">Bổ sung thực thể</text>
+<text x="1035.0" y="564.6" font-family="DejaVu Sans" font-size="10.3" fill="#6b7280">Thông tin · diễn biến</text>
+<text x="1035.0" y="577.2" font-family="DejaVu Sans" font-size="10.3" fill="#6b7280">Tin tức web · ảnh</text>
+<text x="1035.0" y="589.8" font-family="DejaVu Sans" font-size="10.3" fill="#6b7280">Sinh bình luận</text>
+<rect x="768.0" y="658.0" width="172" height="72" rx="11" fill="#eaf0fd" stroke="#82a7f6" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(782.0,679.0) scale(1.2500)" fill="none" stroke="#2f6df0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16l-6 7.2V19l-4 1.6v-7.9z"/></g>
+<text x="823.0" y="699.0" font-family="DejaVu Serif" font-weight="bold" font-size="15" fill="#1f2937">Tổng hợp</text>
+<rect x="768.0" y="789.0" width="172" height="72" rx="11" fill="#eaf0fd" stroke="#82a7f6" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(782.0,810.0) scale(1.2500)" fill="none" stroke="#2f6df0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4.5h11.5L20 8v11.5H5z"/><path d="M8 4.5v5h7.5v-5M8 14h8v5.5H8z"/></g>
+<text x="823.0" y="830.0" font-family="DejaVu Serif" font-weight="bold" font-size="15" fill="#1f2937">Lưu bộ nhớ</text>
+<rect x="1314.0" y="123.0" width="200" height="70" rx="11" fill="#fbefed" stroke="#eca295" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(1328.0,143.0) scale(1.2500)" fill="none" stroke="#e0654f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1.5"/><path d="M8 5v14M16 5v14M4 9h4M4 12h4M4 15h4M16 9h4M16 12h4M16 15h4"/></g>
+<text x="1369.0" y="156.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">Chuyển HLS</text>
+<text x="1369.0" y="173.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">FFmpeg</text>
+<rect x="1314.0" y="215.0" width="200" height="70" rx="11" fill="#fbefed" stroke="#eca295" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(1328.0,235.0) scale(1.2500)" fill="none" stroke="#e0654f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></g>
+<text x="1369.0" y="255.0" font-family="DejaVu Serif" font-weight="bold" font-size="15" fill="#1f2937">Theo dõi đoạn</text>
+<rect x="1314.0" y="307.0" width="200" height="70" rx="11" fill="#fbefed" stroke="#eca295" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(1328.0,327.0) scale(1.2500)" fill="none" stroke="#e0654f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 10v4M9 7v10M13 9.2v5.6M17 6.5v11M21 11v2"/></g>
+<text x="1369.0" y="340.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">Tách âm thanh</text>
+<text x="1369.0" y="357.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">theo cửa sổ</text>
+<rect x="1314.0" y="420.0" width="200" height="70" rx="11" fill="#fbefed" stroke="#eca295" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(1328.0,440.0) scale(1.2500)" fill="none" stroke="#e0654f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M6.5 12a5.5 5.5 0 0 0 11 0M12 17.5V21M8.5 21h7"/></g>
+<text x="1369.0" y="460.0" font-family="DejaVu Serif" font-weight="bold" font-size="15" fill="#1f2937">Nhận dạng giọng nói</text>
+<rect x="1314.0" y="512.0" width="200" height="70" rx="11" fill="#fbefed" stroke="#eca295" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(1328.0,532.0) scale(1.2500)" fill="none" stroke="#e0654f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l1-3.6L16 5.4l3 3L8 19.5z"/><path d="M14 7.4l3 3"/></g>
+<text x="1369.0" y="552.0" font-family="DejaVu Serif" font-weight="bold" font-size="15" fill="#1f2937">Ghi lời bình</text>
+<rect x="1589.0" y="419.0" width="150" height="72" rx="11" fill="#fbf1e6" stroke="#e8ad69" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(1603.0,440.0) scale(1.2500)" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9.5h3l4-3.5v12l-4-3.5H5z"/><path d="M15.4 9a4 4 0 0 1 0 6M18 6.5a7 7 0 0 1 0 11"/></g>
+<text x="1644.0" y="453.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">DashScope</text>
+<text x="1644.0" y="470.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">Qwen3-ASR</text>
+<rect x="1259.0" y="744.0" width="142" height="64" rx="11" fill="#f8f0e0" stroke="#dfb868" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(1273.0,761.0) scale(1.2500)" fill="none" stroke="#ca8a04" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.3"/><circle cx="6" cy="18" r="2.3"/><circle cx="18" cy="12" r="2.3"/><path d="M6 8.3v7.4M8.2 6h4.6a3 3 0 0 1 3 3v.6M8.2 18h4.6a3 3 0 0 0 3-3v-.6"/></g>
+<text x="1314.0" y="781.0" font-family="DejaVu Serif" font-weight="bold" font-size="15" fill="#1f2937">Router</text>
+<rect x="1429.0" y="744.0" width="142" height="64" rx="11" fill="#f8f0e0" stroke="#dfb868" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(1443.0,761.0) scale(1.2500)" fill="none" stroke="#ca8a04" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V6.5l7-2.5v16M12 20V8l5-1.6V20M3.5 20h17M8.3 11.5v3.5"/></g>
+<text x="1484.0" y="781.0" font-family="DejaVu Serif" font-weight="bold" font-size="15" fill="#1f2937">Gateway</text>
+<rect x="1642.0" y="716.0" width="158" height="52" rx="11" fill="#eceef0" stroke="#9099a5" stroke-width="1.4" filter="url(#sh)"/>
+<text x="1721.0" y="747.5" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937" text-anchor="middle">GPT-5.4 Nano</text>
+<rect x="1642.0" y="780.0" width="158" height="52" rx="11" fill="#eceef0" stroke="#9099a5" stroke-width="1.4" filter="url(#sh)"/>
+<text x="1721.0" y="811.5" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937" text-anchor="middle">Gemini</text>
+<rect x="1256.0" y="874.0" width="158" height="62" rx="11" fill="#fbf1e6" stroke="#e8ad69" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(1270.0,890.0) scale(1.2500)" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.3 2.6 14.7 0 17M12 3.5c-2.6 2.3-2.6 14.7 0 17"/></g>
+<text x="1311.0" y="903.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">Tavily</text>
+<text x="1311.0" y="920.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">tìm kiếm web</text>
+<rect x="1426.0" y="874.0" width="178" height="62" rx="11" fill="#fbf1e6" stroke="#e8ad69" stroke-width="1.4" filter="url(#sh)"/>
+<g transform="translate(1440.0,890.0) scale(1.2500)" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.4 18a4.2 4.2 0 0 1-.2-8.4 5.3 5.3 0 0 1 10.1-1.1A3.8 3.8 0 0 1 17 18z"/></g>
+<text x="1481.0" y="903.0" font-family="DejaVu Serif" font-weight="bold" font-size="14.5" fill="#1f2937">Azure</text>
+<text x="1481.0" y="920.0" font-family="DejaVu Sans" font-size="11" fill="#6b7280">Blob · InsightFace</text>
+<rect x="132.2" y="418.2" width="83.6" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="174.0" y="433.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#111827" text-anchor="middle">(1) câu hỏi</text>
+<rect x="132.2" y="470.2" width="83.6" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="174.0" y="485.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#111827" text-anchor="middle">(9) trả lời</text>
+<rect x="442.5" y="410.2" width="71.0" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="478.0" y="425.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#111827" text-anchor="middle">(2) /chat</text>
+<rect x="565.1" y="231.2" width="165.9" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="648.0" y="246.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#111827" text-anchor="middle">(3) kiểm tra · truy xuất</text>
+<rect x="809.0" y="348.2" width="89.9" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="854.0" y="363.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#111827" text-anchor="middle">(4) hợp nhất</text>
+<rect x="805.9" y="482.2" width="96.3" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="854.0" y="497.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#111827" text-anchor="middle">(5) điều phối</text>
+<rect x="951.5" y="491.2" width="108.9" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="1006.0" y="506.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#111827" text-anchor="middle">(6) gọi công cụ</text>
+<rect x="809.0" y="615.2" width="89.9" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="854.0" y="630.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#111827" text-anchor="middle">(7) tổng hợp</text>
+<rect x="793.2" y="748.2" width="121.6" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="854.0" y="763.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#111827" text-anchor="middle">(8) lưu hội thoại</text>
+<rect x="521.4" y="275.2" width="77.3" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="560.0" y="290.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#475569" text-anchor="middle">bộ nhớ đệm</text>
+<rect x="991.0" y="193.2" width="127.9" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="1055.0" y="208.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#475569" text-anchor="middle">tài liệu liên quan</text>
+<rect x="920.4" y="790.2" width="115.2" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="978.0" y="805.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#475569" text-anchor="middle">bộ nhớ hội thoại</text>
+<rect x="1155.9" y="626.2" width="58.3" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="1185.0" y="641.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#475569" text-anchor="middle">gọi LLM</text>
+<rect x="1576.4" y="730.2" width="77.3" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="1615.0" y="745.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#475569" text-anchor="middle">định tuyến</text>
+<rect x="1176.5" y="678.2" width="71.0" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="1212.0" y="693.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#475569" text-anchor="middle">web · ảnh</text>
+<rect x="1518.7" y="426.2" width="64.6" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="1551.0" y="441.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#475569" text-anchor="middle">âm thanh</text>
+<rect x="837.9" y="21.2" width="134.2" height="19.3" rx="5" fill="#ffffff" stroke="#e5e7eb" stroke-width="1"/>
+<text x="905.0" y="36.8" font-family="DejaVu Serif" font-weight="bold" font-size="11.3" fill="#475569" text-anchor="middle">tải video lên · HLS</text>
+<text x="60" y="760" font-family="DejaVu Serif" font-weight="bold" font-size="16" fill="#1f2937">Chú thích</text>
+<rect x="60" y="778" width="34" height="20" rx="5" fill="#fff" stroke="#82a7f6" stroke-width="1.4"/>
+<g transform="translate(69.5,780.5) scale(0.6250)" fill="none" stroke="#2f6df0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 4v2.3M12 17.7V20M20 12h-2.3M6.3 12H4M17.7 6.3l-1.6 1.6M7.9 16.1l-1.6 1.6M17.7 17.7l-1.6-1.6M7.9 7.9 6.3 6.3"/></g>
+<text x="110" y="793" font-family="DejaVu Sans" font-size="12.5" fill="#1f2937">module xử lý (kèm icon)</text>
+<path d="M63 809v8c0 1.6 28 1.6 28 0v-8" fill="#d9eee4" stroke="#16955a" stroke-width="1.4"/>
+<ellipse cx="77" cy="809" rx="14" ry="3.4" fill="#b9dfcd" stroke="#16955a" stroke-width="1.4"/>
+<text x="110" y="819" font-family="DejaVu Sans" font-size="12.5" fill="#1f2937">cơ sở dữ liệu</text>
+<rect x="60" y="831" width="34" height="18" rx="5" fill="#fbf1e6" stroke="#d97706" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="110" y="845" font-family="DejaVu Sans" font-size="12.5" fill="#1f2937">dịch vụ ngoài</text>
+<line x1="62" y1="868" x2="90" y2="868" stroke="#2f6df0" stroke-width="2.4" marker-end="url(#abE)"/>
+<text x="110" y="873" font-family="DejaVu Sans" font-size="12.5" fill="#1f2937">luồng đồng bộ (1→9)</text>
+<line x1="62" y1="892" x2="90" y2="892" stroke="#64748b" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#agE)"/>
+<text x="110" y="897" font-family="DejaVu Sans" font-size="12.5" fill="#1f2937">dữ liệu / bộ nhớ</text>
+<line x1="62" y1="916" x2="90" y2="916" stroke="#0d9488" stroke-width="2.2" marker-end="url(#atE)"/>
+<text x="110" y="921" font-family="DejaVu Sans" font-size="12.5" fill="#1f2937">luồng xử lý video</text>
+</svg>
+
+    </div>
+    <p class="hint">Mẹo: phóng to bằng Ctrl/Cmd&nbsp;+, hoặc dùng In → Lưu thành PDF để xuất bản vector. Có thể mở thẳng file .svg trong trình duyệt.</p>
+  </div>
+</body>
+</html>
