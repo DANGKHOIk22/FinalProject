@@ -90,36 +90,23 @@ class SoccerAgent:
     async def warmup(self) -> None:
         """Warm up all internal services so the first real request has no cold-start overhead.
 
-        Sends each LLM role its system prompt with max_completion_tokens=0:
-        establishes HTTP connection pool + primes prompt cache, zero output tokens.
+        Sends each node LLM its system prompt with max_completion_tokens=1 to establish
+        the HTTP connection pool and prime the prompt cache. Each tool warms its own LLMs.
         Non-fatal: failures are logged as warnings, server still starts.
         """
         import asyncio
         from langchain_core.messages import HumanMessage as _HM
-        from app.soccer_agent.factory.llm_provider import get_llm
         from app.soccer_agent.prompts.agent import (
             get_unified_planning_prompt_template,
             get_execution_system_prompt,
             get_aggregator_prompt_template,
             get_guardrail_prompt_template,
         )
-        from app.soccer_agent.prompts.toolbox.textual_retrieval_augment import (
-            get_textual_retrieval_augment_prompt_template,
-        )
-        from app.soccer_agent.prompts.toolbox.commentary_generation import (
-            get_commentary_generation_prompt_template,
-        )
 
-        # Core graph roles
         planning_system = get_unified_planning_prompt_template().messages[0]
         execution_system = get_execution_system_prompt()
         aggregator_system = get_aggregator_prompt_template().messages[0]
         guardrail_system = get_guardrail_prompt_template().messages[0]
-        # Tool roles (shared router → warming the role warms every tool on it):
-        #   retrieval-augment ← entity_augment + game_info/history_retrieval
-        #   tool              ← commentary_generation
-        retrieval_augment_system = get_textual_retrieval_augment_prompt_template().messages[0]
-        tool_system = get_commentary_generation_prompt_template().messages[0]
 
         async def _warm(name: str, llm, system_msg) -> None:
             try:
@@ -137,8 +124,7 @@ class SoccerAgent:
             _warm("execution", self.execution_llm, execution_system),
             _warm("aggregator", self.aggregator_llm, aggregator_system),
             _warm("guardrail", self.guardrail_llm, guardrail_system),
-            _warm("retrieval-augment", get_llm("retrieval-augment"), retrieval_augment_system),
-            _warm("tool", get_llm("tool"), tool_system),
+            *[t.warmup() for t in self.tool_registry.values() if hasattr(t, "warmup")],
         )
         logger.info("✅ SoccerAgent warmup complete — all services ready")
         

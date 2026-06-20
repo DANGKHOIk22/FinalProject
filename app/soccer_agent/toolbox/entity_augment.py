@@ -260,6 +260,11 @@ class EntityAugmentTool(BaseTool):
     # Public interface
     # ------------------------------------------------------------------
 
+    async def warmup(self) -> None:
+        from app.soccer_agent.factory.llm_provider import warm_llm
+        system_msg = get_textual_retrieval_augment_prompt_template().messages[0]
+        await warm_llm(self._llm, system_msg, "entity_augment")
+
     def _run(
         self,
         entity_names: List[str],

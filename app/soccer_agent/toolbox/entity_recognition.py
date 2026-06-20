@@ -26,6 +26,14 @@ from app.soccer_agent.toolbox._config_loader import tool_description
 
 logger = logging.getLogger(__name__)
 
+_QWEN_VL_MODEL = "qwen3-vl-flash-2025-10-15"
+_LOCALIZE_SYSTEM_PROMPT = (
+    "You are a helpful assistant to detect objects in images. "
+    "When asked to detect elements based on a description, "
+    'return valid JSON: [{"bbox_2d": [xmin, ymin, xmax, ymax], "label": "placeholder"}]. '
+    "Return ONLY ONE bounding box for the single most prominent person matching the description."
+)
+
 
 class EntityRecognitionInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -96,6 +104,23 @@ class EntityRecognitionTool(BaseTool):
             )
         logger.info("✅ EntityRecognitionTool clients initialized")
 
+    async def warmup(self) -> None:
+        import asyncio
+        try:
+            await asyncio.to_thread(
+                self._vl_client.chat.completions.create,
+                model=_QWEN_VL_MODEL,
+                messages=[
+                    {"role": "system", "content": [{"type": "text", "text": _LOCALIZE_SYSTEM_PROMPT}]},
+                    {"role": "user", "content": [{"type": "text", "text": "warmup"}]},
+                ],
+                max_tokens=1,
+                extra_headers={"X-DashScope-WorkSpace": ""},
+            )
+            logger.info("✅ entity_recognition Qwen-VL warmed up")
+        except Exception as e:
+            logger.warning(f"⚠️ entity_recognition Qwen-VL warmup failed (non-fatal): {e}")
+
     # ------------------------------------------------------------------
     # Step 1: Localize entity in image with Qwen-VL, refine with OpenCV
     # ------------------------------------------------------------------
@@ -121,21 +146,15 @@ class EntityRecognitionTool(BaseTool):
             image_b64 = media_registry.get_base_64(user_id, thread_id, image_id)
             image_content = {"url": f"data:image/jpeg;base64,{image_b64}"}
 
-        system_prompt = (
-            "You are a helpful assistant to detect objects in images. "
-            "When asked to detect elements based on a description, "
-            'return valid JSON: [{"bbox_2d": [xmin, ymin, xmax, ymax], "label": "placeholder"}]. '
-            "Return ONLY ONE bounding box for the single most prominent person matching the description."
-        )
         user_prompt = (
             "Detect ONLY ONE bounding box for the single most prominent person "
             f"that best matches the description. Description: {description}"
         )
 
         response = self._vl_client.chat.completions.create(
-            model="qwen3-vl-flash-2025-10-15",
+            model=_QWEN_VL_MODEL,
             messages=[
-                {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+                {"role": "system", "content": [{"type": "text", "text": _LOCALIZE_SYSTEM_PROMPT}]},
                 {
                     "role": "user",
                     "content": [

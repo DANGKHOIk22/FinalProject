@@ -66,6 +66,11 @@ class CommentaryGenerationTool(BaseTool):
         super().__init__(description=tool_description("commentary_generation"))
         self._vlm = get_llm("tool")
 
+    async def warmup(self) -> None:
+        from app.soccer_agent.factory.llm_provider import warm_llm
+        system_msg = get_commentary_generation_prompt_template().messages[0]
+        await warm_llm(self._vlm, system_msg, "commentary_generation")
+
     def _run(
         self,
         video_id: str,
