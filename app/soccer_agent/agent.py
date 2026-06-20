@@ -125,7 +125,7 @@ class SoccerAgent:
             try:
                 await llm.ainvoke(
                     [system_msg, _HM(content="warmup")],
-                    max_completion_tokens=0,
+                    max_completion_tokens=1,
                 )
                 logger.info(f"✅ {name} LLM warmed up")
             except Exception as e:
