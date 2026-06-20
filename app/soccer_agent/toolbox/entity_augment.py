@@ -30,6 +30,7 @@ from app.soccer_agent.services.content_cleaner import clean_wiki_markdown, extra
 from app.soccer_agent.services.tavily_service import TavilyService
 from app.soccer_agent.toolbox._config_loader import tool_description
 from app.soccer_agent.memory.long_term_memory import long_term_memory_manager
+from langfuse import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -293,34 +294,44 @@ class EntityAugmentTool(BaseTool):
             entities = SoccerEntities(**{k: (v if v else None) for k, v in buckets.items()})
             logger.info(f"Received entities for lookup: {entities}")
 
-            searching_result = self._query_database(entities)
-            logger.info(
-                f"DB lookup: found={len(searching_result.found_entities)}, "
-                f"missing={len(searching_result.missing_entities)}"
-            )
+            langfuse = get_client()
+            with langfuse.start_as_current_observation(
+                as_type="chain", 
+                name="query_database") as observation:
+                searching_result = self._query_database(entities)
+                logger.info(
+                    f"DB lookup: found={len(searching_result.found_entities)}, "
+                    f"missing={len(searching_result.missing_entities)}"
+                )
 
-            # --- NEW Logic: If NO entities found in DB at all, skip DB answer attempt and go to Tavily ---
-            if not searching_result.found_entities:
-                logger.info("❌ No entities found in DB — jumping straight to Tavily fallback.")
-                web_answer = await self._tavily_fallback(query, searching_result, time_context)
-                return web_answer, searching_result
+            with langfuse.start_as_current_observation(
+                as_type="chain", 
+                name="tavily_fallback") as observation:
+                # --- NEW Logic: If NO entities found in DB at all, skip DB answer attempt and go to Tavily ---
+                if not searching_result.found_entities:
+                    logger.info("❌ No entities found in DB — jumping straight to Tavily fallback.")
+                    web_answer = await self._tavily_fallback(query, searching_result, time_context)
+                    return web_answer, searching_result
 
             # Step 2: Freshness gate. When DB data is recent enough, trust it
             # and skip Tavily entirely — even if the LLM flags the answer as
             # insufficient (it tends to second-guess freshness from LAST_UPDATED).
-            if _is_fresh(searching_result, time_context):
-                logger.info("✅ entity_augment: DB data is fresh — trusting DB answer, skipping Tavily.")
-                db_answer = await self._generate_answer_from_db(query, searching_result, time_context)
-                return db_answer.answer, searching_result
+            with langfuse.start_as_current_observation(
+                as_type="chain", 
+                name="generate_answer_from_db") as observation:
+                if _is_fresh(searching_result, time_context):
+                    logger.info("✅ entity_augment: DB data is fresh — trusting DB answer, skipping Tavily.")
+                    db_answer = await self._generate_answer_from_db(query, searching_result, time_context)
+                    return db_answer.answer, searching_result
 
-            # Step 3: Stale DB data. Run the DB-answer LLM call and a fresh wiki
-            # fetch in parallel so the fallback adds no latency on the slow path.
-            logger.info("entity_augment: DB data stale — DB answer ∥ wiki fetch in parallel.")
-            db_answer, wiki = await asyncio.gather(
-                self._generate_answer_from_db(query, searching_result, time_context),
-                self._fetch_wiki_context(searching_result),
-                return_exceptions=True,
-            )
+                # Step 3: Stale DB data. Run the DB-answer LLM call and a fresh wiki
+                # fetch in parallel so the fallback adds no latency on the slow path.
+                logger.info("entity_augment: DB data stale — DB answer ∥ wiki fetch in parallel.")
+                db_answer, wiki = await asyncio.gather(
+                    self._generate_answer_from_db(query, searching_result, time_context),
+                    self._fetch_wiki_context(searching_result),
+                    return_exceptions=True,
+                )
 
             if isinstance(db_answer, BaseException):
                 logger.warning(f"DB answer failed on stale path: {db_answer}")
