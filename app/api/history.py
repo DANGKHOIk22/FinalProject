@@ -5,10 +5,12 @@ from typing import Any, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from langchain_core.messages import HumanMessage, AIMessage
 
 from app.api.deps import get_current_user
-from app.database.models import User
+from app.database.db import get_db
+from app.database.models import User, UserThread
 from app.soccer_agent.memory.chat_history import ConversationHistoryManager
 
 router = APIRouter()
@@ -60,12 +62,31 @@ def _serialize_content(content) -> Any:
 @router.get("/threads/{thread_id}/messages")
 async def get_thread_messages(
     thread_id: Annotated[str, Path(title="Thread ID")],
-    current_user: Annotated[User, Depends(get_current_user)]
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> list[HistoryMessage]:
     """
     Load conversation history from PostgresChatMessageHistory for a specific thread.
     Only returns HumanMessage and AIMessage (ignores ToolMessage and AIMessage with tool_calls).
+
+    Ownership validation: ensures the thread_id belongs to the authenticated user.
     """
+    # --- Ownership validation ---
+    user_thread = (
+        db.query(UserThread)
+        .filter(
+            UserThread.thread_id == thread_id,
+            UserThread.user_id == current_user.id,
+        )
+        .first()
+    )
+    if user_thread is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Thread does not belong to current user",
+        )
+    # --- End ownership validation ---
+
     try:
         manager = ConversationHistoryManager(session_id=thread_id)
         messages = await asyncio.to_thread(manager.load_messages)
