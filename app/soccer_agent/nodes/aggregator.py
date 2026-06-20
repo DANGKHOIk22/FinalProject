@@ -52,28 +52,18 @@ class AggregatorNode:
                 ))],
             }
 
-        # Single worker result → bypass LLM, append clarifications if any
-        if len(results) == 1 and not pending_clarifications:
-            result = results[0]
-            # Internal error sentinels from worker_node must never reach the user verbatim
+        for result in results:
             if isinstance(result, str) and result.startswith(("[Timeout]", "[Error]")):
-                logger.error(f"Single worker failed: {result}")
-                return {"messages": [AIMessage(content=(
-                    "Xin lỗi, đã có lỗi xảy ra khi xử lý câu hỏi của bạn. Vui lòng thử lại."
-                ))]}
-            logger.info("⚡ Single worker result — bypassing aggregator LLM.")
-            return {"messages": [AIMessage(content=result)]}
+                logger.error(f"Worker error in aggregator: {result}")
 
-        if results:
-            worker_results_str = "\n".join([f"Worker {i+1} finding:\n{r}\n" for i, r in enumerate(results)])
-        else:
-            worker_results_str = "No tools were executed."
+        worker_results_str = "\n".join([f"Worker {i+1} finding:\n{r}\n" for i, r in enumerate(results)]) if results else "No tools were executed."
 
         aggregator_prompt_template = get_aggregator_prompt_template()
         aggregator_prompt = aggregator_prompt_template.invoke({
             "user_query": state.get("clarified_query") or user_query,
             "additional_material": additional_material,
             "conversation_history": conversation_history,
+            "long_term_context": state.get("long_term_context") or "No relevant long-term memory found.",
             "worker_results": worker_results_str,
             "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
             "clarification_block": clarification_block,

@@ -70,7 +70,6 @@ class CaseBankRetriever:
                 vector=vector,
                 query_filter=Filter(
                     must=[
-                        FieldCondition(key="has_media", match=MatchValue(value=has_media)),
                         FieldCondition(key="label", match=MatchValue(value=label)),
                     ]
                 ),
@@ -100,9 +99,10 @@ class CaseBankRetriever:
                 except Exception:
                     tc_str = tool_chains
                     sq_str = sub_queries
+                need_call_tools = p.get("need_call_tools", True)
                 tag = "✅ Correct" if label == "positive" else "❌ Wrong"
                 parts.append(
-                    f"- **[{tag}]** tool_chains={tc_str} | sub_queries={sq_str}\n"
+                    f"- **[{tag}]** need_call_tools={need_call_tools} | tool_chains={tc_str} | sub_queries={sq_str}\n"
                     f"  Reasoning: {reasoning}"
                 )
         return "\n".join(parts)
