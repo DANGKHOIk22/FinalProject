@@ -8,6 +8,7 @@ from app.schema.soccer_agent.state import AgentState
 from app.soccer_agent.memory.long_term_memory import long_term_memory_manager
 from app.soccer_agent.case_bank.retriever import CaseBankRetriever
 from app.soccer_agent.case_bank.cache import case_bank_cache
+from langfuse import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -33,60 +34,70 @@ class ContextRetrievalNode:
 
         if not user_query:
             return {"long_term_context": "", "retrieved_cases": ""}
+        langfuse = get_client()
 
         # 2. Embed the query ONCE (RETRIEVAL_QUERY) and share the vector with all
         #    three consumers below — the case-bank cache, the case-bank retriever,
         #    and long-term memory — instead of embedding the same query 3 times.
-        try:
-            query_embedding = await self.case_bank_retriever.embed_query(user_query)
-        except Exception as e:
-            logger.error(f"Failed to get query embedding: {e}", exc_info=True)
-            query_embedding = None
+        with langfuse.start_as_current_observation(
+                as_type="chain", 
+                name="casebank_embed_query") as observation:
+            try:
+                query_embedding = await self.case_bank_retriever.embed_query(user_query)
+            except Exception as e:
+                logger.error(f"Failed to get query embedding: {e}", exc_info=True)
+                query_embedding = None
 
         # 3. Parallel Retrieval
         # Only the case-bank examples are cached (global knowledge, keyed by
         # query + has_media). Long-term memory is per-user and must NOT be
         # cached without user scoping.
-        async def fetch_cases():
-            try:
-                cached_cases = await asyncio.to_thread(
-                    case_bank_cache.get, user_query, has_media, query_embedding
-                )
-                if cached_cases:
-                    return cached_cases
-
-                cases = await self.case_bank_retriever.retrieve(
-                    user_query, has_media, precomputed_embedding=query_embedding
-                )
-                if cases:
-                    await asyncio.to_thread(
-                        case_bank_cache.set, user_query, has_media, cases
+        with langfuse.start_as_current_observation(
+                as_type="chain", 
+                name="casebank_retrieve") as observation:
+            async def fetch_cases():
+                try:
+                    cached_cases = await asyncio.to_thread(
+                        case_bank_cache.get, user_query, has_media, query_embedding
                     )
-                return cases
-            except Exception as e:
-                logger.error(f"Error fetching cases: {e}")
-                return ""
+                    if cached_cases:
+                        return cached_cases
 
-        async def fetch_long_term():
-            try:
-                if not user_id or not query_embedding: return ""
-                results = await long_term_memory_manager.retrieve_memory(
-                    user_id=user_id,
-                    query=user_query,
-                    top_k=5,
-                    precomputed_embedding=query_embedding
-                )
-                if not results: return ""
-                
-                context_parts = ["### KIẾN THỨC ĐÃ LƯU (Long-term Memory):"]
-                for i, res in enumerate(results):
-                    entity = res.get("entity_name", "unknown").upper()
-                    context_parts.append(f"--- Document {i+1} [{entity}] ---")
-                    context_parts.append(res.get("content", ""))
-                return "\n".join(context_parts)
-            except Exception as e:
-                logger.error(f"Error fetching long-term memory: {e}")
-                return ""
+                    cases = await self.case_bank_retriever.retrieve(
+                        user_query, has_media, precomputed_embedding=query_embedding
+                    )
+                    if cases:
+                        await asyncio.to_thread(
+                            case_bank_cache.set, user_query, has_media, cases
+                        )
+                    return cases
+                except Exception as e:
+                    logger.error(f"Error fetching cases: {e}")
+                    return ""
+
+        with langfuse.start_as_current_observation(
+                as_type="chain", 
+                name="long_term_memory") as observation:
+            async def fetch_long_term():
+                try:
+                    if not user_id or not query_embedding: return ""
+                    results = await long_term_memory_manager.retrieve_memory(
+                        user_id=user_id,
+                        query=user_query,
+                        top_k=5,
+                        precomputed_embedding=query_embedding
+                    )
+                    if not results: return ""
+                    
+                    context_parts = ["### KIẾN THỨC ĐÃ LƯU (Long-term Memory):"]
+                    for i, res in enumerate(results):
+                        entity = res.get("entity_name", "unknown").upper()
+                        context_parts.append(f"--- Document {i+1} [{entity}] ---")
+                        context_parts.append(res.get("content", ""))
+                    return "\n".join(context_parts)
+                except Exception as e:
+                    logger.error(f"Error fetching long-term memory: {e}")
+                    return ""
 
         # Run parallel with timeout to avoid blocking the whole agent
         try:

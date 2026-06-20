@@ -18,6 +18,7 @@ from openai import OpenAI
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from qdrant_client import QdrantClient
+from langfuse import get_client
 
 from app.config.config import QDRANT_SEARCH_SCORE_THRESHOLD as THRESHOLD
 from app.config.settings import settings
@@ -337,28 +338,38 @@ class EntityRecognitionTool(BaseTool):
             if not media_registry:
                 raise ValueError("MediaRegistryService not found in runtime config")
 
-            # 1. Localize entity via Qwen-VL + OpenCV face refinement
-            crop = self._localize_entity(
-                image_id, query_entity_recognition_task, media_registry, user_id, thread_id
-            )
-            if crop is None:
-                return (
-                    "Could not locate the described entity in the image. "
-                    "Try rephrasing the visual description."
+            langfuse = get_client()
+            with langfuse.start_as_current_observation(
+                as_type="chain", 
+                name="qwenvl-localize-entity") as observation:
+                # 1. Localize entity via Qwen-VL + OpenCV face refinement
+                crop = self._localize_entity(
+                    image_id, query_entity_recognition_task, media_registry, user_id, thread_id
                 )
+                if crop is None:
+                    return (
+                        "Could not locate the described entity in the image. "
+                        "Try rephrasing the visual description."
+                    )
 
-            # 2. Get face embeddings from crop via InsightFace
-            embeddings = self._get_face_embeddings(crop)
-            if not embeddings:
-                return (
-                    "No faces detected in the localized region. "
-                    "Try rephrasing the visual description."
-                )
-
-            # 3. Search Qdrant — the match gives the entity name, which is the result
-            entities = self._search_qdrant(embeddings)
-            if not entities:
-                return "No matching entity found."
+            with langfuse.start_as_current_observation(
+                as_type="chain", 
+                name="insightface-embedding") as observation:
+                # 2. Get face embeddings from crop via InsightFace
+                embeddings = self._get_face_embeddings(crop)
+                if not embeddings:
+                    return (
+                        "No faces detected in the localized region. "
+                        "Try rephrasing the visual description."
+                    )
+            
+            with langfuse.start_as_current_observation(
+                as_type="chain", 
+                name="search-qdrant") as observation:
+                # 3. Search Qdrant — the match gives the entity name, which is the result
+                entities = self._search_qdrant(embeddings)
+                if not entities:
+                    return "No matching entity found."
 
             names = ", ".join(e["NAME"] for e in entities)
             return f"Recognized: {names}."
