@@ -164,7 +164,6 @@ class UnifiedPlanningNode:
             "time_context": state.get("time_context") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "game_id": game_id or "No game context",
             "video_current_time": video_current_time if video_current_time is not None else "No video context",
-            "format_instructions": self.parser.get_format_instructions()
         })
         prompt_messages = prompt_value.to_messages()
 
