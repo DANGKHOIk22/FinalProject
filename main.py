@@ -11,13 +11,13 @@ from langfuse.langchain import CallbackHandler
 import pymongo
 from pymongo.server_api import ServerApi
 from dns import resolver
-from qdrant_client import QdrantClient
 
 # Import cấu hình và database
 from app.config.settings import settings
 from app.config.config import LOG_FORMAT, LOG_LEVEL
 from sqlalchemy import text
 from app.database.db import engine
+from app.services.qdrant_service import qdrant_service
 
 # Import SoccerAgent (but don't initialize yet)
 from app.soccer_agent.agent import SoccerAgent
@@ -44,7 +44,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Global variables for database connections
 mongo_client = None
-qdrant_client = None
+qdrant_connected = False
 postgres_connected = False
 
 # Global variable for agent service
@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
     Lifespan context manager to load heavy models on startup and cleanup on shutdown.
     This ensures models are loaded once when the app starts, not on each request.
     """
-    global mongo_client, qdrant_client
+    global mongo_client, qdrant_connected
     global agent_service
     
     logger.info("🚀 Starting FastAPI application...")
@@ -84,17 +84,10 @@ async def lifespan(app: FastAPI):
         else:
             logger.warning("⚠️ MongoDB SRV not configured, skipping MongoDB initialization")
         
-        # Qdrant connection
-        qdrant_url = settings.QDRANT_URL
-        qdrant_api_key = settings.QDRANT_API_KEY
-        if qdrant_url and qdrant_api_key:
-            qdrant_client = QdrantClient(
-                url=qdrant_url,
-                api_key=qdrant_api_key,
-                prefer_grpc=True,
-                check_compatibility=False,
-            )
-            logger.info("✅ Qdrant client initialized successfully")
+        # Qdrant connection — owned by the shared qdrant_service singleton
+        if settings.QDRANT_URL and settings.QDRANT_API_KEY:
+            qdrant_connected = True
+            logger.info("✅ Qdrant service configured")
         else:
             logger.warning("⚠️ Qdrant credentials not configured, skipping Qdrant initialization")
 
@@ -117,11 +110,19 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.error(f"❌ Checkpointer init failed: {e}")
 
+        # Warmup Qdrant connections (sync used by entity_recognition, async by case bank)
+        if qdrant_connected:
+            qdrant_service.warmup()
+            await qdrant_service.awarmup()
+
         # Initialize SoccerAgent AFTER all models and databases are loaded
         if settings.DASHSCOPE_API_KEY:
             logger.info("Initializing SoccerAgent...")
             agent_service = SoccerAgent(checkpointer=checkpointer)
             logger.info("✅ SoccerAgent initialized successfully")
+
+            # Warmup all internal services (case bank, guardrail LLM, ...)
+            await agent_service.warmup()
 
             # Initialize MediaRegistryService
             media_service = MediaRegistryService(
@@ -173,20 +174,19 @@ async def lifespan(app: FastAPI):
         mongo_client.close()
         logger.info("MongoDB connection closed")
     
-    if qdrant_client is not None:
-        qdrant_client.close()
-        logger.info("Qdrant connection closed")
-    
+    qdrant_service.close()
+    await qdrant_service.aclose()
+    logger.info("Qdrant connections closed")
+
     # Close checkpointer pool
     await close_checkpointer()
 
     # Clear agent service
     agent_service = None
-    
+
     # Clear model instances to free memory
     mongo_client = None
-    qdrant_client = None
-    
+
     langfuse_client = get_client()
     langfuse_client.flush()
     logger.info("✅ Langfuse traces flushed successfully")
@@ -224,18 +224,18 @@ def get_mongo_client():
     return mongo_client
 
 def get_qdrant_client():
-    """Get the preloaded Qdrant client."""
-    return qdrant_client
+    """Get the shared Qdrant sync client."""
+    return qdrant_service.sync_client
 
 # --- 6. Root Endpoint (Health check) ---
 @app.get("/")
 def root():
     return {
-        "message": "Soccer Agent API is running!", 
+        "message": "Soccer Agent API is running!",
         "docs": "/docs",
         "databases_connected": {
             "mongodb": mongo_client is not None,
-            "qdrant": qdrant_client is not None,
+            "qdrant": qdrant_connected,
             "postgres": postgres_connected,
         }
     }

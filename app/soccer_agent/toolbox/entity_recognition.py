@@ -17,11 +17,11 @@ from langgraph.prebuilt import ToolRuntime
 from openai import OpenAI
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
-from qdrant_client import QdrantClient
 from langfuse import get_client
 
 from app.config.config import QDRANT_SEARCH_SCORE_THRESHOLD as THRESHOLD
 from app.config.settings import settings
+from app.services.qdrant_service import qdrant_service
 from app.soccer_agent.toolbox._config_loader import tool_description
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,6 @@ class EntityRecognitionTool(BaseTool):
     args_schema: Type[BaseModel] = EntityRecognitionInput
 
     _vl_client: Any = PrivateAttr(default=None)
-    _qdrant_client: Optional[QdrantClient] = PrivateAttr(default=None)
     _insight_endpoint_uri: str = PrivateAttr(default="")
     _insight_payload_header: Dict[str, str] = PrivateAttr(default_factory=dict)
 
@@ -76,22 +75,7 @@ class EntityRecognitionTool(BaseTool):
             base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         )
 
-        # Qdrant — prefer the preloaded client from lifespan
-        try:
-            import main
-            if main.qdrant_client is not None:
-                self._qdrant_client = main.qdrant_client
-        except (ImportError, AttributeError):
-            pass
-
-        if self._qdrant_client is None:
-            self._qdrant_client = QdrantClient(
-                url=settings.QDRANT_URL,
-                api_key=settings.QDRANT_API_KEY,
-                prefer_grpc=True,
-                check_compatibility=False,
-                timeout=20,
-            )
+        # Qdrant access goes through the shared qdrant_service singleton.
 
         # InsightFace Azure endpoint
         uri = settings.INSIGHTFACE_ENDPOINT_URI or ""
@@ -260,13 +244,15 @@ class EntityRecognitionTool(BaseTool):
     def _search_qdrant(self, embeddings: List[List[float]]) -> List[Dict]:
         """Search Qdrant for soccer entities matching the given face embeddings."""
         collection_name = settings.QDRANT_COLLECTION_NAME
-        assert collection_name and self._qdrant_client, "Qdrant client is not initialized"
+        assert collection_name, "QDRANT_COLLECTION_NAME is not configured"
 
         soccer_entities: List[Dict] = []
         for idx, embedding in enumerate(embeddings):
-            search_result = self._qdrant_client.query_points(
+            # with_vectors=True is required: the re-ranking below scores the query
+            # against each stored sub-vector of a matched point.
+            points = qdrant_service.search(
                 collection_name=collection_name,
-                query=embedding,
+                vector=embedding,
                 limit=7,
                 score_threshold=0.5,
                 with_vectors=True,
@@ -275,7 +261,7 @@ class EntityRecognitionTool(BaseTool):
             candidates: Dict[str, Any] = defaultdict(
                 lambda: {"ENTITY_TYPE": None, "max_score": 0, "count": 0, "score_list": []}
             )
-            for point in search_result.points:
+            for point in points:
                 name = point.payload["NAME"]
                 if not point.vector:
                     continue
