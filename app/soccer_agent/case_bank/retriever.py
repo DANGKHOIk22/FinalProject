@@ -55,6 +55,7 @@ class CaseBankRetriever:
                 vector=dummy_vec[:768],
                 limit=1,
                 with_payload=False,
+                exact=True,
             )
             logger.info("✅ CaseBankRetriever warmed up (gRPC + embedding ready)")
         except Exception as e:
@@ -75,6 +76,7 @@ class CaseBankRetriever:
                 ),
                 limit=top_k,
                 with_payload=True,
+                exact=True,
             )
         except Exception as e:
             logger.error(f"CaseBankRetriever search error (label={label}): {e}", exc_info=True)
