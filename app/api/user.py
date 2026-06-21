@@ -56,7 +56,7 @@ def get_or_create_thread(
         db.query(models.UserThread)
         .filter(
             models.UserThread.user_id == current_user.id,
-            models.UserThread.is_active is True,
+            models.UserThread.is_active == True,
         )
         .order_by(models.UserThread.updated_at.desc())
         .first()
@@ -65,7 +65,7 @@ def get_or_create_thread(
     if user_thread:
         return ThreadResponse(thread_id=user_thread.thread_id)
 
-    # Chưa có thread nào — tạo mới với retry chống race condition
+    # Chưa có thread nào
     new_thread_id = str(uuid.uuid4())
     new_thread = models.UserThread(
         user_id=current_user.id,
@@ -93,6 +93,73 @@ def get_or_create_thread(
         if user_thread:
             return ThreadResponse(thread_id=user_thread.thread_id)
         # Fallback cực kỳ hiếm: retry tạo mới một lần nữa
+        new_thread_id = str(uuid.uuid4())
+        new_thread = models.UserThread(
+            user_id=current_user.id,
+            thread_id=new_thread_id,
+        )
+        db.add(new_thread)
+        db.commit()
+        db.refresh(new_thread)
+        return ThreadResponse(thread_id=new_thread.thread_id)
+
+
+@router.patch("/thread")
+def deactivate_thread(
+    current_user: Annotated[models.User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Deactivate tất cả thread đang active của user hiện tại.
+
+    Được gọi trước khi tạo thread mới (POST /thread) để đảm bảo
+    chỉ có 1 thread active tại một thời điểm. Dùng UPDATE thay vì
+    DELETE để giữ lại lịch sử cho tính năng xem lại sau này.
+    """
+    updated = (
+        db.query(models.UserThread)
+        .filter(
+            models.UserThread.user_id == current_user.id,
+            models.UserThread.is_active == True,
+        )
+        .update({"is_active": False})
+    )
+    db.commit()
+    logger.info(
+        f"Deactivated {updated} thread(s) for user {current_user.id}"
+    )
+    return {"status": "ok", "deactivated": updated}
+
+
+@router.post("/thread", response_model=ThreadResponse)
+def create_thread(
+    current_user: Annotated[models.User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Tạo một thread_id mới cho user hiện tại.
+
+    Thread mới được tạo với is_active=True. Frontend nên gọi
+    PATCH /thread trước để deactivate thread cũ, sau đó gọi
+    endpoint này để tạo thread mới.
+
+    Thread_id được sinh bằng uuid4, có unique constraint trong DB
+    nên không lo trùng lặp giữa các user.
+    """
+    new_thread_id = str(uuid.uuid4())
+    new_thread = models.UserThread(
+        user_id=current_user.id,
+        thread_id=new_thread_id,
+    )
+    db.add(new_thread)
+    try:
+        db.commit()
+        db.refresh(new_thread)
+        logger.info(
+            f"Created new thread {new_thread_id} for user {current_user.id}"
+        )
+        return ThreadResponse(thread_id=new_thread.thread_id)
+    except IntegrityError:
+        db.rollback()
+        # Cực kỳ hiếm: uuid4 collision — retry một lần
         new_thread_id = str(uuid.uuid4())
         new_thread = models.UserThread(
             user_id=current_user.id,
