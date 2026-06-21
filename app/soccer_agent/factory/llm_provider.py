@@ -32,7 +32,7 @@ def _get_router() -> Router:
 
 def get_llm(role: str = "tool") -> ChatLiteLLMRouter:
     """Return a ChatLiteLLMRouter for the given role."""
-    if role in ["retrieval-augment", "aggregator"]:
+    if role in ["aggregator"]:
         # Enable thinking for some roles to enhance UX
         return ChatLiteLLMRouter(router=_get_router(), model_name=role,num_retries=0, streaming=True)
     return ChatLiteLLMRouter(router=_get_router(), model_name=role,num_retries=0, streaming=False)
