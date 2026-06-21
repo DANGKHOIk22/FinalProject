@@ -17,14 +17,22 @@ from langgraph.prebuilt import ToolRuntime
 from openai import OpenAI
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
-from qdrant_client import QdrantClient
 from langfuse import get_client
 
 from app.config.config import QDRANT_SEARCH_SCORE_THRESHOLD as THRESHOLD
 from app.config.settings import settings
+from app.services.qdrant_service import qdrant_service
 from app.soccer_agent.toolbox._config_loader import tool_description
 
 logger = logging.getLogger(__name__)
+
+_QWEN_VL_MODEL = "qwen3-vl-flash-2025-10-15"
+_LOCALIZE_SYSTEM_PROMPT = (
+    "You are a helpful assistant to detect objects in images. "
+    "When asked to detect elements based on a description, "
+    'return valid JSON: [{"bbox_2d": [xmin, ymin, xmax, ymax], "label": "placeholder"}]. '
+    "Return ONLY ONE bounding box for the single most prominent person matching the description."
+)
 
 
 class EntityRecognitionInput(BaseModel):
@@ -57,7 +65,6 @@ class EntityRecognitionTool(BaseTool):
     args_schema: Type[BaseModel] = EntityRecognitionInput
 
     _vl_client: Any = PrivateAttr(default=None)
-    _qdrant_client: Optional[QdrantClient] = PrivateAttr(default=None)
     _insight_endpoint_uri: str = PrivateAttr(default="")
     _insight_payload_header: Dict[str, str] = PrivateAttr(default_factory=dict)
 
@@ -76,22 +83,7 @@ class EntityRecognitionTool(BaseTool):
             base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         )
 
-        # Qdrant — prefer the preloaded client from lifespan
-        try:
-            import main
-            if main.qdrant_client is not None:
-                self._qdrant_client = main.qdrant_client
-        except (ImportError, AttributeError):
-            pass
-
-        if self._qdrant_client is None:
-            self._qdrant_client = QdrantClient(
-                url=settings.QDRANT_URL,
-                api_key=settings.QDRANT_API_KEY,
-                prefer_grpc=True,
-                check_compatibility=False,
-                timeout=20,
-            )
+        # Qdrant access goes through the shared qdrant_service singleton.
 
         # InsightFace Azure endpoint
         uri = settings.INSIGHTFACE_ENDPOINT_URI or ""
@@ -111,6 +103,23 @@ class EntityRecognitionTool(BaseTool):
                 f"InsightFace endpoint unreachable: {probe.status_code} — {probe.text}"
             )
         logger.info("✅ EntityRecognitionTool clients initialized")
+
+    async def warmup(self) -> None:
+        import asyncio
+        try:
+            await asyncio.to_thread(
+                self._vl_client.chat.completions.create,
+                model=_QWEN_VL_MODEL,
+                messages=[
+                    {"role": "system", "content": [{"type": "text", "text": _LOCALIZE_SYSTEM_PROMPT}]},
+                    {"role": "user", "content": [{"type": "text", "text": "warmup"}]},
+                ],
+                max_tokens=1,
+                extra_headers={"X-DashScope-WorkSpace": ""},
+            )
+            logger.info("✅ entity_recognition Qwen-VL warmed up")
+        except Exception as e:
+            logger.warning(f"⚠️ entity_recognition Qwen-VL warmup failed (non-fatal): {e}")
 
     # ------------------------------------------------------------------
     # Step 1: Localize entity in image with Qwen-VL, refine with OpenCV
@@ -137,21 +146,15 @@ class EntityRecognitionTool(BaseTool):
             image_b64 = media_registry.get_base_64(user_id, thread_id, image_id)
             image_content = {"url": f"data:image/jpeg;base64,{image_b64}"}
 
-        system_prompt = (
-            "You are a helpful assistant to detect objects in images. "
-            "When asked to detect elements based on a description, "
-            'return valid JSON: [{"bbox_2d": [xmin, ymin, xmax, ymax], "label": "placeholder"}]. '
-            "Return ONLY ONE bounding box for the single most prominent person matching the description."
-        )
         user_prompt = (
             "Detect ONLY ONE bounding box for the single most prominent person "
             f"that best matches the description. Description: {description}"
         )
 
         response = self._vl_client.chat.completions.create(
-            model="qwen3-vl-flash-2025-10-15",
+            model=_QWEN_VL_MODEL,
             messages=[
-                {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+                {"role": "system", "content": [{"type": "text", "text": _LOCALIZE_SYSTEM_PROMPT}]},
                 {
                     "role": "user",
                     "content": [
@@ -260,13 +263,15 @@ class EntityRecognitionTool(BaseTool):
     def _search_qdrant(self, embeddings: List[List[float]]) -> List[Dict]:
         """Search Qdrant for soccer entities matching the given face embeddings."""
         collection_name = settings.QDRANT_COLLECTION_NAME
-        assert collection_name and self._qdrant_client, "Qdrant client is not initialized"
+        assert collection_name, "QDRANT_COLLECTION_NAME is not configured"
 
         soccer_entities: List[Dict] = []
         for idx, embedding in enumerate(embeddings):
-            search_result = self._qdrant_client.query_points(
+            # with_vectors=True is required: the re-ranking below scores the query
+            # against each stored sub-vector of a matched point.
+            points = qdrant_service.search(
                 collection_name=collection_name,
-                query=embedding,
+                vector=embedding,
                 limit=7,
                 score_threshold=0.5,
                 with_vectors=True,
@@ -275,7 +280,7 @@ class EntityRecognitionTool(BaseTool):
             candidates: Dict[str, Any] = defaultdict(
                 lambda: {"ENTITY_TYPE": None, "max_score": 0, "count": 0, "score_list": []}
             )
-            for point in search_result.points:
+            for point in points:
                 name = point.payload["NAME"]
                 if not point.vector:
                     continue

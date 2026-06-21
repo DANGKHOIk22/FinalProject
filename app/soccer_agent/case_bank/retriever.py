@@ -5,10 +5,10 @@ from collections import Counter
 from typing import List, Optional
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 from app.config.settings import settings
+from app.services.qdrant_service import qdrant_service
 
 from app.cache.standard_cache import standard_cache
 
@@ -30,24 +30,12 @@ class CaseBankRetriever:
     """
 
     def __init__(self):
-        self._client: AsyncQdrantClient | None = None
         self._embeddings = GoogleGenerativeAIEmbeddings(
             model="gemini-embedding-001",
             output_dimensionality=768,
             google_api_key=settings.GOOGLE_API_KEY,
             task_type="RETRIEVAL_QUERY",
         )
-
-    @property
-    def client(self) -> AsyncQdrantClient:
-        if self._client is None:
-            self._client = AsyncQdrantClient(
-                url=settings.QDRANT_URL,
-                api_key=settings.QDRANT_API_KEY,
-                prefer_grpc=True,
-                check_compatibility=False,
-            )
-        return self._client
 
     @standard_cache.cache(ttl=60*60*24) # Cache embeddings for 24h
     async def _embed(self, text: str) -> List[float]:
@@ -58,23 +46,37 @@ class CaseBankRetriever:
         so the same query vector feeds the cache, the retriever, and long-term memory."""
         return await self._embed(text)
 
+    async def warmup(self) -> None:
+        """Pre-warm the embedding model and exercise the real search path at startup."""
+        try:
+            dummy_vec = await self._embed("warmup")
+            await qdrant_service.asearch(
+                collection_name=COLLECTION_NAME,
+                vector=dummy_vec[:768],
+                limit=1,
+                with_payload=False,
+                exact=True,
+            )
+            logger.info("✅ CaseBankRetriever warmed up (gRPC + embedding ready)")
+        except Exception as e:
+            logger.warning(f"⚠️ CaseBankRetriever warmup failed (non-fatal): {e}")
+
     async def _search(
         self, vector: List[float], has_media: bool, label: str, top_k: int
     ) -> list:
         try:
-            response = await self.client.query_points(
+            return await qdrant_service.asearch(
                 collection_name=COLLECTION_NAME,
-                query=vector,
+                vector=vector,
                 query_filter=Filter(
                     must=[
-                        FieldCondition(key="has_media", match=MatchValue(value=has_media)),
                         FieldCondition(key="label", match=MatchValue(value=label)),
                     ]
                 ),
                 limit=top_k,
                 with_payload=True,
+                exact=True,
             )
-            return response.points
         except Exception as e:
             logger.error(f"CaseBankRetriever search error (label={label}): {e}", exc_info=True)
             return []
@@ -97,9 +99,10 @@ class CaseBankRetriever:
                 except Exception:
                     tc_str = tool_chains
                     sq_str = sub_queries
+                need_call_tools = p.get("need_call_tools", True)
                 tag = "✅ Correct" if label == "positive" else "❌ Wrong"
                 parts.append(
-                    f"- **[{tag}]** tool_chains={tc_str} | sub_queries={sq_str}\n"
+                    f"- **[{tag}]** need_call_tools={need_call_tools} | tool_chains={tc_str} | sub_queries={sq_str}\n"
                     f"  Reasoning: {reasoning}"
                 )
         return "\n".join(parts)

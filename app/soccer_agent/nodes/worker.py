@@ -223,7 +223,12 @@ class WorkerNodes:
         sub_query = state.get("sub_query")
         if not sub_query:
             return {}
-            
+
+        # Empty tool chain → answer comes from memory; pass sub_query as-is to aggregator
+        if not state.get("tool_chain"):
+            logger.info(f"⚡ Empty tool chain — memory-answerable worker, forwarding sub_query to aggregator.")
+            return {"worker_result": [sub_query]}
+
         additional_material = state.get("additional_material") or {}
         cached_result = sub_query_cache.check(
             sub_query,

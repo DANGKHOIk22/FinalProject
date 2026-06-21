@@ -260,6 +260,11 @@ class EntityAugmentTool(BaseTool):
     # Public interface
     # ------------------------------------------------------------------
 
+    async def warmup(self) -> None:
+        from app.soccer_agent.factory.llm_provider import warm_llm
+        system_msg = get_textual_retrieval_augment_prompt_template().messages[0]
+        await warm_llm(self._llm, system_msg, "entity_augment")
+
     def _run(
         self,
         entity_names: List[str],
@@ -295,41 +300,52 @@ class EntityAugmentTool(BaseTool):
             logger.info(f"Received entities for lookup: {entities}")
 
             langfuse = get_client()
-            with langfuse.start_as_current_observation(
-                as_type="chain", 
-                name="query_database") as observation:
+
+            # Step 1: Local DB lookup.
+            with langfuse.start_as_current_observation(as_type="chain", name="query_database"):
                 searching_result = self._query_database(entities)
                 logger.info(
                     f"DB lookup: found={len(searching_result.found_entities)}, "
                     f"missing={len(searching_result.missing_entities)}"
                 )
 
-            with langfuse.start_as_current_observation(
-                as_type="chain", 
-                name="tavily_fallback") as observation:
-                # --- NEW Logic: If NO entities found in DB at all, skip DB answer attempt and go to Tavily ---
-                if not searching_result.found_entities:
-                    logger.info("❌ No entities found in DB — jumping straight to Tavily fallback.")
+            # Step 2: Nothing in the DB → full Tavily fallback
+            # (resolve wiki URL → extract / general search → LLM answer).
+            if not searching_result.found_entities:
+                logger.info("❌ No entities found in DB — jumping straight to Tavily fallback.")
+                with langfuse.start_as_current_observation(as_type="chain", name="tavily_fallback"):
                     web_answer = await self._tavily_fallback(query, searching_result, time_context)
-                    return web_answer, searching_result
+                return web_answer, searching_result
 
-            # Step 2: Freshness gate. When DB data is recent enough, trust it
-            # and skip Tavily entirely — even if the LLM flags the answer as
-            # insufficient (it tends to second-guess freshness from LAST_UPDATED).
-            with langfuse.start_as_current_observation(
-                as_type="chain", 
-                name="generate_answer_from_db") as observation:
-                if _is_fresh(searching_result, time_context):
-                    logger.info("✅ entity_augment: DB data is fresh — trusting DB answer, skipping Tavily.")
+            # Step 3: Freshness gate. When DB data is recent enough, trust it and
+            # skip Tavily entirely — even if the LLM flags the answer as insufficient
+            # (it tends to second-guess freshness from LAST_UPDATED).
+            if _is_fresh(searching_result, time_context):
+                logger.info("✅ entity_augment: DB data is fresh — trusting DB answer, skipping Tavily.")
+                with langfuse.start_as_current_observation(as_type="chain", name="generate_answer_from_db"):
                     db_answer = await self._generate_answer_from_db(query, searching_result, time_context)
-                    return db_answer.answer, searching_result
+                return db_answer.answer, searching_result
 
-                # Step 3: Stale DB data. Run the DB-answer LLM call and a fresh wiki
-                # fetch in parallel so the fallback adds no latency on the slow path.
-                logger.info("entity_augment: DB data stale — DB answer ∥ wiki fetch in parallel.")
+            # Step 4: Stale DB data. Run the DB-answer LLM call and the Tavily wiki
+            # fetch concurrently so the fallback adds no latency on the slow path.
+            # Both run as child observations under one parent so the trace shows
+            # them executing in parallel.
+            logger.info("entity_augment: DB data stale — DB answer ∥ Tavily wiki fetch in parallel.")
+
+            async def _db_answer_observed():
+                with langfuse.start_as_current_observation(as_type="chain", name="generate_answer_from_db"):
+                    return await self._generate_answer_from_db(query, searching_result, time_context)
+
+            async def _tavily_fetch_observed():
+                with langfuse.start_as_current_observation(as_type="chain", name="tavily_wiki_fetch"):
+                    return await self._fetch_wiki_context(searching_result)
+
+            with langfuse.start_as_current_observation(
+                as_type="chain", name="db_answer_parallel_tavily_fetch"
+            ):
                 db_answer, wiki = await asyncio.gather(
-                    self._generate_answer_from_db(query, searching_result, time_context),
-                    self._fetch_wiki_context(searching_result),
+                    _db_answer_observed(),
+                    _tavily_fetch_observed(),
                     return_exceptions=True,
                 )
 
@@ -340,13 +356,14 @@ class EntityAugmentTool(BaseTool):
                 logger.warning(f"Wiki fetch failed on stale path: {wiki}")
                 wiki = None
 
-            # Pick the final answer: trust the DB answer when sufficient,
+            # Step 5: Pick the final answer — trust the DB answer when sufficient,
             # otherwise regenerate from the freshly fetched wiki markdown.
             if db_answer.has_sufficient_info:
                 final_answer = db_answer.answer
             elif wiki:
                 logger.info("DB answer insufficient — regenerating from fetched wiki content.")
-                final_answer = await self._generate_web_answer(query, wiki["web_context"], time_context)
+                with langfuse.start_as_current_observation(as_type="chain", name="generate_web_answer"):
+                    final_answer = await self._generate_web_answer(query, wiki["web_context"], time_context)
             else:
                 logger.info("DB answer insufficient and wiki fetch unavailable — returning DB answer.")
                 final_answer = db_answer.answer

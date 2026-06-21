@@ -1,5 +1,13 @@
 from langchain_core.messages import SystemMessage
+from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder
+
+from app.schema.soccer_agent.state import UnifiedPlanningOutput
+
+# Pre-computed at import time — the JSON schema never changes between requests.
+_PLANNING_FORMAT_INSTRUCTIONS = PydanticOutputParser(
+    pydantic_object=UnifiedPlanningOutput
+).get_format_instructions()
 
 
 def get_unified_planning_prompt_template() -> ChatPromptTemplate:
@@ -25,15 +33,21 @@ Your task consists of two phases executed simultaneously to produce a final plan
    - "tháng trước" / "last month" → the specific month (e.g., "April 2025")
    - "mùa vừa rồi" / "last season" → the season (e.g., "2023-2024 season")
    - "năm ngoái" / "last year" → the year (e.g., "2024")
-   - "gần đây" / "recently" → keep as "recently (around {current_date})"
+   - "gần đây" / "recently" → keep as "recently (around the date in time_context)"
 7. **Clarification follow-up (PRIORITY)**: If conversation history shows the agent previously asked a clarifying question and the user's current message is answering it — **combine the original question + user's answer** into `clarified_query`. Set `is_ambiguous=false` for that chain and plan tools normally.
+8. **Tournament calendar (mandatory for temporal resolution)**: Use this table to resolve "most recent", "last", or "next" tournament references — do NOT ask for a year when this table already gives the answer. Compare against `time_context` to determine which edition was most recently completed:
+   - **FIFA World Cup**: every 4 years → 2010 · 2014 · 2018 · 2022 · 2026
+   - **UEFA European Championship (Euro)**: every 4 years → 2008 · 2012 · 2016 · 2020 · 2024
+   - **Copa América**: every 4 years → 2011 · 2015 · 2019 · 2021 · 2024
+   - **Club competitions** (EPL, Bundesliga, La Liga, Serie A, Ligue 1, UCL, etc.): **annual** — one season per calendar year.
+   Example: if `time_context` is 2026-06-20, "WC gần nhất" → FIFA World Cup 2026; "Euro gần nhất" → UEFA Euro 2024.
 
 ### PHASE 2: TOOL PLANNING
 1. **Golden rule**: Always use tools for factual questions and statistics. Never rely on the LLM's internal knowledge.
 2. **Decompose queries**: Break complex questions into parallel `planned_chains`. Each chain has one `sub_query` (IN ENGLISH).
 3. **Sequential ordering**: If a later tool needs output from an earlier one, place them in the same chain list.
-4. **Skip tools**: Set `need_call_tools=false` only for casual greetings or if the answer is already verbatim in conversation history.
-5. **Long-term Memory**: Use for pronoun resolution only — it does NOT replace tool calls.
+4. **Skip tools**: Set `need_call_tools=false` ONLY for casual greetings with no information needed. In all other cases — including when the answer is in memory — set `need_call_tools=true` and use the `chain: []` pattern below.
+5. **Memory-answerable sub-queries** (`chain: []` pattern): If Context section already contains a useful information for the subquery, emit a chain with `chain: []` (empty list) and `sub_query: "Using memory to answer: <the actual question in English>"`. The worker will forward this text directly to the aggregator, which will look it up in long_term_context / conversation_history. Use this for: a sub-query in a multi-entity query where one entity is already in memory; or a single query where the exact answer was given in a recent conversation turn.
 
 ### TOOL ROUTING RULES (apply in order, first match wins):
 Inputs you are given: a **game_id** (the match the user is watching live, or "No game context") and any attached **image / video** ids. NEVER reason about which season a match is in — the game tools auto-fall back to web search when a match is not in the DB.
@@ -49,8 +63,11 @@ Inputs you are given: a **game_id** (the match the user is watching live, or "No
 6. **No game_id AND a vague unspecified match with no team named** ("how did the match go?") → `is_ambiguous=true`, ask which teams.
 
 ### CARDINALITY (decides how many parallel workers):
+**General rule: one tool chain = one distinct search subject. Count how many separate subjects (entities, matches, news topics) the query contains and spawn exactly that many workers.**
+
 - `entity_recognition` and `entity_augment` handle **ONE entity per call** → N entities = N parallel chains. Each chain uses only what its sub-question needs: name-only → `["entity_recognition"]`; name+detail → `["entity_recognition","entity_augment"]`; text detail → `["entity_augment"]`.
-- `game_info_retrieval` / `game_history_retrieval` handle **ONE match per call but return ALL of that match's entities/events** → several entities from the SAME match = a SINGLE chain (do not split).
+- `game_info_retrieval` / `game_history_retrieval` handle **ONE match per call but return ALL of that match's entities/events** → several entities from the SAME match = a SINGLE chain (do not split). But N distinct matches = N chains.
+- `web_news_search` handles **ONE search subject per call** → if the query asks about N distinct matches or N distinct topics (even using the same tool), spawn N parallel chains — one per subject.
 
 ### CONFIDENCE SCORING (per chain):
 Assign `confidence` (0.0–1.0) based on how certain you are the chain will return a correct answer:
@@ -83,6 +100,15 @@ For a specific named match, always plan `game_info_retrieval` / `game_history_re
 ## ABBREVIATION REFERENCE:
 - Competitions: EPL/PL → English Premier League, UCL/CL → UEFA Champions League, WC → FIFA World Cup
 - Clubs: MU/ManUtd → Manchester United, MC → Manchester City, Barca → FC Barcelona, Real/RM → Real Madrid
+
+## OUTPUT FORMAT
+Produce your response as a JSON object that conforms to the schema below.
+`clarified_query` and all `sub_query` fields MUST BE IN ENGLISH.
+
+""" + _PLANNING_FORMAT_INSTRUCTIONS + """
+
+## YOUR TASK
+Analyse the input data provided in the human message and produce the planning result as JSON.
 
 ## PLANNING EXAMPLES:
 
@@ -180,34 +206,61 @@ For a specific named match, always plan `game_info_retrieval` / `game_history_re
       {"chain": ["entity_augment"], "sub_query": "Tell me about Cristiano Ronaldo (player).", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null}
     ]
   }
+
+**Example 10: One sub-query answerable from memory → chain: [], the other needs a tool → chain: ["entity_augment"]**
+- long_term_context contains: full career stats for Lionel Messi (player)
+- Query: "so sánh sự nghiệp Messi và Ronaldo"
+- Output: {
+    "clarified_query": "Compare the careers of Lionel Messi (player) and Cristiano Ronaldo (player).",
+    "need_call_tools": true,
+    "planned_chains": [
+      {"chain": [], "sub_query": "Using memory to answer: career statistics and trophies of Lionel Messi (player)", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null},
+      {"chain": ["entity_augment"], "sub_query": "Career statistics and trophies of Cristiano Ronaldo (player)", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null}
+    ]
+  }
+  Worker for Messi: empty chain → forwards sub_query text to aggregator as result. Aggregator looks up Messi in long_term_context and combines with Ronaldo's tool result.
+
+**Example 10b: Single query answerable from memory → chain: [], need_call_tools: true**
+- conversation_history contains: detailed answer about Messi's goals at Barcelona
+- Query: "Messi ghi bao nhiêu bàn cho Barca?" (directly asked before, answer is in history)
+- Output: {
+    "clarified_query": "How many goals did Lionel Messi (player) score for FC Barcelona (club)?",
+    "need_call_tools": true,
+    "planned_chains": [
+      {"chain": [], "sub_query": "Using memory to answer: how many goals did Lionel Messi (player) score for FC Barcelona (club)?", "confidence": 0.95, "is_ambiguous": false, "clarifying_question": null}
+    ]
+  }
+
+**Example 11: Two distinct matches in one query → two workers (cardinality with web_news_search)**
+- time_context: 2026-06-20 → most recent completed World Cup = 2026
+- Query: "kết quả trận đấu WC gần nhất giữa bồ đào nha và ý, xem thêm luôn trận giữa hà lan và áo"
+- Output: {
+    "clarified_query": "FIFA World Cup 2026 match result between Portugal (club) and Italy (club); FIFA World Cup 2026 match result between Netherlands (club) and Austria (club).",
+    "need_call_tools": true,
+    "planned_chains": [
+      {"chain": ["web_news_search"], "sub_query": "Portugal vs Italy FIFA World Cup 2026 match result", "confidence": 0.9, "is_ambiguous": false, "clarifying_question": null},
+      {"chain": ["web_news_search"], "sub_query": "Netherlands vs Austria FIFA World Cup 2026 match result", "confidence": 0.9, "is_ambiguous": false, "clarifying_question": null}
+    ]
+  }
 """),
     HumanMessagePromptTemplate.from_template("""
-## INPUT DATA:
-### TOOLBOX:
-- **Available Tools**:
-{toolbox_descriptions}             
-### User Query
-- **User Query**: (The user query and any attached media are provided in the next message.)
-- **Additional Material (images/video)**:
-  - Attached Image IDs: {image_ids}
-  - Attached Video ID: {video_id}
+## INPUT DATA
+### Available Tools
+{toolbox_descriptions}
 
-### Match user is watching
-- The soccer match id (game_id) the user is currently watching (if any): {game_id}
-- The video is played at the Time: {video_current_time}s       
+### Attached Media
+- Image IDs: {image_ids}
+- Video ID: {video_id}
 
-### Other Context:                                                      
-- **Conversation History**: {conversation_history}
-- **Long-term Memory (saved entity knowledge)**: {long_term_context}
-- **Retrieved Cases**: {retrieved_cases}
-- The current date and time: {time_context}
-                                             
-## OUTPUT FORMAT:
-{format_instructions}
----
-## YOUR TASK:
-Based on the user query and the rules above, produce the analysis and planning result as JSON.
-**NOTE: `clarified_query` and `sub_queries` MUST BE IN ENGLISH.**
+### Active Match
+- game_id (match user is watching, or "No game context"): {game_id}
+- Video playback position: {video_current_time}s
+
+### Context
+- Conversation History: {conversation_history}
+- Long-term Memory: {long_term_context}
+- Retrieved Cases: {retrieved_cases}
+- Current date/time: {time_context}
 """),
         MessagesPlaceholder(variable_name="user_query_msg", optional=True)
     ])
@@ -217,44 +270,48 @@ Based on the user query and the rules above, produce the analysis and planning r
 def get_execution_system_prompt() -> SystemMessage:
     """Create the system prompt for the execution worker."""
     return SystemMessage(
-        content="""You are the execution worker responsible for calling tools in support of the Soccer Question Answering Agent.
-# Task Overview:
-You will execute the provided tool chain to gather information for the user's query. You are working in parallel with other workers, so focus only on your assigned tool chain and your specific sub-query.
-
-# Execution Guidelines:
-1. If tool_chain is "No tools needed", do NOT call any tools. Instead, summarize any available information.
-2. **MANDATORY LANGUAGE RULE**: Your summary and all tool outputs MUST be in **ENGLISH**.
-3. Analyze the execution history to determine if the previous tool calls is successful and what information has been gathered so far. 
-4. If the previous tool call failed, analyze the error message. Retry the same tool call one time or modify the input parameters. If the retry also fails, report concisely the error message and stop execution.
-5. If the previous tool call succeeded, analyze the output and the next tool description to determine the precise parameters needed for the next tool call. Only generate the parameters required for that tool, based on the information you have and the tool's description. However, if you don't have sufficient information to generate the parameters for the next tool call, stop the execution and explain concisely why you cannot proceed. Do NOT make up any information that is not available to you.
-6. When finishing all tool calls in the chain, summarize the gathered information (IN ENGLISH) to answer the sub-query assigned to you. This will be combined with other workers' responses later.
-
-# Temporal Reasoning:
-- Always use the provided `time_context` to evaluate the freshness and relevance of information (especially from news or web search).
-- If the query asks for "latest", "recent", or "this week", compare the search result dates against `time_context`.
-
-# Important Notes:
-1. If the previous tool call is from "entity_augment" or "game_info_retrieval", or "game_history_retrieval" tool, and it provides useful information, you should return nothing.
-2. Think step by step and be precise to ensure the correct execution.
-""")
+        content=(
+            "You are the execution worker responsible for calling tools in support of the Soccer Question Answering Agent.\n\n"
+            "# Task Overview\n"
+            "Execute the provided tool chain to gather information for the user's query. "
+            "You work in parallel with other workers — focus only on your assigned tool chain and sub-query.\n\n"
+            "# Execution Guidelines\n"
+            "1. If tool_chain is 'No tools needed', do NOT call any tools. Instead, summarize available information.\n"
+            "2. **MANDATORY LANGUAGE**: Your summary and all tool outputs MUST be in **ENGLISH**.\n"
+            "3. Analyse the execution history to determine whether previous tool calls succeeded and what information has been gathered.\n"
+            "4. If the previous tool call FAILED: analyse the error, retry once with the same or adjusted parameters. "
+            "If the retry also fails, report the error concisely and stop.\n"
+            "5. If the previous tool call SUCCEEDED: analyse its output and the next tool's description to determine "
+            "the precise parameters needed. Only use information you actually have — do NOT invent parameters.\n"
+            "6. When all tool calls in the chain are done, summarize the gathered information IN ENGLISH to answer "
+            "your sub-query. This will be merged with other workers' results.\n\n"
+            "# Active Match Context\n"
+            "The active_game_id field in the input encodes the match the user is watching as "
+            "`{league}/{season}/{date}/{home}-vs-{away}` (e.g. `england_epl/2023-2024/2024-01-14/chelsea-vs-arsenal`). "
+            "When active_game_id is not 'None', a video is currently playing — use this to ground tool calls about the active match.\n\n"
+            "# Temporal Reasoning\n"
+            "Always use `time_context` to evaluate freshness of information (news, web search). "
+            "If the query asks for 'latest', 'recent', or 'this week', compare result dates against `time_context`.\n\n"
+            "# Important Notes\n"
+            "1. If the previous tool call is from entity_augment, game_info_retrieval, or game_history_retrieval and "
+            "it already provides a useful answer, return nothing — the tool output IS the worker result.\n"
+            "2. Think step by step and be precise.\n\n"
+            "# Next Step\n"
+            "Based on the input data provided, determine and execute the next step in your tool chain."
+        )
+    )
 
 
 def get_execution_human_prompt() -> HumanMessagePromptTemplate:
     """Create the human prompt for the execution worker."""
     return HumanMessagePromptTemplate.from_template(
-        """
-# Input:
-1. Your specific sub-query to focus on: '{sub_query}'
-2. Image ids are uploaded from the user for this query: {image_ids}
-3. Video ID are uploaded from the user for this query: {video_id}
-4. Suggested tool chain for your sub-query: '{tool_chain}'
-5. The current date and time: {time_context}
-6. The current soccer match id (game_id) the user is currently watching: {game_id}.
-   - When game_id is not "None", a video is currently playing. The slug encodes the match as `{{league}}/{{season}}/{{date}}/{{home}}-vs-{{away}}`.
-
-# Next Step
-Based on the above determine the next step in your execution:
-""")
+        "Sub-query: {sub_query}\n"
+        "Tool chain: {tool_chain}\n"
+        "Image IDs: {image_ids}\n"
+        "Video ID: {video_id}\n"
+        "Time context: {time_context}\n"
+        "Active game_id: {game_id}"
+    )
 
 
 # Create the prompt template for the aggregator worker that synthesizes the outputs from parallel workers
@@ -263,39 +320,33 @@ def get_aggregator_prompt_template() -> ChatPromptTemplate:
 
     aggregator_prompt_template = ChatPromptTemplate.from_messages([
         SystemMessage(
-            content="You are the synthesis agent responsible for combining findings from multiple parallel tasks to answer a user's query."
+            content=(
+                "You are the synthesis agent that combines findings from parallel workers to produce "
+                "a single definitive answer to the user's query.\n\n"
+                "Rules:\n"
+                "1. **LANGUAGE**: Respond in VIETNAMESE (or the same language as the user query if not Vietnamese).\n"
+                "2. Integrate ALL worker findings to fully address every part of the user's query.\n"
+                "3. If workers encountered errors or found nothing, state what IS known.\n"
+                "4. Base your answer ONLY on the provided worker findings, conversation history, and long-term memory — do not invent facts. "
+                "When a worker finding starts with 'Using memory to answer:', look up the answer for that question in long_term_context and conversation_history, then include it in your response.\n"
+                "5. Think step by step; be precise.\n"
+                "6. **Date validation**: If any finding contains a `published_date` or date metadata, compare it "
+                "against the user's intended time period and the time context. "
+                "If the result is from a DIFFERENT time or competition than what the user asked, "
+                "clearly note the discrepancy — do NOT silently present mismatched results as the answer.\n\n"
+                "Generate the final answer in VIETNAMESE."
+            )
         ),
         HumanMessagePromptTemplate.from_template(
-            """# Task Overview:
-You need to provide the final definitive answer to the user's query based on the aggregated findings from independent parallel workers.
-
-**Original user query:**
-"{user_query}"
-
-**Additional material:**
-{additional_material}
-
-**Conversation history:**
-{conversation_history}
-
-**Time context:**
-{time_context}
-
-# Worker Findings (IN ENGLISH):
-Below are the summarized findings from each parallel worker that investigated the query.
-{worker_results}
-
-# Critical Rules
-1. **MANDATORY LANGUAGE RULE**: Provide the final answer in **VIETNAMESE** (or the same language as the user query if not Vietnamese).
-2. Integrate all findings to fully address all parts of the user's query.
-3. If the workers encountered errors or could not find the information, state what is known.
-4. Base your final response ONLY on the provided worker findings and conversation history, without making up facts.
-5. Think step by step and be precise to ensure the correct synthesis.
-6. **Date validation for match results**: If any worker finding contains a `published_date` or date metadata, compare it against the user's intended time period (from `clarified_query`) and `time_context`. If the result is from a DIFFERENT time or a DIFFERENT competition than what the user asked, clearly note the discrepancy (e.g., "Tôi tìm được thông tin trận đấu ngày ... nhưng đây có thể không phải trận bạn hỏi vì ..."). Do NOT silently present mismatched results as the answer.
-{clarification_block}
-
-Generate the final answer below (IN VIETNAMESE):
-""")])
+            "User query: \"{user_query}\"\n\n"
+            "Additional material: {additional_material}\n\n"
+            "Conversation history:\n{conversation_history}\n\n"
+            "Long-term memory:\n{long_term_context}\n\n"
+            "Time context: {time_context}\n\n"
+            "Worker findings (in English):\n{worker_results}\n\n"
+            "{clarification_block}"
+        )
+    ])
     return aggregator_prompt_template
 
 

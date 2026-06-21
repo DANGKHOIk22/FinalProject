@@ -51,9 +51,9 @@ def test_trigger_workers_with_tools(worker_nodes):
 async def test_check_cache_node_hit(mock_cache, worker_nodes):
     mock_cache.check.return_value = "Cached Answer"
 
-    state = {"sub_query": "q1", "additional_material": {}}
+    state = {"sub_query": "q1", "additional_material": {}, "tool_chain": ["entity_augment"]}
     result = worker_nodes._check_cache_node(state)
-    
+
     assert "worker_result" in result
     assert result["worker_result"] == ["Cached Answer"]
 

@@ -86,6 +86,47 @@ class SoccerAgent:
         # 5. Graph Compilation
         self.graph = self._build_graph()
         logger.info(f"✅ SoccerAgent initialized with {len(self.tools)} tools")
+
+    async def warmup(self) -> None:
+        """Warm up all internal services so the first real request has no cold-start overhead.
+
+        Sends each node LLM its system prompt with max_completion_tokens=1 to establish
+        the HTTP connection pool and prime the prompt cache. Each tool warms its own LLMs.
+        Non-fatal: failures are logged as warnings, server still starts.
+        """
+        import asyncio
+        from langchain_core.messages import HumanMessage as _HM
+        from app.soccer_agent.prompts.agent import (
+            get_unified_planning_prompt_template,
+            get_execution_system_prompt,
+            get_aggregator_prompt_template,
+            get_guardrail_prompt_template,
+        )
+
+        planning_system = get_unified_planning_prompt_template().messages[0]
+        execution_system = get_execution_system_prompt()
+        aggregator_system = get_aggregator_prompt_template().messages[0]
+        guardrail_system = get_guardrail_prompt_template().messages[0]
+
+        async def _warm(name: str, llm, system_msg) -> None:
+            try:
+                await llm.ainvoke(
+                    [system_msg, _HM(content="warmup")],
+                    max_completion_tokens=1,
+                )
+                logger.info(f"✅ {name} LLM warmed up")
+            except Exception as e:
+                logger.warning(f"⚠️ {name} LLM warmup failed (non-fatal): {e}")
+
+        await asyncio.gather(
+            self.case_bank_retriever.warmup(),
+            _warm("planning", self.planning_llm, planning_system),
+            _warm("execution", self.execution_llm, execution_system),
+            _warm("aggregator", self.aggregator_llm, aggregator_system),
+            _warm("guardrail", self.guardrail_llm, guardrail_system),
+            *[t.warmup() for t in self.tool_registry.values() if hasattr(t, "warmup")],
+        )
+        logger.info("✅ SoccerAgent warmup complete — all services ready")
         
     def _build_graph(self) -> CompiledStateGraph:
         """Construct the unified LangGraph workflow."""

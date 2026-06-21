@@ -292,6 +292,16 @@ class GameInfoRetrievalTool(BaseTool):
         self._collection = _get_collection()
         self._finder = _GameFinder(self._llm, self._collection)
 
+    async def warmup(self) -> None:
+        import asyncio
+        from app.soccer_agent.factory.llm_provider import warm_llm
+        extraction_msg = get_extraction_prompt_template().messages[0]
+        selection_msg = get_match_selection_prompt_template().messages[0]
+        await asyncio.gather(
+            warm_llm(self._llm, extraction_msg, "game_info_retrieval/extraction"),
+            warm_llm(self._llm, selection_msg, "game_info_retrieval/selection"),
+        )
+
     def _fetch_metadata(self, game_id: str) -> str:
         doc = self._collection.find_one({"game_id": game_id}, {"raw": 1, "_id": 0})
         if not doc:
@@ -450,6 +460,16 @@ class GameHistoryRetrievalTool(BaseTool):
         self._llm = get_llm("retrieval-augment")
         self._collection = _get_collection()
         self._finder = _GameFinder(self._llm, self._collection)
+
+    async def warmup(self) -> None:
+        import asyncio
+        from app.soccer_agent.factory.llm_provider import warm_llm
+        extraction_msg = get_extraction_prompt_template().messages[0]
+        selection_msg = get_match_selection_prompt_template().messages[0]
+        await asyncio.gather(
+            warm_llm(self._llm, extraction_msg, "game_history_retrieval/extraction"),
+            warm_llm(self._llm, selection_msg, "game_history_retrieval/selection"),
+        )
 
     def _history_from_game_id(self, game_id: str, active_vct: Optional[float] = None) -> str:
         doc = self._collection.find_one({"game_id": game_id}, {"raw": 1, "_id": 0})

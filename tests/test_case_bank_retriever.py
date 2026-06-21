@@ -92,10 +92,11 @@ class TestRetrieve:
     @pytest.mark.asyncio
     async def test_search_error_isolated_returns_empty_list(self):
         r = self._make_retriever()
-        mock_client = AsyncMock()
-        mock_client.query_points.side_effect = Exception("Qdrant unreachable")
-        r._client = mock_client
-        result = await r._search([0.1] * 768, has_media=False, label="positive", top_k=3)
+        with patch(
+            "app.soccer_agent.case_bank.retriever.qdrant_service.asearch",
+            new=AsyncMock(side_effect=Exception("Qdrant unreachable")),
+        ):
+            result = await r._search([0.1] * 768, has_media=False, label="positive", top_k=3)
         assert result == []
 
     @pytest.mark.asyncio
