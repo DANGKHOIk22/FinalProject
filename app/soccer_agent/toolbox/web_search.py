@@ -102,7 +102,7 @@ class WebNewsSearchTool(BaseTool):
         service = _get_tavily()
         try:
             tavily_answer, results = await service.search_news(
-                query=query, time_range=time_range, start_date=start_date, exact_match=exact_match
+                query=query, time_range=time_range, start_date=start_date, exact_match=exact_match, max_results=7
             )
         except Exception as e:
             logger.error(f"web_news_search failed: {e}", exc_info=True)
