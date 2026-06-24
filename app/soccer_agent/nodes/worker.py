@@ -21,16 +21,16 @@ class WorkerNodes:
     def __init__(self, execution_llm_with_tools, tools: List[BaseTool]):
         self.execution_llm_with_tools = execution_llm_with_tools
         self.tools = tools
+        self._tool_executor = ToolNode(self.tools)
         self.worker_graph = self._build_worker_graph()
 
     def _build_worker_graph(self) -> CompiledStateGraph:
         """Build the LangGraph worker workflow."""
         workflow = StateGraph(WorkerState)
-        tool_node = ToolNode(self.tools)
         
         workflow.add_node("check_cache_node", self._check_cache_node)
         workflow.add_node("execution_node", self._execution_node)
-        workflow.add_node("tool_node", tool_node)
+        workflow.add_node("tool_node", self._tool_node)
         
         workflow.set_entry_point("check_cache_node")
         
@@ -63,6 +63,8 @@ class WorkerNodes:
         node_name: str | None = None,
         phase: str | None = None,
         error: str | None = None,
+        tool_name: str | None = None,
+        tool_call_id: str | None = None,
     ) -> None:
         payload = {
             "worker_index": state.get("worker_index"),
@@ -76,6 +78,10 @@ class WorkerNodes:
             payload["phase"] = phase
         if error is not None:
             payload["error"] = error
+        if tool_name is not None:
+            payload["tool_name"] = tool_name
+        if tool_call_id is not None:
+            payload["tool_call_id"] = tool_call_id
 
         try:
             await adispatch_custom_event(event_name, data=payload, config=config)
@@ -86,6 +92,20 @@ class WorkerNodes:
                 event_name,
                 exc,
             )
+
+    @staticmethod
+    def _get_pending_tool_calls(state: WorkerState) -> List[dict]:
+        messages = state.get("messages", [])
+        last_message = messages[-1] if messages else None
+        if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
+            return []
+        return [
+            tool_call
+            for tool_call in last_message.tool_calls
+            if isinstance(tool_call, dict)
+            and isinstance(tool_call.get("name"), str)
+            and isinstance(tool_call.get("id"), str)
+        ]
 
     def trigger_workers(self, state: AgentState, config: RunnableConfig):
         """Map worker executions for each parallel tool chain."""
@@ -197,6 +217,50 @@ class WorkerNodes:
                 "tool_calls_history": [],
                 "tool_results_history": [],
             }
+
+    async def _tool_node(self, state: WorkerState, config: RunnableConfig) -> dict:
+        pending_tool_calls = self._get_pending_tool_calls(state)
+
+        for tool_call in pending_tool_calls:
+            await self._dispatch_parallel_event(
+                "parallel_tool_started",
+                state,
+                config,
+                node_name="tool_node",
+                phase="started",
+                tool_name=tool_call["name"],
+                tool_call_id=tool_call["id"],
+            )
+
+        try:
+            result = await self._tool_executor.ainvoke(state, config=config)
+        except Exception as exc:
+            error_msg = f"Tool node execution failed: {str(exc)}"
+            for tool_call in pending_tool_calls:
+                await self._dispatch_parallel_event(
+                    "parallel_tool_failed",
+                    state,
+                    config,
+                    node_name="tool_node",
+                    phase="failed",
+                    error=error_msg,
+                    tool_name=tool_call["name"],
+                    tool_call_id=tool_call["id"],
+                )
+            raise
+
+        for tool_call in pending_tool_calls:
+            await self._dispatch_parallel_event(
+                "parallel_tool_finished",
+                state,
+                config,
+                node_name="tool_node",
+                phase="finished",
+                tool_name=tool_call["name"],
+                tool_call_id=tool_call["id"],
+            )
+
+        return result
 
     async def _execution_node(self, state: WorkerState, config: RunnableConfig) -> dict:
         """
