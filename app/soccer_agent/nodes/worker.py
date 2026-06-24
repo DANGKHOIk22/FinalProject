@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime
 from typing import List
 
+from langchain_core.callbacks.manager import adispatch_custom_event
 from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import StateGraph, END
@@ -53,6 +54,39 @@ class WorkerNodes:
         workflow.add_edge("tool_node", "execution_node")
         return workflow.compile()
 
+    @staticmethod
+    async def _dispatch_parallel_event(
+        event_name: str,
+        state: WorkerState,
+        config: RunnableConfig,
+        *,
+        node_name: str | None = None,
+        phase: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        payload = {
+            "worker_index": state.get("worker_index"),
+            "worker_id": state.get("worker_id"),
+            "sub_query": state.get("sub_query"),
+            "tool_chain": state.get("tool_chain") or [],
+        }
+        if node_name is not None:
+            payload["node_name"] = node_name
+        if phase is not None:
+            payload["phase"] = phase
+        if error is not None:
+            payload["error"] = error
+
+        try:
+            await adispatch_custom_event(event_name, data=payload, config=config)
+        except RuntimeError as exc:
+            logger.warning(
+                "Failed to dispatch custom event %s: %s. "
+                "This is expected outside a LangGraph run context.",
+                event_name,
+                exc,
+            )
+
     def trigger_workers(self, state: AgentState, config: RunnableConfig):
         """Map worker executions for each parallel tool chain."""
         # game_id/video_current_time are resolved once by unified_planning_node
@@ -79,6 +113,8 @@ class WorkerNodes:
             sub_query = sub_queries[idx] if idx < len(sub_queries) else clarified_query
             worker_state = {
                 "messages": [], # Start with empty messages for the worker;
+                "worker_index": idx,
+                "worker_id": f"worker-{idx}",
                 "sub_query": sub_query,
                 # Carry the resolved game_id inside additional_material so InjectedState
                 # tools (game_retrieval) and the cache can read it from the dict.
@@ -100,6 +136,14 @@ class WorkerNodes:
         Wrapper for worker_graph with proper timeout and Langfuse tracing.
         """
         try:
+            await self._dispatch_parallel_event(
+                "parallel_worker_started",
+                state,
+                config,
+                node_name="worker_graph",
+                phase="started",
+            )
+
             async def worker_execution():
                 return await asyncio.wait_for(
                     self.worker_graph.ainvoke(state, config=config),
@@ -107,6 +151,14 @@ class WorkerNodes:
                 )
         
             result = await worker_execution()
+
+            await self._dispatch_parallel_event(
+                "parallel_worker_finished",
+                state,
+                config,
+                node_name="worker_graph",
+                phase="finished",
+            )
             
             return {
                 "parallel_results": result.get("worker_result", []),
@@ -116,6 +168,14 @@ class WorkerNodes:
         except asyncio.TimeoutError:
             error_msg = f"[Timeout] Worker for sub-query '{state.get('sub_query', 'unknown')}' exceeded 120 seconds."
             logger.error(error_msg)
+            await self._dispatch_parallel_event(
+                "parallel_worker_failed",
+                state,
+                config,
+                node_name="worker_graph",
+                phase="failed",
+                error=error_msg,
+            )
             return {
                 "parallel_results": [error_msg],
                 "tool_calls_history": [],
@@ -124,6 +184,14 @@ class WorkerNodes:
         except Exception as e:
             error_msg = f"[Error] Worker for sub-query '{state.get('sub_query', 'unknown')}' failed with error: {str(e)}"
             logger.error(error_msg, exc_info=True)
+            await self._dispatch_parallel_event(
+                "parallel_worker_failed",
+                state,
+                config,
+                node_name="worker_graph",
+                phase="failed",
+                error=error_msg,
+            )
             return {
                 "parallel_results": [error_msg],
                 "tool_calls_history": [],
@@ -134,6 +202,13 @@ class WorkerNodes:
         """
         Iteratively execute the tool chain step by step using bind_tools with tool_choice.
         """
+        await self._dispatch_parallel_event(
+            "parallel_node_started",
+            state,
+            config,
+            node_name="execution_node",
+            phase="started",
+        )
         sub_query = state.get("sub_query")
         additional_material = state.get("additional_material") or {}
         image_id_list = additional_material.get("image_id") or []
@@ -177,6 +252,14 @@ class WorkerNodes:
             logger.info("Stopping execution due to error.")
             response = AIMessage(content="The execution has been stopped due to an error. Please try again later.")
             execution_failed = True
+            await self._dispatch_parallel_event(
+                "parallel_node_failed",
+                state,
+                config,
+                node_name="execution_node",
+                phase="failed",
+                error=error_msg,
+            )
 
         worker_result = None
         if not response.tool_calls:
@@ -208,6 +291,15 @@ class WorkerNodes:
                 if isinstance(message, ToolMessage):
                     tool_results_history.append(message)
 
+        if not execution_failed:
+            await self._dispatch_parallel_event(
+                "parallel_node_finished",
+                state,
+                config,
+                node_name="execution_node",
+                phase="finished",
+            )
+
         return {
             "messages": messages + [response] if not state.get("messages") else [response],
             "additional_material": additional_material,
@@ -218,10 +310,24 @@ class WorkerNodes:
             "worker_result": [worker_result] if worker_result else []
         }
 
-    def _check_cache_node(self, state: WorkerState) -> dict:
+    async def _check_cache_node(self, state: WorkerState, config: RunnableConfig) -> dict:
         """Check semantic cache before executing worker."""
+        await self._dispatch_parallel_event(
+            "parallel_node_started",
+            state,
+            config,
+            node_name="check_cache_node",
+            phase="started",
+        )
         sub_query = state.get("sub_query")
         if not sub_query:
+            await self._dispatch_parallel_event(
+                "parallel_node_finished",
+                state,
+                config,
+                node_name="check_cache_node",
+                phase="finished",
+            )
             return {}
 
         # Empty tool chain → answer comes from memory; pass sub_query as-is to aggregator
@@ -238,9 +344,23 @@ class WorkerNodes:
         
         if cached_result:
             logger.info(f"⚡ Skipping worker execution due to cache hit (cosine distance <= {sub_query_cache.threshold}).")
+            await self._dispatch_parallel_event(
+                "parallel_node_finished",
+                state,
+                config,
+                node_name="check_cache_node",
+                phase="finished",
+            )
             return {
                 "worker_result": [cached_result]
             }
+        await self._dispatch_parallel_event(
+            "parallel_node_finished",
+            state,
+            config,
+            node_name="check_cache_node",
+            phase="finished",
+        )
         return {}
 
     def should_execute_worker(self, state: WorkerState):
