@@ -22,6 +22,8 @@ from langfuse import get_client
 from app.config.config import QDRANT_SEARCH_SCORE_THRESHOLD as THRESHOLD
 from app.config.settings import settings
 from app.services.qdrant_service import qdrant_service
+from app.soccer_agent.factory.llm_provider import get_llm, warm_llm
+from app.soccer_agent.prompts.toolbox.entity_recognition import get_entity_disambiguation_prompt_template
 from app.soccer_agent.toolbox._config_loader import tool_description
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,7 @@ class EntityRecognitionTool(BaseTool):
     args_schema: Type[BaseModel] = EntityRecognitionInput
 
     _vl_client: Any = PrivateAttr(default=None)
+    _disambiguation_llm: Any = PrivateAttr(default=None)
     _insight_endpoint_uri: str = PrivateAttr(default="")
     _insight_payload_header: Dict[str, str] = PrivateAttr(default_factory=dict)
 
@@ -102,6 +105,8 @@ class EntityRecognitionTool(BaseTool):
             raise ConnectionError(
                 f"InsightFace endpoint unreachable: {probe.status_code} — {probe.text}"
             )
+
+        self._disambiguation_llm = get_llm("tool")
         logger.info("✅ EntityRecognitionTool clients initialized")
 
     async def warmup(self) -> None:
@@ -120,6 +125,9 @@ class EntityRecognitionTool(BaseTool):
             logger.info("✅ entity_recognition Qwen-VL warmed up")
         except Exception as e:
             logger.warning(f"⚠️ entity_recognition Qwen-VL warmup failed (non-fatal): {e}")
+
+        system_msg = get_entity_disambiguation_prompt_template().messages[0]
+        await warm_llm(self._disambiguation_llm, system_msg, "entity_recognition:disambiguation")
 
     # ------------------------------------------------------------------
     # Step 1: Localize entity in image with Qwen-VL, refine with OpenCV
@@ -260,66 +268,79 @@ class EntityRecognitionTool(BaseTool):
     # Step 3: Search Qdrant with embedding voting + re-ranking
     # ------------------------------------------------------------------
 
-    def _search_qdrant(self, embeddings: List[List[float]]) -> List[Dict]:
-        """Search Qdrant for soccer entities matching the given face embeddings."""
+    def _search_qdrant(self, embeddings: List[List[float]]) -> List[tuple]:
+        """Search Qdrant for soccer entities matching the given face embeddings.
+
+        Returns (name, composite_score) tuples sorted descending, deduplicated
+        across embeddings (best score per unique name is kept).
+        """
         collection_name = settings.QDRANT_COLLECTION_NAME
         assert collection_name, "QDRANT_COLLECTION_NAME is not configured"
 
-        soccer_entities: List[Dict] = []
+        best_per_name: Dict[str, float] = {}
+
         for idx, embedding in enumerate(embeddings):
-            # with_vectors=True is required: the re-ranking below scores the query
-            # against each stored sub-vector of a matched point.
             points = qdrant_service.search(
                 collection_name=collection_name,
                 vector=embedding,
-                limit=7,
-                score_threshold=0.5,
+                limit=10,
+                score_threshold=0.2,
                 with_vectors=True,
             )
 
             candidates: Dict[str, Any] = defaultdict(
-                lambda: {"ENTITY_TYPE": None, "max_score": 0, "count": 0, "score_list": []}
+                lambda: {"max_score": 0, "count": 0, "num_faces": 1}
             )
             for point in points:
                 name = point.payload["NAME"]
                 if not point.vector:
                     continue
-                match_count = 0
-                for sub_vec in point.vector:
-                    score = float(
+                match_count = sum(
+                    1 for sub_vec in point.vector
+                    if float(
                         np.dot(embedding, sub_vec)
                         / (np.linalg.norm(embedding) * np.linalg.norm(sub_vec))
-                    )
-                    if score >= THRESHOLD:
-                        candidates[name]["score_list"].append(score)
-                        match_count += 1
+                    ) >= THRESHOLD
+                )
                 candidates[name]["count"] = match_count
-                candidates[name]["ENTITY_TYPE"] = point.payload.get("ENTITY_TYPE")
+                candidates[name]["num_faces"] = point.payload.get("num_faces", 1)
                 candidates[name]["max_score"] = point.score
 
             ranked = sorted(
                 [
-                    (
-                        name,
-                        (0.55 * d["max_score"])
-                        + (0.45 * d["count"] / 20)
-                        + (0.1 * (np.mean(d["score_list"]) if d["score_list"] else 0)),
-                        d,
-                    )
+                    (name, (0.55 * d["max_score"]) + (0.45 * d["count"] / d["num_faces"]))
                     for name, d in candidates.items()
                 ],
                 key=lambda x: x[1],
                 reverse=True,
             )
 
-            if ranked:
-                best_name, _, best_data = ranked[0]
-                soccer_entities.append(
-                    {"ENTITY_TYPE": best_data["ENTITY_TYPE"], "NAME": best_name}
-                )
-                logger.info(f"Face {idx + 1}: matched → {best_name}")
+            for name, score in ranked:
+                if name not in best_per_name or score > best_per_name[name]:
+                    best_per_name[name] = score
 
-        return soccer_entities
+            if ranked:
+                logger.info(f"Face {idx + 1}: top match → {ranked[0][0]} ({ranked[0][1]:.3f})")
+
+        return sorted(best_per_name.items(), key=lambda x: x[1], reverse=True)
+
+    # ------------------------------------------------------------------
+    # Step 4: VLM disambiguation — pick the correct identity from candidates
+    # ------------------------------------------------------------------
+
+    def _disambiguate_entity(self, crop: Image.Image, candidate_names: List[str]) -> str:
+        """Feed the cropped face + close candidate names to a VLM to confirm identity."""
+        buf = BytesIO()
+        crop.save(buf, format="JPEG")
+        crop_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+        prompt = get_entity_disambiguation_prompt_template()
+        messages = prompt.format_messages(
+            crop_b64=crop_b64,
+            candidate_names="\n".join(candidate_names),
+        )
+        response = self._disambiguation_llm.invoke(messages)
+        return response.content.strip()
 
     # ------------------------------------------------------------------
     # Entry point
@@ -369,15 +390,43 @@ class EntityRecognitionTool(BaseTool):
                     )
             
             with langfuse.start_as_current_observation(
-                as_type="chain", 
+                as_type="chain",
                 name="search-qdrant") as observation:
-                # 3. Search Qdrant — the match gives the entity name, which is the result
-                entities = self._search_qdrant(embeddings)
-                if not entities:
+                # 3. Search Qdrant — (name, score) sorted desc, deduped across embeddings
+                ranked_candidates = self._search_qdrant(embeddings)
+                if not ranked_candidates:
                     return "No matching entity found."
 
-            names = ", ".join(e["NAME"] for e in entities)
-            return f"Recognized: {names}."
+            top_score = ranked_candidates[0][1]
+            close_candidates = [
+                name for name, score in ranked_candidates
+                if top_score - score < 0.07
+            ]
+
+            if len(close_candidates) == 1:
+                logger.info(
+                    "InsightFace confident enough; recognized '%s' with score %.3f",
+                    close_candidates[0],
+                    top_score,
+                )
+    
+                # InsightFace is confident — no VLM needed
+                return f"Recognized: {close_candidates[0]}."
+
+            with langfuse.start_as_current_observation(
+                as_type="chain",
+                name="vlm-disambiguation") as observation:
+                logger.info(
+                    "Multiple close candidates detected; invoking VLM disambiguation: %s",
+                    close_candidates,
+                )
+                # 4. Multiple candidates within 0.07 of top score — VLM breaks the tie
+                identified_name = self._disambiguate_entity(crop, close_candidates)
+
+            if identified_name.lower() == "unknown":
+                logger.info("Could not confidently identify the entity.")
+                return "Could not confidently identify the entity."
+            return f"Recognized: {identified_name}."
 
         except Exception as e:
             error_msg = f"Error in entity_recognition: {e}"

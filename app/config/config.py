@@ -19,7 +19,7 @@ MODEL_TOP_P = 0.95
 MAX_COMPLETION_TOKENS = 8000
 
 # Qdrant Configuration
-QDRANT_SEARCH_SCORE_THRESHOLD = 0.5
+QDRANT_SEARCH_SCORE_THRESHOLD = 0.3
 
 # Logging Configuration
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
