@@ -387,14 +387,15 @@ class TavilyService:
         time_range: str = "week",
         start_date: Optional[str] = None,
         exact_match: bool = False,
-        max_results: int = 20,
+        max_results: int = 10,
         score_threshold: float = 0.5,
+        search_depth: str = "basic",
+        include_answer: str = "basic",
     ) -> tuple[Optional[str], List[dict]]:
         """Search recent soccer news via Tavily ``topic="news"``.
 
         Returns ``(answer, results)`` where ``answer`` is Tavily's synthesised
-        summary (from ``include_answer="advanced"``) and ``results`` is the list
-        of matching articles. ``answer`` is ``None`` when Tavily didn't produce one.
+        summary and ``results`` is the list of matching articles.
 
         When start_date (YYYY-MM-DD) is provided, time_range is ignored per Tavily API rules.
         When exact_match is True, the query is wrapped in quotes for exact phrase matching.
@@ -404,8 +405,8 @@ class TavilyService:
             query=search_query,
             topic="news",
             max_results=max_results,
-            search_depth="advanced",
-            include_answer="advanced",
+            search_depth=search_depth,
+            include_answer=include_answer,
             chunks_per_source=5,
         )
         if start_date:
@@ -430,29 +431,93 @@ class TavilyService:
         ]
         return answer, results
 
-    async def search_general(self, query: str, max_results: int = 5) -> List[dict]:
+    async def search_general(
+        self,
+        query: str,
+        max_results: int = 20,
+        score_threshold: float = 0.5,
+        search_depth: str = "basic",
+        include_answer: str = "basic",
+        time_range: str = "month",
+    ) -> tuple[Optional[str], List[dict]]:
         """Domain-less fallback search — used when extraction fails entirely."""
+        kwargs: dict = dict(
+            query=query,
+            topic="general",
+            max_results=max_results,
+            search_depth=search_depth,
+            include_answer=include_answer,
+            chunks_per_source=5,
+            time_range=time_range,
+        )
 
         async def _call(client):
-            return await client.search(
-                query=query,
-                max_results=max_results,
-                search_depth="advanced",
-                include_answer=True,
-            )
+            return await client.search(**kwargs)
 
         try:
             response = await self._call_with_failover(_call)
         except Exception as e:
             logger.warning(f"[TavilyService] search_general failed for {query!r}: {e}")
-            return []
-        results: List[dict] = list(response.get("results", []) or [])
-        # Surface Tavily's synthesised answer as the first pseudo-result so
-        # callers can render a single answer block when needed.
-        answer = response.get("answer")
-        if answer:
-            results.insert(0, {"title": "Tavily answer", "url": "", "content": answer, "score": 1.0})
-        return results
+            return None, []
+
+        answer: Optional[str] = response.get("answer") or None
+        results = [
+            r
+            for r in (response.get("results", []) or [])
+            if (r.get("score") or 0.0) >= score_threshold
+        ]
+        return answer, results
+
+    async def search_combine(
+        self,
+        query: str,
+        time_range: str = "week",
+        start_date: Optional[str] = None,
+        exact_match: bool = False,
+        max_results: int = 5,
+        score_threshold: float = 0.5,
+        search_depth: str = "basic",
+        include_answer: str = "basic",
+    ) -> tuple[Optional[str], List[dict]]:
+        """Run search_news and search_general in parallel and merge results.
+
+        Returns ``(answer, results)`` with deduplication by URL.
+        news results take priority over general on URL collision.
+        """
+        (news_answer, news_results), (general_answer, general_results) = await asyncio.gather(
+            self.search_news(
+                query=query,
+                time_range=time_range,
+                start_date=start_date,
+                exact_match=exact_match,
+                max_results=max_results,
+                score_threshold=score_threshold,
+                search_depth=search_depth,
+                include_answer=include_answer,
+            ),
+            self.search_general(
+                query=query,
+                max_results=max_results,
+                score_threshold=score_threshold,
+                search_depth=search_depth,
+                include_answer=include_answer,
+            ),
+        )
+
+        seen: dict[str, dict] = {}
+        for r in general_results:
+            url = r.get("url") or ""
+            if url:
+                seen[url] = r
+        for r in news_results:
+            url = r.get("url") or ""
+            if url:
+                seen[url] = r
+        results = sorted(seen.values(), key=lambda r: r.get("published_date") or "", reverse=True)
+
+        parts = [a for a in (news_answer, general_answer) if a]
+        answer = "\n\n".join(parts) if parts else None
+        return answer, results
 
     # ── Internal helpers ──────────────────────────────────────────────────
 

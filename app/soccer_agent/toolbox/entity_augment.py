@@ -443,7 +443,7 @@ class EntityAugmentTool(BaseTool):
 
         # No URL → general search only
         if not wiki_url:
-            fallback = await service.search_general(name)
+            _, fallback = await service.search_combine(name, max_results=5, search_depth="fast", include_answer="basic", time_range="year")
             if not fallback:
                 logger.warning(f"[fetch_wiki] search_general empty for '{name}'")
                 return None
@@ -479,7 +479,7 @@ class EntityAugmentTool(BaseTool):
 
         # Extract failed → general search fallback
         logger.warning(f"[fetch_wiki] extract failed for {wiki_url}, falling back to search_general")
-        fallback = await service.search_general(name)
+        _, fallback = await service.search_combine(name, max_results=5, search_depth="fast", include_answer="basic", time_range="year")
         if not fallback:
             logger.warning(f"[fetch_wiki] search_general also empty for '{name}'")
             return None
@@ -527,7 +527,7 @@ class EntityAugmentTool(BaseTool):
         # Step 3a: No URL → search_general only
         if not wiki_url:
             logger.info(f"[tavily_fallback] Step 3a — no URL, falling back to search_general")
-            fallback = await service.search_general(name)
+            _, fallback = await service.search_combine(name, max_results=5, search_depth="fast", include_answer="basic", time_range="year")
             if not fallback:
                 logger.warning(f"[tavily_fallback] search_general returned empty for '{name}'")
                 return "Không tìm thấy thông tin bổ sung từ web."
@@ -558,7 +558,7 @@ class EntityAugmentTool(BaseTool):
             web_context = f"## {name}\nSource: {wiki_url}\n{cleaned}"
         else:
             logger.warning(f"[tavily_fallback] Step 3b — extract failed, falling back to search_general")
-            fallback = await service.search_general(name)
+            _, fallback = await service.search_combine(name, max_results=5, search_depth="fast", include_answer="basic", time_range="year")
             if not fallback:
                 logger.warning(f"[tavily_fallback] search_general also returned empty for '{name}'")
                 return "Không tìm thấy thông tin bổ sung từ web."

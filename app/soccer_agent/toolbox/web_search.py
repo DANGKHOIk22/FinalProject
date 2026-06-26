@@ -99,10 +99,17 @@ class WebNewsSearchTool(BaseTool):
         time_context: Optional[str] = None,
         _run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> Tuple[str, List[dict]]:
+        _RANGE_UP: dict[str, str] = {"day": "week", "week": "month", "month": "year", "year":None}
+        general_time_range = _RANGE_UP[time_range]
+
         service = _get_tavily()
         try:
-            tavily_answer, results = await service.search_news(
-                query=query, time_range=time_range, start_date=start_date, exact_match=exact_match, max_results=7
+            (news_answer, news_results), (general_answer, general_results) = await asyncio.gather(
+                service.search_news(
+                    query=query, time_range=time_range, start_date=start_date,
+                    exact_match=exact_match, max_results=5,
+                ),
+                service.search_general(query, max_results=5, time_range=general_time_range),
             )
         except Exception as e:
             logger.error(f"web_news_search failed: {e}", exc_info=True)
@@ -111,8 +118,19 @@ class WebNewsSearchTool(BaseTool):
                 [],
             )
 
-        # Sort results by published_date descending
-        results.sort(key=lambda x: x.get("published_date") or "", reverse=True)
+        seen: dict[str, dict] = {}
+        for r in general_results:
+            url = r.get("url") or ""
+            if url:
+                seen[url] = r
+        for r in news_results:
+            url = r.get("url") or ""
+            if url:
+                seen[url] = r
+        results = sorted(seen.values(), key=lambda r: r.get("published_date") or "", reverse=True)
+
+        parts = [a for a in (news_answer, general_answer) if a]
+        tavily_answer = "\n\n".join(parts) if parts else None
 
         if not results and not tavily_answer:
             return f"No recent news found for: {query}", []
