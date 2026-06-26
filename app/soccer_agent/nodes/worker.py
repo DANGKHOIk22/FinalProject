@@ -192,15 +192,16 @@ class WorkerNodes:
                 execution_failed = True
 
             # Only cache successful tool-chain results — never cache failures.
-            # set() does sync embedding + Redis I/O, so run it off the event loop.
+            # Fire-and-forget: cache set involves embedding API + Redis I/O (~1-3s).
+            # Awaiting it would delay the node return and defer LangGraph's END routing.
             if sub_query and worker_result and not execution_failed:
-                await asyncio.to_thread(
+                asyncio.create_task(asyncio.to_thread(
                     sub_query_cache.set,
                     sub_query,
                     worker_result,
                     additional_material,
                     state.get("video_current_time"),
-                )
+                ))
 
             for message in messages:
                 if isinstance(message, AIMessage) and message.tool_calls:
