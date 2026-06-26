@@ -72,8 +72,15 @@ async def test_execution_node_returns_text(worker_nodes, mock_execution_llm):
     }
     config = {}
     
+    async def fake_to_thread(fn, *args, **kwargs):
+        fn(*args, **kwargs)
+
     with patch('app.soccer_agent.nodes.worker.sub_query_cache') as mock_cache:
-        result = await worker_nodes._execution_node(state, config)
+        with patch('app.soccer_agent.nodes.worker.asyncio.to_thread', side_effect=fake_to_thread):
+            result = await worker_nodes._execution_node(state, config)
+            # Yield to event loop so create_task(fake_to_thread(...)) runs
+            import asyncio as _asyncio
+            await _asyncio.sleep(0)
 
         assert "worker_result" in result
         assert result["worker_result"] == ["Final Answer"]

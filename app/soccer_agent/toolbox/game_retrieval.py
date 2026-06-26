@@ -411,10 +411,13 @@ class GameInfoRetrievalTool(BaseTool):
                 if game_id:
                     logger.info(f"↩️ game_info_retrieval (async) search miss — falling back to active video game_id={game_id}")
                     return await self._answer_from_context_async(query, self._fetch_metadata(game_id), time_context), game_id
-                logger.info(f"⚡ game_info_retrieval DB miss — falling back to Tavily news search")
-                tavily_answer, news = await _get_tavily().search_news(
+                logger.info(f"⚡ game_info_retrieval DB miss — falling back to Tavily search_combine")
+                tavily_answer, news = await _get_tavily().search_combine(
                     f"{query} match result score lineup",
-                    time_range=self._finder.last_time_range
+                    time_range=self._finder.last_time_range,
+                    max_results=5,
+                    search_depth="fast",
+                    include_answer="fast",
                 )
                 news_text = _format_news_fallback(news, GAME_FALLBACK_TOP_K, answer=tavily_answer)
                 llm_structured = self._llm.with_structured_output(ToolOutput)
@@ -632,10 +635,13 @@ class GameHistoryRetrievalTool(BaseTool):
                 )
             except ValueError:
                 # _GameNotFound path — fallback to Tavily match report search (no active video to ground on)
-                logger.info("⚡ game_history_retrieval DB miss — falling back to Tavily news search")
-                tavily_answer, news = await _get_tavily().search_news(
+                logger.info("⚡ game_history_retrieval DB miss — falling back to Tavily search_combine")
+                tavily_answer, news = await _get_tavily().search_combine(
                     f"{query} match report events goals cards substitutions",
-                    time_range=self._finder.last_time_range
+                    time_range=self._finder.last_time_range,
+                    max_results=5,
+                    search_depth="fast",
+                    include_answer="fast",
                 )
                 news_text = _format_news_fallback(news, GAME_FALLBACK_TOP_K, answer=tavily_answer)
                 llm_structured = self._llm.with_structured_output(ToolOutput)
