@@ -181,11 +181,11 @@ class MediaRegistryService:
                     is_video = False
                     if part.get("type") == "image_url":
                         image_url_obj = part.get("image_url") or {}
-                        url = image_url_obj.get("url")
+                        url = image_url_obj if isinstance(image_url_obj, str) else image_url_obj.get("url")
                         is_image = True
                     elif part.get("type") == "video_url":
                         video_url_obj = part.get("video_url") or {}
-                        url = video_url_obj.get("url")
+                        url = video_url_obj if isinstance(video_url_obj, str) else video_url_obj.get("url")
                         is_video = True
                     
                     if url and isinstance(url, str):

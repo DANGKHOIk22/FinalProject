@@ -49,8 +49,10 @@ User Query
             worker subgraph:
               → check_cache_node  (Redis sub_query_cache, cosine threshold=0.15, ttl=3600)
                   ├─ cache hit → END (skip execution)
-                  └─ miss    → execution_node (LLM + tool calls, loops until done)
-                                   └─ tool_node (ToolNode executes one tool per cycle)
+                  └─ miss    → execution_node
+                        ├─ tool_chain=[]  → END (returns sub_query text directly — "chain:[] pattern")
+                        └─ tool_chain=[…] → LLM + tool calls, loops until done
+                                                └─ tool_node (ToolNode executes one tool per cycle)
   → aggregator           (merges parallel_results using clarified_query)
   → save_memory          (PostgreSQL + Redis, background-async)
 ```
@@ -63,6 +65,8 @@ User Query
 
 **`trigger_workers` resolves `game_id`** from `additional_material` dict (not a top-level state field), then merges it into each worker's `additional_material` dict before dispatch.
 
+**`chain:[]` pattern (memory-answerable sub-queries)**: When `unified_planning` outputs `need_call_tools=True` but a specific chain has an empty `tool_chain`, the worker short-circuits — it skips cache check and tool execution, returning the `sub_query` text directly (prefixed `"Using memory to answer: …"`). Use this pattern in few-shot examples for queries the agent can answer from conversation history without tools.
+
 **Streaming UI events**: `unified_planning` emits a `manually_emit_tool_call` custom LangGraph event (via `adispatch_custom_event`) so the frontend CopilotKit adapter can render planning progress in real time.
 
 ## LLM Model Routing
@@ -71,13 +75,26 @@ Actual models are defined in `app/soccer_agent/factory/llm_config.yaml` via Lite
 
 | Role | Primary | Fallback |
 |------|---------|----------|
-| planning | `openai/gpt-5.4-nano` (reasoning_effort: high) | `gemini/gemini-3.1-flash-lite` |
-| execution | `openai/gpt-5.4-nano` | `gemini/gemini-3.1-flash-lite` |
-| retrieval-augment | `openai/gpt-5.4-nano` (streaming) | `gemini/gemini-3.1-flash-lite` |
-| aggregator | `openai/gpt-5.4-nano` (reasoning_effort: medium, streaming) | `gemini/gemini-3.1-flash-lite` |
-| tool | `openai/gpt-5.4-nano` | `gemini/gemini-3.1-flash-lite` |
+| planning | `openai/gpt-5.4-nano` (reasoning_effort: low) | `gemini/gemini-3.1-flash-lite` |
+| execution | `openai/gpt-5.4-nano` (reasoning_effort: low) | `gemini/gemini-3.1-flash-lite` |
+| retrieval-augment | `openai/gpt-5.4-nano` (reasoning_effort: minimal, stream: false) | `gemini/gemini-3.1-flash-lite` |
+| aggregator | `openai/gpt-5.4-nano` (reasoning_effort: minimal, streaming) | `gemini/gemini-3.1-flash-lite` |
+| tool | `openai/gpt-5.4-nano` (reasoning_effort: minimal) | `gemini/gemini-3.1-flash-lite` |
+| guardrail | `openai/gpt-5.4-nano` | `gemini/gemini-3.1-flash-lite` (`guardrail-backup`) |
 
 `OPENAI_API_KEY` is required for the primary path. `GOOGLE_API_KEY` enables the fallback.
+
+**`reasoning_effort` is the latency lever**: planning was lowered `high → low` and aggregator `medium → minimal` because hidden reasoning tokens dominated latency (2-6s). Bump back up only if plan/synthesis quality regresses. **Gemini thinking is also controlled by `reasoning_effort`** — LiteLLM maps it to `thinkingLevel` for Gemini 3+. `thinking_level` is NOT a LiteLLM param (it is silently dropped by `litellm.drop_params`); `minimal` is the floor for `gemini-3.1-flash`.
+
+## Startup Warmup & Latency Optimizations
+
+Cold-start latency is attacked at boot, off the user's critical path. `main.py` lifespan warms in order: `qdrant_service.warmup()` (sync gRPC) → `await qdrant_service.awarmup()` (async gRPC, binds to the running loop) → `await agent_service.warmup()`.
+
+- **`app/services/qdrant_service.py`** — standalone `QdrantService` with a **module-level singleton `qdrant_service`**. Owns both sync and async clients, built **lazily on first use** (the async client must bind to the running event loop, not import time). Every Qdrant call site imports this singleton instead of constructing its own client — one warmed gRPC channel shared everywhere. `search()`/`asearch()` take an `exact: bool` that maps to `SearchParams(exact=exact)`.
+- **`SoccerAgent.warmup()`** (`agent.py`) — one `asyncio.gather`: case-bank retriever warmup + a `_warm(...)` for each node LLM (planning/execution/aggregator/guardrail) + `*[t.warmup() for t in tool_registry.values() if hasattr(t, "warmup")]`. `_warm` sends the system message at `max_completion_tokens=1` to open the HTTP pool and prime the provider prefix cache. All warmups are **non-fatal** — failures log a warning, server still boots.
+- **Per-tool warmup**: `entity_augment`, `entity_recognition`, `commentary_generation`, and both `game_retrieval` tools define `async def warmup()`, most via the shared `warm_llm(llm, system_message, label)` helper in `factory/llm_provider.py`. Tools without `warmup` (e.g. `web_news_search`) are silently skipped.
+- **Prompt KV-cache discipline** (`prompts/agent.py`): all four prompts put **static rules + few-shot examples in the `SystemMessage`** and only per-request variables in the `HumanMessagePromptTemplate`. This maximizes the provider's identical-prefix cache hit and cuts prefill/TTFT. `_PLANNING_FORMAT_INSTRUCTIONS` is precomputed at module import to keep the schema bytes stable. **When editing prompts, never interpolate dynamic values into a `SystemMessage` — it busts the prefix cache.** Dynamically-retrieved data (e.g. `{retrieved_cases}` from the case bank) belongs in the human turn, never the system prefix.
+- **Case-bank retriever uses `exact=True`** (`case_bank/retriever.py`) — the collection is small, so an exact scan is used over approximate HNSW for deterministic few-shot results; its `warmup()` also exercises the real `asearch(..., exact=True)` path.
 
 ## Current Tool Registry
 
@@ -88,7 +105,7 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 | `entity_augment` | `entity_augment.py` | Search + RAG for soccer entities (players, teams, coaches) |
 | `game_history_retrieval` | `game_retrieval.py` | Historical match data lookup |
 | `game_info_retrieval` | `game_retrieval.py` | Specific match info lookup |
-| `entity_recognition` | `entity_recognition.py` | Player recognition via face recognition (InsightFace) + Qdrant |
+| `entity_recognition` | `entity_recognition.py` | Player recognition: Qwen-VL localization → OpenCV face crop → InsightFace embeddings → Qdrant voting → VLM disambiguation (`get_entity_disambiguation_prompt_template`) |
 | `commentary_generation` | `commentary_generation.py` | Visual commentary from frame analysis |
 | `web_news_search` | `web_search.py` | Tavily web search for post-2024 or news queries |
 
@@ -106,6 +123,8 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 **All tests live in `tests/`.** `testpaths = ["tests"]` in `pyproject.toml`. Guardrail unit tests are `tests/test_guardrail.py`; guardrail routing integration tests are `tests/test_guardrail_routing.py`.
 
 **`SoccerAgent` is `None` at startup if `DASHSCOPE_API_KEY` is missing.** `/chat` returns 503 — not a bug.
+
+**`entity_recognition` is skipped at startup if the InsightFace endpoint is unreachable.** The app still boots and all other tools work — the tool is silently absent from the registry.
 
 **Semantic cache is split into two isolated Redis indexes** (`sub_query_cache` and `context_cache`), both `SemanticCache` instances in `app/cache/semantic_cache.py`. Reads and writes are fully active (`threshold=0.15`, `ttl=3600`). The cache filters by `game_id` + `timestamp` window for video queries and by `image_id` + `game_id == "__none__"` for non-video queries. **If you have a stale `semantic_cache` index from before the split, flush it**: `redis-cli DEL semantic_cache`.
 
@@ -125,6 +144,8 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 
 **`processor.py` is HLS-only.** It no longer downloads or splits full videos — it assumes HLS segments already exist on disk and only does per-segment frame/audio extraction.
 
+**Aggregator response style rules**: The aggregator prompt enforces: (1) never mention tool names, data sources, or knowledge bases; (2) normalize all timestamps to Vietnam time (UTC+7 / ICT). Violating these in prompt edits will break the response style contract.
+
 **Do not remove `@observe` decorators** (Langfuse) — they are the primary production debugging tool.
 
 ## Key Files
@@ -142,6 +163,8 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 | `app/schema/soccer_agent/state.py` | `AgentState`, `WorkerState`, `UnifiedPlanningOutput`, `PlannedChain` |
 | `app/soccer_agent/factory/llm_config.yaml` | **Authoritative** LiteLLM router config — actual model names |
 | `app/soccer_agent/prompts/agent.py` | Planning, execution, and aggregator prompt templates |
+| `app/soccer_agent/prompts/toolbox/entity_recognition.py` | `get_entity_disambiguation_prompt_template()` — vision prompt fed candidate names + cropped face; returns one name or `'unknown'` |
+| `app/soccer_agent/prompts/toolbox/` | Other tool-specific prompt templates: `commentary_generation.py`, `game_retrieval.py`, `textual_retrieval_augment.py` |
 | `app/config/config.py` | Numeric thresholds, model alias constants, `TEMPORARY_DIR` |
 | `app/config/settings.py` | Env-var loader — `.env` anchored to `FinalProject/` to survive Celery CWD changes |
 | `app/soccer_agent/toolbox/__init__.py` | Tool imports — add new tools here |
@@ -153,7 +176,10 @@ All tools registered in `SoccerAgent.tool_registry` (`app/soccer_agent/agent.py`
 | `app/video_processing/speech_to_text.py` | `SpeechToTextService` — DashScope Qwen3-ASR |
 | `app/video_processing/services/match_indexing_service.py` | Orchestrates watcher + indexer per HLS session |
 | `app/video_processing/tasks/hls_tasks.py` | Celery task `hls.process_video_session` |
-| `app/services/media_registry.py` | `MediaRegistryService` — Azure Blob Storage + Redis media registry |
+| `app/services/qdrant_service.py` | Standalone `QdrantService` + singleton `qdrant_service`; lazy sync/async clients, `exact` passthrough, warmup |
+| `app/soccer_agent/factory/llm_provider.py` | LiteLLM router loader; `get_llm(role)`, shared `warm_llm(...)` cold-start primer |
+| `app/soccer_agent/case_bank/retriever.py` | `CaseBankRetriever` — few-shot planning examples; `exact=True` Qdrant search + startup warmup |
+| `app/services/media_registry.py` | `MediaRegistryService` — Azure Blob Storage + Redis media registry; `extract_uuids_from_message(msg)` static method parses `image_url`/`video_url` content parts from a LangChain message and returns `{"image_ids": list[str], "video_id": str | None}`. Handles both `{"url": "..."}` dict form and bare string form for the URL field. |
 | `scripts/case_bank_manager.ipynb` | Manage planning few-shot examples in `planning_case_bank` Qdrant collection |
 
 ## Environment Variables
@@ -192,7 +218,10 @@ CLIP_ENDPOINT_URI=
 CLIP_GROUNDINGDINO_ENDPOINT_URI=
 CLIP_GROUNDINGDINO_ENDPOINT_KEY=
 
-# Azure Storage (MediaRegistryService — upload endpoint)
+# Azure (Storage + ML endpoint auth — all use the same service principal)
+AZURE_TENANT_ID=
+AZURE_CLIENT_ID=
+AZURE_CLIENT_SECRET=
 AZURE_STORAGE_ACCOUNT_URL=
 AZURE_CONTAINER_NAME=
 UMRS_REDIS_URL=             # Redis URL for media registry (can be same as REDIS_URL)
@@ -262,6 +291,9 @@ POST /hls/sessions
 - `GUARDRAIL_RECENT_TURNS = 4` — trailing messages the guardrail classifier sees for context
 - `GUARDRAIL_TIMEOUT_SECONDS = 10.0` — fail-open ceiling for the classifier
 - `GUARDRAIL_REFUSAL_MESSAGE` — canned off-topic refusal string
+- `WORKER_TIMEOUT = 120` — per-worker execution ceiling; timeouts surface as explicit system-error messages from the aggregator
+- `GAME_FALLBACK_TOP_K = 10` — max game results returned when primary lookup finds nothing
+- `ENTITY_FRESHNESS_DAYS = 5` — max age for entity cache before Tavily fallback kicks in
 
 ## GitNexus — Code Intelligence
 
