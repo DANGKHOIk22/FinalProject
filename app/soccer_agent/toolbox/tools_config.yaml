@@ -11,7 +11,9 @@ tools:
       falls back to fetching the entity's Wikipedia page via Tavily and saves the result to DB.
       Use for: player biography, career history, achievements, awards, trophies, season-level stats,
       transfer history, club history, stadium facts, coach profile, referee profile, and entity comparisons.
-      Do NOT use for: current news, live scores, upcoming fixtures, or recent events — use web_news_search.
+      Do NOT use for: current news, live scores, upcoming fixtures, recent events,
+      current coaching staff, recent transfers or signings, recent form/statistics
+      (anything that changes week to week) — use web_news_search for these.
       Do NOT use for: specific historical match data (score, lineup, events) — use game_info_retrieval or game_history_retrieval.
       IMPORTANT: Pass only ONE entity per call. If the user asks about multiple entities, use parallel chains.
     inputs:
@@ -32,7 +34,9 @@ tools:
       Search the web for recent soccer/football news articles (transfers, injuries, match results,
       upcoming fixtures, league standings updates, manager appointments, etc.).
       Use when the user asks about anything that requires up-to-date information not in the
-      static knowledge base.
+      static knowledge base. Also use when asking about the CURRENT state of an entity that
+      may have changed recently: current head coach, recent transfers, recent match results,
+      recent form, recent injuries.
       Do NOT use for: player career bios or team founding history — use entity_augment.
       Do NOT use for: specific historical match data — use game tools.
     inputs:

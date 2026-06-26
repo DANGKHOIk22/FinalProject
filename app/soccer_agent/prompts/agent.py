@@ -52,15 +52,18 @@ Your task consists of two phases executed simultaneously to produce a final plan
 ### TOOL ROUTING RULES (apply in order, first match wins):
 Inputs you are given: a **game_id** (the match the user is watching live, or "No game context") and any attached **image / video** ids. NEVER reason about which season a match is in — the game tools auto-fall back to web search when a match is not in the DB.
 
-1. **Specific named match** (the query names team(s), e.g. "Manchester United vs Liverpool"): plan it directly — `game_info_retrieval` for score/lineup/venue/referee/coach, `game_history_retrieval` for goals/cards/substitutions/events. Do NOT ask for season/year, and do NOT redirect to the watched match. `is_ambiguous=false`.
+0. **Future/upcoming matches or fixtures** (the match has NOT yet occurred based on `time_context`): → `web_news_search`. Examples: upcoming schedule, next match for X, when does X play next, fixture dates, match preview. Compare the match date against `time_context` to determine if it is in the future.
+1. **Specific named PAST match** (has already occurred; if future → Rule 0): plan it directly — `game_info_retrieval` for score/lineup/venue/referee/coach/stadium/home-away info; `game_history_retrieval` for goals/cards/substitutions/events/timeline. Do NOT ask for season/year, and do NOT redirect to the watched match. `is_ambiguous=false`.
+   NOTE (no game_id): `game_info_retrieval` = overall match summary (final score, lineups, referee, coach, stadium, home/away). `game_history_retrieval` = in-game event timeline (who scored at which minute, cards, substitutions).
 2. **Watching live (game_id present) AND the query is about the match in progress** ("what just happened", "who scored", "what's the score now", "who is number 10", "who is the referee/coach"): the execution layer resolves the active match, so `is_ambiguous=false`, `confidence>=0.9`. Pick the tool by sub-type:
-   - Ongoing events / **current score** → `game_history_retrieval` (the final score is NOT recorded until the match ends, so game_info has no live score).
+   - Ongoing events / **current live score** → `game_history_retrieval` (the final score is NOT recorded until the match ends, so game_info has no live score; for the live score ALWAYS use game_history).
    - Identify an entity by NAME (player by number/color/team, stadium, referee, coach) → `game_info_retrieval`.
    - DETAIL about such an entity → `game_info_retrieval` then `entity_augment` (one sequential chain).
-3. **Entity detail** (player/team/venue/referee/coach: background, career, trophies) → `entity_augment`. Never use entity_augment merely to get a name.
-4. **News / transfers / standings / fixtures / recent form / press conference** (not one specific match) → `web_news_search`.
-5. **Uploaded image** — identify by NAME → `entity_recognition`; NAME + DETAIL → `entity_recognition` then `entity_augment` (one sequential chain).
-6. **No game_id AND a vague unspecified match with no team named** ("how did the match go?") → `is_ambiguous=true`, ask which teams.
+3. **Entity CURRENT/RECENT state** (asks about present or recent changes) → `web_news_search`. Triggers: "hiện tại", "currently", "hiện nay", "gần đây", "recently", "vừa qua", "vừa sa thải", "vừa bổ nhiệm", "thay đổi nhân sự", "số bàn thắng gần đây", "phong độ gần đây", "ai đang là HLV", "who is currently the coach". Rationale: `entity_augment` uses MongoDB/Wikipedia — not real-time data.
+4. **Entity HISTORICAL/BIOGRAPHICAL detail** (player/team/venue/referee/coach: background, career stats, trophies, club history, biography) → `entity_augment`. Never use `entity_augment` merely to get a name, for current state, or for recent news.
+5. **News / transfers / standings / upcoming fixtures / recent form / press conference** (not one specific already-played match) → `web_news_search`.
+6. **Uploaded image** — identify by NAME → `entity_recognition`; NAME + DETAIL → `entity_recognition` then `entity_augment` (one sequential chain).
+7. **No game_id AND a vague unspecified match with no team named** ("how did the match go?") → `is_ambiguous=true`, ask which teams.
 
 ### CARDINALITY (decides how many parallel workers):
 **General rule: one tool chain = one distinct search subject. Count how many separate subjects (entities, matches, news topics) the query contains and spawn exactly that many workers.**
@@ -95,7 +98,7 @@ This tool searches the web — it handles date ranges, approximate times, and re
 **Do NOT ask for a more precise date when `web_news_search` already has enough to search.**
 
 ### MATCH QUERIES — NO TIME GATING:
-For a specific named match, always plan `game_info_retrieval` / `game_history_retrieval` with `is_ambiguous=false` regardless of season or how recent it is. These tools auto-fall back to web search if the match is not in the local DB, so NEVER ask for the season/year and NEVER branch by season. Only use `web_news_search` for things that are not one specific match (transfers, standings, fixtures, recent form, news).
+For a specific PAST match (already played) — even when only one team is named (e.g. "kết quả trận gần nhất của MU", "latest Arsenal match result") — always plan `game_info_retrieval` / `game_history_retrieval` with `is_ambiguous=false` regardless of season or how recent it is. These tools auto-fall back to web search when the match is not in the local DB, so NEVER ask for the season/year or the opposing team, and NEVER branch by season. Only use `web_news_search` for non-match subjects (transfers, standings, upcoming fixtures, recent form, news). Exception: if the match has NOT yet occurred based on `time_context` → use `web_news_search` (Rule 0).
 
 ## ABBREVIATION REFERENCE:
 - Competitions: EPL/PL → English Premier League, UCL/CL → UEFA Champions League, WC → FIFA World Cup
@@ -231,15 +234,36 @@ Analyse the input data provided in the human message and produce the planning re
     ]
   }
 
-**Example 11: Two distinct matches in one query → two workers (cardinality with web_news_search)**
-- time_context: 2026-06-20 → most recent completed World Cup = 2026
+**Example 11: Two distinct PAST matches in one query → two game workers (cardinality)**
+- time_context: 2026-06-20, FIFA World Cup 2026 has concluded
 - Query: "kết quả trận đấu WC gần nhất giữa bồ đào nha và ý, xem thêm luôn trận giữa hà lan và áo"
 - Output: {
     "clarified_query": "FIFA World Cup 2026 match result between Portugal (club) and Italy (club); FIFA World Cup 2026 match result between Netherlands (club) and Austria (club).",
     "need_call_tools": true,
     "planned_chains": [
-      {"chain": ["web_news_search"], "sub_query": "Portugal vs Italy FIFA World Cup 2026 match result", "confidence": 0.9, "is_ambiguous": false, "clarifying_question": null},
-      {"chain": ["web_news_search"], "sub_query": "Netherlands vs Austria FIFA World Cup 2026 match result", "confidence": 0.9, "is_ambiguous": false, "clarifying_question": null}
+      {"chain": ["game_history_retrieval"], "sub_query": "Portugal vs Italy FIFA World Cup 2026 match result and goals", "confidence": 0.9, "is_ambiguous": false, "clarifying_question": null},
+      {"chain": ["game_history_retrieval"], "sub_query": "Netherlands vs Austria FIFA World Cup 2026 match result and goals", "confidence": 0.9, "is_ambiguous": false, "clarifying_question": null}
+    ]
+  }
+  Note: game tools auto-fall back to web search when the match is not in the local DB — no need to use web_news_search directly.
+
+**GOLDEN EXAMPLE 12: Current entity state → web_news_search (NOT entity_augment)**
+- Query: "Hiện tại ai đang là HLV của Arsenal?"
+- Output: {
+    "clarified_query": "Who is currently the head coach/manager of Arsenal (club)?",
+    "need_call_tools": true,
+    "planned_chains": [
+      {"chain": ["web_news_search"], "sub_query": "Current head coach manager of Arsenal club 2026", "confidence": 0.9, "is_ambiguous": false, "clarifying_question": null}
+    ]
+  }
+
+**GOLDEN EXAMPLE 13: Future fixture → web_news_search (NOT game tools)**
+- time_context: 2026-06-20, Query: "Lịch thi đấu sắp tới của MU là gì?"
+- Output: {
+    "clarified_query": "What are Manchester United's upcoming fixtures?",
+    "need_call_tools": true,
+    "planned_chains": [
+      {"chain": ["web_news_search"], "sub_query": "Manchester United upcoming fixtures schedule 2026", "confidence": 0.9, "is_ambiguous": false, "clarifying_question": null}
     ]
   }
 """),
@@ -260,7 +284,7 @@ Analyse the input data provided in the human message and produce the planning re
 - Conversation History: {conversation_history}
 - Long-term Memory: {long_term_context}
 - Retrieved Cases: {retrieved_cases}
-- Current date/time: {time_context}
+- Time_context (Current time): {time_context}
 """),
         MessagesPlaceholder(variable_name="user_query_msg", optional=True)
     ])

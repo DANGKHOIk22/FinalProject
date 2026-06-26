@@ -23,7 +23,7 @@ from app.soccer_agent.case_bank.retriever import CaseBankRetriever
 # Tools
 from app.soccer_agent.toolbox import (
     entity_augment,
-    entity_recognition,
+    # entity_recognition,
     game_history_retrieval,
     game_info_retrieval,
     commentary_generation,
