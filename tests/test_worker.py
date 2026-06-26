@@ -52,7 +52,7 @@ async def test_check_cache_node_hit(mock_cache, worker_nodes):
     mock_cache.check.return_value = "Cached Answer"
 
     state = {"sub_query": "q1", "additional_material": {}, "tool_chain": ["entity_augment"]}
-    result = worker_nodes._check_cache_node(state)
+    result = await worker_nodes._check_cache_node(state, {})
 
     assert "worker_result" in result
     assert result["worker_result"] == ["Cached Answer"]
@@ -117,3 +117,36 @@ def test_should_continue_call_tool(worker_nodes):
     # Otherwise end
     msg_no_tool = AIMessage(content="Final")
     assert worker_nodes.should_continue_call_tool({"messages": [msg_no_tool]}) == "end"
+
+@pytest.mark.asyncio
+@patch("app.soccer_agent.nodes.worker.adispatch_custom_event", new_callable=AsyncMock)
+async def test_tool_node_dispatches_custom_tool_events(mock_dispatch, worker_nodes):
+    worker_nodes._tool_executor = MagicMock()
+    worker_nodes._tool_executor.ainvoke = AsyncMock(return_value={"messages": []})
+
+    state = {
+        "worker_index": 1,
+        "worker_id": "worker-1",
+        "sub_query": "latest injuries",
+        "tool_chain": ["web_news_search"],
+        "messages": [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "web_news_search", "args": {"query": "latest injuries"}, "id": "call-1"}],
+            )
+        ],
+    }
+    config = {"configurable": {"thread_id": "thread-1"}}
+
+    result = await worker_nodes._tool_node(state, config)
+
+    assert result == {"messages": []}
+    event_names = [call.args[0] for call in mock_dispatch.await_args_list]
+    assert event_names == ["parallel_tool_started", "parallel_tool_finished"]
+
+    started_payload = mock_dispatch.await_args_list[0].kwargs["data"]
+    finished_payload = mock_dispatch.await_args_list[1].kwargs["data"]
+    assert started_payload["worker_id"] == "worker-1"
+    assert started_payload["tool_name"] == "web_news_search"
+    assert started_payload["tool_call_id"] == "call-1"
+    assert finished_payload["tool_call_id"] == "call-1"

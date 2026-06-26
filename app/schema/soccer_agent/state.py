@@ -57,6 +57,8 @@ class AgentState(CopilotKitState):
 
 class WorkerState(CopilotKitState):
     """State for individual tool chain execution workers. It is derived from CopilotKitState, which provides 'messages' list to store the conversation history"""
+    worker_index: Optional[int]
+    worker_id: Optional[str]
     sub_query: str
     additional_material: Optional[Dict[str, Any]]  # {"game_id": str | None, "image_id": List[str], "video_id": str | None}
     tool_chain: List[str]

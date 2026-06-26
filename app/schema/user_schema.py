@@ -23,3 +23,7 @@ class AuthResponse(BaseModel):
     access_token: str
     token_type: str
     user: UserOut
+
+
+class ThreadResponse(BaseModel):
+    thread_id: str

@@ -29,6 +29,7 @@ from app.api.chat import router as chat_router
 from app.api.chat import get_copilotkit_router
 from app.api.user import router as user_router
 from app.api.upload import router as upload_router
+from app.api.history import router as history_router
 
 # Cấu hình logging đơn giản thay vì structlog
 logging.basicConfig(
@@ -215,6 +216,7 @@ app.add_middleware(
 app.include_router(chat_router, tags=["Soccer Chat Agent"])
 app.include_router(user_router, prefix="/user", tags=["User"])
 app.include_router(upload_router,  tags=["Upload"])
+app.include_router(history_router, prefix="/api", tags=["History"])
 
 
 
