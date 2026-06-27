@@ -30,8 +30,8 @@ class LongTermMemoryManager:
             output_dimensionality=768
         )
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=2000, 
-            chunk_overlap=200,
+            chunk_size=1024, 
+            chunk_overlap=128,
         )
         self.pool = get_connection_pool()
 
@@ -137,7 +137,8 @@ class LongTermMemoryManager:
         user_id: str,
         query: str,
         top_k: int = 5,
-        precomputed_embedding: Optional[List[float]] = None
+        precomputed_embedding: Optional[List[float]] = None,
+        score_threshold: float = 0.6,
     ) -> List[Dict]:
         try:
             query_embedding = precomputed_embedding if precomputed_embedding else await self._get_embedding(query)
@@ -160,13 +161,14 @@ class LongTermMemoryManager:
                         return cur.fetchall()
 
             rows = await asyncio.to_thread(sync_retrieve)
+            rows = [r for r in rows if (r.get("similarity") or 0.0) >= score_threshold]
             if rows:
                 logger.info(
-                    f"[LongTermMemory] Retrieved {len(rows)} chunks — "
+                    f"[LongTermMemory] Retrieved {len(rows)} chunks (threshold={score_threshold}) — "
                     + ", ".join(f"'{r['entity_name']}' sim={r['similarity']:.3f}" for r in rows)
                 )
             else:
-                logger.info("[LongTermMemory] No chunks found.")
+                logger.info(f"[LongTermMemory] No chunks above threshold={score_threshold}.")
             return rows
         except Exception as e:
             logger.error(f"[LongTermMemory] Retrieval failed: {e}", exc_info=True)
