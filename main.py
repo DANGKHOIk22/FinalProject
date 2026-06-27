@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv(override=True)
+
 from contextlib import asynccontextmanager
 import logging
 import uvicorn
