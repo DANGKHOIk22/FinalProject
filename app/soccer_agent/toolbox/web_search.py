@@ -57,6 +57,16 @@ class WebNewsSearchInput(BaseModel):
             "(e.g. 'ngày 3/5/2026' → '2026-05-03'). Leave None for relative ranges."
         ),
     )
+    max_results: int = Field(
+        default=5,
+        description=(
+            "Number of results to return per source (news + general), then merged. "
+            "Use 5 (default) for a focused single-entity query. "
+            "Increase to 8–10 when the query covers multiple entities at once "
+            "(e.g. 'top scorers across 3 leagues', 'transfers for MU, Arsenal and Chelsea'). "
+            "Hard cap: 10."
+        ),
+    )
     time_context: Optional[str] = Field(
         default=None,
         description="Current date and time for temporal reasoning."
@@ -86,9 +96,10 @@ class WebNewsSearchTool(BaseTool):
         time_range: Literal["day", "week", "month", "year"] = "week",
         exact_match: bool = False,
         start_date: Optional[str] = None,
+        max_results: int = 5,
         _run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, List[dict]]:
-        return asyncio.run(self._arun(query, time_range, exact_match, start_date))
+        return asyncio.run(self._arun(query, time_range, exact_match, start_date, max_results=max_results))
 
     async def _arun(
         self,
@@ -96,10 +107,12 @@ class WebNewsSearchTool(BaseTool):
         time_range: Literal["day", "week", "month", "year"] = "week",
         exact_match: bool = False,
         start_date: Optional[str] = None,
+        max_results: int = 5,
         time_context: Optional[str] = None,
         _run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> Tuple[str, List[dict]]:
-        _RANGE_UP: dict[str, str] = {"day": "week", "week": "month", "month": "year", "year":None}
+        per_source = min(max(max_results, 1), 10)
+        _RANGE_UP: dict[str, str] = {"day": "week", "week": "month", "month": "year", "year": "year"}
         general_time_range = _RANGE_UP[time_range]
 
         service = _get_tavily()
@@ -107,9 +120,11 @@ class WebNewsSearchTool(BaseTool):
             (news_answer, news_results), (general_answer, general_results) = await asyncio.gather(
                 service.search_news(
                     query=query, time_range=time_range, start_date=start_date,
-                    exact_match=exact_match, max_results=5,
+                    exact_match=exact_match, max_results=per_source, search_depth="basic",
                 ),
-                service.search_general(query, max_results=5, time_range=general_time_range),
+                service.search_general(
+                    query, max_results=per_source, time_range=general_time_range, search_depth="basic",
+                ),
             )
         except Exception as e:
             logger.error(f"web_news_search failed: {e}", exc_info=True)
@@ -127,7 +142,7 @@ class WebNewsSearchTool(BaseTool):
             url = r.get("url") or ""
             if url:
                 seen[url] = r
-        results = sorted(seen.values(), key=lambda r: r.get("published_date") or "", reverse=True)
+        results = sorted(seen.values(), key=lambda r: r.get("score") or 0.0, reverse=True)
 
         parts = [a for a in (news_answer, general_answer) if a]
         tavily_answer = "\n\n".join(parts) if parts else None
@@ -137,14 +152,11 @@ class WebNewsSearchTool(BaseTool):
 
         lines = [f'[web_news_search results for: "{query}" | time_range={time_range}]']
         if tavily_answer:
-            lines.append(f"\nSummary: {tavily_answer}")
+            lines.append(f"\nAnswer: {tavily_answer}")
         for i, r in enumerate(results, 1):
             title = r.get("title", "")
-            url = r.get("url", "")
-            published = r.get("published_date", "")
             content = r.get("content", "")
-            date_part = f" ({published})" if published else ""
-            lines.append(f"\n{i}. {title}{date_part} — {url}")
+            lines.append(f"\n{i}. {title}")
             if content:
                 lines.append(f"   {content[:300]}")
 
