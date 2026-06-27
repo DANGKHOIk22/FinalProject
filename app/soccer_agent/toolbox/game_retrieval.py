@@ -39,28 +39,18 @@ def _get_tavily() -> TavilyService:
 
 
 def _format_news_fallback(results: list, top_k: int, answer: Optional[str] = None) -> str:
-    """Format Tavily search_news results into a readable string, sorted newest first.
-
-    If ``answer`` (Tavily's synthesised summary) is provided it is prepended as a
-    top-level block so the LLM sees the most concise signal first.
-    """
-    items = sorted(results, key=lambda x: x.get("published_date") or "", reverse=True)[:top_k]
+    """Format Tavily search results into a readable string, sorted by score."""
+    items = sorted(results, key=lambda x: x.get("score") or 0.0, reverse=True)[:top_k]
     if not items and not answer:
         return "No relevant match information found via web search."
     lines = ["[Web search fallback — match not found in local database]"]
     if answer:
-        lines.append(f"\nTavily summary: {answer}")
+        lines.append(f"\nAnswer: {answer}")
     for i, r in enumerate(items, 1):
         title = r.get("title", "N/A")
-        url = r.get("url", "")
-        pub = r.get("published_date", "")
         content = r.get("content", "").strip()[:600]
         lines.append(f"\n--- Result {i} ---")
         lines.append(f"Title: {title}")
-        if pub:
-            lines.append(f"Published: {pub}")
-        if url:
-            lines.append(f"Source: {url}")
         lines.append(content)
     return "\n".join(lines)
 
@@ -416,8 +406,7 @@ class GameInfoRetrievalTool(BaseTool):
                     f"{query} match result score lineup",
                     time_range=self._finder.last_time_range,
                     max_results=5,
-                    search_depth="fast",
-                    include_answer="fast",
+                    search_depth="fast"
                 )
                 news_text = _format_news_fallback(news, GAME_FALLBACK_TOP_K, answer=tavily_answer)
                 llm_structured = self._llm.with_structured_output(ToolOutput)
@@ -641,7 +630,6 @@ class GameHistoryRetrievalTool(BaseTool):
                     time_range=self._finder.last_time_range,
                     max_results=5,
                     search_depth="fast",
-                    include_answer="fast",
                 )
                 news_text = _format_news_fallback(news, GAME_FALLBACK_TOP_K, answer=tavily_answer)
                 llm_structured = self._llm.with_structured_output(ToolOutput)
