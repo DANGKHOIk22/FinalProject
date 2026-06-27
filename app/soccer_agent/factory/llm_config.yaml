@@ -5,7 +5,7 @@ model_list:
   # Bump back to medium only if planning quality regresses.
   - model_name: planning
     litellm_params:
-      model: openai/gpt-5.4-nano
+      model: xiaomi_mimo/mimo-v2.5-pro-ultraspeed
       api_key: os.environ/OPENAI_API_KEY
       max_completion_tokens: 1000
       reasoning_effort: low
@@ -27,7 +27,7 @@ model_list:
   # minimal reasoning — picking which tool to call next is not a reasoning task.
   - model_name: execution
     litellm_params:
-      model: openai/gpt-5.4-nano
+      model: xiaomi_mimo/mimo-v2.5-pro-ultraspeed
       api_key: os.environ/OPENAI_API_KEY
       max_completion_tokens: 1000
       reasoning_effort: low
@@ -44,7 +44,7 @@ model_list:
   # ── Retrieval-Augment: retrieve and augment information ─────────────────────
   - model_name: retrieval-augment
     litellm_params:
-      model: openai/gpt-5.4-nano
+      model: xiaomi_mimo/mimo-v2.5-pro-ultraspeed
       api_key: os.environ/OPENAI_API_KEY
       max_completion_tokens: 1000
       reasoning_effort: minimal
@@ -63,7 +63,7 @@ model_list:
   # rewriting worker outputs, not deep reasoning. Streaming kept for TTFT.
   - model_name: aggregator
     litellm_params:
-      model: openai/gpt-5.4-nano
+      model: xiaomi_mimo/mimo-v2.5-pro-ultraspeed
       api_key: os.environ/OPENAI_API_KEY
       max_completion_tokens: 1000
       reasoning_effort: minimal
@@ -80,7 +80,7 @@ model_list:
   # ── Tool: shared by tools, query-understanding pipeline ──────────────────────
   - model_name: tool
     litellm_params:
-      model: openai/gpt-5.4-nano
+      model: xiaomi_mimo/mimo-v2.5-pro-ultraspeed
       api_key: os.environ/OPENAI_API_KEY
       max_completion_tokens: 1000
       reasoning_effort: minimal
@@ -98,7 +98,7 @@ model_list:
 
   - model_name: guardrail
     litellm_params:
-      model: openai/gpt-5.4-nano
+      model: xiaomi_mimo/mimo-v2.5-pro-ultraspeed
       api_key: os.environ/OPENAI_API_KEY
       temperature: 0
       max_completion_tokens: 200
