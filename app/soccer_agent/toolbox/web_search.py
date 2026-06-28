@@ -4,14 +4,17 @@ from typing import Any, List, Literal, Optional, Tuple, Type
 
 from langchain.tools import BaseTool
 from langchain_core.callbacks import AsyncCallbackManagerForToolRun, CallbackManagerForToolRun
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from app.soccer_agent.factory.llm_provider import get_llm
 from app.soccer_agent.services.tavily_service import TavilyService
 from app.soccer_agent.toolbox._config_loader import tool_description
 
 logger = logging.getLogger(__name__)
 
 _tavily_service: Optional[TavilyService] = None
+_llm = None
 
 
 def _get_tavily() -> TavilyService:
@@ -19,6 +22,13 @@ def _get_tavily() -> TavilyService:
     if _tavily_service is None:
         _tavily_service = TavilyService()
     return _tavily_service
+
+
+def _get_llm():
+    global _llm
+    if _llm is None:
+        _llm = get_llm("tool")
+    return _llm
 
 
 class WebNewsSearchInput(BaseModel):
@@ -90,6 +100,18 @@ class WebNewsSearchTool(BaseTool):
     def __init__(self):
         super().__init__(description=tool_description("web_news_search"))
 
+    async def warmup(self) -> None:
+        from app.soccer_agent.factory.llm_provider import warm_llm
+        await warm_llm(
+            _get_llm(),
+            SystemMessage(content=(
+                "You are a soccer news analyst. Given web search results, write a concise, "
+                "factual summary that directly answers the query. English only. "
+                "No bullet points — flowing prose. Max 300 words."
+            )),
+            "web_news_search",
+        )
+
     def _run(
         self,
         query: str,
@@ -150,14 +172,31 @@ class WebNewsSearchTool(BaseTool):
         if not results and not tavily_answer:
             return f"No recent news found for: {query}", []
 
-        lines = [f'[web_news_search results for: "{query}" | time_range={time_range}]']
+        raw_lines = []
         if tavily_answer:
-            lines.append(f"\nAnswer: {tavily_answer}")
+            raw_lines.append(f"Answer: {tavily_answer}")
         for i, r in enumerate(results, 1):
             title = r.get("title", "")
             content = r.get("content", "")
-            lines.append(f"\n{i}. {title}")
+            raw_lines.append(f"\n{i}. {title}")
             if content:
-                lines.append(f"   {content[:300]}")
+                raw_lines.append(f"   {content[:400]}")
+        raw_context = "\n".join(raw_lines)
 
-        return "\n".join(lines), results
+        try:
+            synthesis = await _get_llm().ainvoke([
+                SystemMessage(content=(
+                    "You are a soccer news analyst. Given web search results, write a concise, "
+                    "factual summary that directly answers the query. English only. "
+                    "No bullet points — flowing prose. Max 300 words."
+                )),
+                HumanMessage(content=(
+                    f"Query: {query}\n\nSearch results:\n{raw_context}"
+                )),
+            ])
+            answer = synthesis.content if hasattr(synthesis, "content") else str(synthesis)
+        except Exception as e:
+            logger.warning(f"web_news_search LLM synthesis failed: {e}, returning raw results")
+            answer = raw_context
+
+        return answer, results
