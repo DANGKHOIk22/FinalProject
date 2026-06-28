@@ -106,7 +106,7 @@ class EntityRecognitionTool(BaseTool):
                 f"InsightFace endpoint unreachable: {probe.status_code} — {probe.text}"
             )
 
-        self._disambiguation_llm = get_llm("tool")
+        self._disambiguation_llm = get_llm("tool-multi-modal")
         logger.info("✅ EntityRecognitionTool clients initialized")
 
     async def warmup(self) -> None:

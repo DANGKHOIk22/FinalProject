@@ -5,32 +5,32 @@ model_list:
   # Bump back to medium only if planning quality regresses.
   - model_name: planning
     litellm_params:
-      model: xiaomi_mimo/mimo-v2.5-pro-ultraspeed
-      api_key: os.environ/OPENAI_API_KEY
-      max_completion_tokens: 1000
-      reasoning_effort: low
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GOOGLE_API_KEY
+      max_completion_tokens: 2000
+      reasoning_effort: medium
       stream: false
 
   # NOTE: Gemini thinking is controlled via `reasoning_effort` (LiteLLM maps it to
   # thinkingLevel for Gemini 3+). `thinking_level` is NOT a LiteLLM param — it was
   # silently dropped by litellm.drop_params, so these backups were running at
-  # Gemini's default thinking. `minimal` is the floor for gemini-3.1-flash.
+  # Gemini's default thinking. `low` is the floor for gemini-3.1-flash.
   - model_name: planning-backup
     litellm_params:
-      model: gemini/gemini-3.1-flash-lite
-      api_key: os.environ/GOOGLE_API_KEY
-      max_completion_tokens: 1000
-      reasoning_effort: low
+      model: openai/gpt-5.4-nano
+      api_key: os.environ/OPENAI_API_KEY
+      max_completion_tokens: 2000
+      reasoning_effort: medium
       stream: false
 
   # ── Execution: iterative tool calling inside workers ─────────────────────────
-  # minimal reasoning — picking which tool to call next is not a reasoning task.
+  # low reasoning — picking which tool to call next is not a reasoning task.
   - model_name: execution
     litellm_params:
-      model: xiaomi_mimo/mimo-v2.5-pro-ultraspeed
-      api_key: os.environ/OPENAI_API_KEY
-      max_completion_tokens: 1000
-      reasoning_effort: low
+      model: cerebras/gpt-oss-120b
+      api_key: os.environ/CEREBRAS_API_KEY
+      max_completion_tokens: 2000
+      reasoning_effort: medium
       stream: false
 
   - model_name: execution-backup
@@ -44,10 +44,10 @@ model_list:
   # ── Retrieval-Augment: retrieve and augment information ─────────────────────
   - model_name: retrieval-augment
     litellm_params:
-      model: xiaomi_mimo/mimo-v2.5-pro-ultraspeed
-      api_key: os.environ/OPENAI_API_KEY
-      max_completion_tokens: 1000
-      reasoning_effort: minimal
+      model: cerebras/gpt-oss-120b
+      api_key: os.environ/CEREBRAS_API_KEY
+      max_completion_tokens: 2000
+      reasoning_effort: low
       stream: false
 
   - model_name: retrieval-augment-backup
@@ -55,7 +55,7 @@ model_list:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
       max_completion_tokens: 1000
-      reasoning_effort: minimal
+      reasoning_effort: medium
       stream: false
 
   # ── Aggregator: synthesise parallel worker results ───────────────────────────
@@ -63,10 +63,10 @@ model_list:
   # rewriting worker outputs, not deep reasoning. Streaming kept for TTFT.
   - model_name: aggregator
     litellm_params:
-      model: xiaomi_mimo/mimo-v2.5-pro-ultraspeed
-      api_key: os.environ/OPENAI_API_KEY
-      max_completion_tokens: 1000
-      reasoning_effort: minimal
+      model: cerebras/gpt-oss-120b
+      api_key: os.environ/CEREBRAS_API_KEY
+      max_completion_tokens: 3000
+      reasoning_effort: low
       stream: true
 
   - model_name: aggregator-backup
@@ -74,17 +74,26 @@ model_list:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
       max_completion_tokens: 1000
-      reasoning_effort: minimal
+      reasoning_effort: low
       stream: true
 
   # ── Tool: shared by tools, query-understanding pipeline ──────────────────────
-  - model_name: tool
+  - model_name: tool-text-only
     litellm_params:
-      model: xiaomi_mimo/mimo-v2.5-pro-ultraspeed
-      api_key: os.environ/OPENAI_API_KEY
-      max_completion_tokens: 1000
-      reasoning_effort: minimal
-
+      model: cerebras/gpt-oss-120b
+      api_key: os.environ/CEREBRAS_API_KEY
+      max_completion_tokens: 3000
+      reasoning_effort: low
+      stream: false
+    
+  - model_name: tool-multi-modal
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GOOGLE_API_KEY
+      temperature: 0
+      max_completion_tokens: 2000
+      reasoning_effort: low
+      stream: false
   # ── Guardrail: soccer-topic classification before planning ───────────────────
   # Primary is Gemini flash-lite — measured ~1s here vs ~7-8s on the OpenAI path.
   - model_name: guardrail-backup
@@ -93,16 +102,16 @@ model_list:
       api_key: os.environ/GOOGLE_API_KEY
       temperature: 0
       max_completion_tokens: 200
-      reasoning_effort: minimal
+      reasoning_effort: low
       stream: false
 
   - model_name: guardrail
     litellm_params:
-      model: xiaomi_mimo/mimo-v2.5-pro-ultraspeed
-      api_key: os.environ/OPENAI_API_KEY
+      model: cerebras/gpt-oss-120b
+      api_key: os.environ/CEREBRAS_API_KEY
       temperature: 0
       max_completion_tokens: 200
-      reasoning_effort: minimal
+      reasoning_effort: low
       stream: false
 
   # ── Fallbacks (Gemini as backup now) ────────────────────────────────────────
@@ -111,7 +120,7 @@ model_list:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
       max_completion_tokens: 1000
-      reasoning_effort: minimal
+      reasoning_effort: low
 
 router_settings:
   fallbacks:
@@ -119,5 +128,8 @@ router_settings:
     - execution: [execution-backup]
     - retrieval-augment: [retrieval-augment-backup]
     - aggregator: [aggregator-backup]
-    - tool: [gemini-backup]
+    - tool-text-only: [gemini-backup]
+    - tool-multi-modal: [gemini-backup]
     - guardrail: [guardrail-backup]
+litellm_settings:
+  drop_params: true
