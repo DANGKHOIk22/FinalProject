@@ -425,7 +425,7 @@ class TavilyService:
 
         answer: Optional[str] = response.get("answer") or None
         results = [
-            r
+            self._slim_result(r)
             for r in (response.get("results", []) or [])
             if (r.get("score") or 0.0) >= score_threshold
         ]
@@ -462,7 +462,7 @@ class TavilyService:
 
         answer: Optional[str] = response.get("answer") or None
         results = [
-            r
+            self._slim_result(r)
             for r in (response.get("results", []) or [])
             if (r.get("score") or 0.0) >= score_threshold
         ]
@@ -504,22 +504,32 @@ class TavilyService:
             ),
         )
 
+        # Dedup by title (URL is stripped by _slim_result); news takes priority
         seen: dict[str, dict] = {}
         for r in general_results:
-            url = r.get("url") or ""
-            if url:
-                seen[url] = r
+            key = r.get("title") or ""
+            if key:
+                seen[key] = r
         for r in news_results:
-            url = r.get("url") or ""
-            if url:
-                seen[url] = r
-        results = sorted(seen.values(), key=lambda r: r.get("published_date") or "", reverse=True)
+            key = r.get("title") or ""
+            if key:
+                seen[key] = r
+        results = sorted(seen.values(), key=lambda r: r.get("score") or 0.0, reverse=True)
 
         parts = [a for a in (news_answer, general_answer) if a]
         answer = "\n\n".join(parts) if parts else None
         return answer, results
 
     # ── Internal helpers ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _slim_result(r: dict) -> dict:
+        """Keep only title, content, and score — drop url, published_date, raw_content, etc."""
+        return {
+            "title": r.get("title") or "",
+            "content": r.get("content") or "",
+            "score": r.get("score") or 0.0,
+        }
 
     async def _call_with_failover(
         self,

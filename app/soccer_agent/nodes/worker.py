@@ -330,7 +330,7 @@ class WorkerNodes:
             logger.info("✅ TOOL EXECUTION STEP COMPLETED FOR CHAIN")
             logger.info("="*70)
 
-            if last_tool_message is not None and (last_tool_message.name == "entity_augment" or last_tool_message.name == "game_history_retrieval" or last_tool_message.name == "game_info_retrieval"):
+            if last_tool_message is not None:
                 worker_result = last_tool_message.content
             elif response.text:
                 worker_result = response.text

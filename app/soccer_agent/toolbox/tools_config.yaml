@@ -48,6 +48,12 @@ tools:
       time_range: >
         Recency filter: "day" (last 24 h, breaking news), "week" (last 7 days, default),
         "month" (last 30 days, background context).
+      max_results: >
+        Number of results to return per source (news + general), then merged and ranked by score.
+        Default is 5 for a focused single-entity query.
+        Increase to 8–10 when the query covers multiple entities at once
+        (e.g. "top scorers across 3 leagues", "transfers for MU, Arsenal and Chelsea").
+        Hard cap: 10.
 
   game_info_retrieval:
     description: >

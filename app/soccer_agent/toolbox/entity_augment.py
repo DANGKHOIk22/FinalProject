@@ -443,12 +443,12 @@ class EntityAugmentTool(BaseTool):
 
         # No URL → general search only
         if not wiki_url:
-            _, fallback = await service.search_combine(name, max_results=5, search_depth="fast", include_answer="basic", time_range="year")
+            _, fallback = await service.search_combine(name, max_results=5, search_depth="fast", time_range="year")
             if not fallback:
                 logger.warning(f"[fetch_wiki] search_general empty for '{name}'")
                 return None
             web_context = f"## {name}\nSource: web search (general)\n" + "\n".join(
-                r.get("content", "") for r in fallback[:3] if r.get("content")
+                r.get("content", "") for r in fallback if r.get("content")
             )
             return {
                 "web_context": web_context,
@@ -479,12 +479,12 @@ class EntityAugmentTool(BaseTool):
 
         # Extract failed → general search fallback
         logger.warning(f"[fetch_wiki] extract failed for {wiki_url}, falling back to search_general")
-        _, fallback = await service.search_combine(name, max_results=5, search_depth="fast", include_answer="basic", time_range="year")
+        _, fallback = await service.search_combine(name, max_results=5, search_depth="fast", time_range="year")
         if not fallback:
             logger.warning(f"[fetch_wiki] search_general also empty for '{name}'")
             return None
         web_context = f"## {name}\nSource: web search\n" + "\n".join(
-            r.get("content", "") for r in fallback[:2] if r.get("content")
+            r.get("content", "") for r in fallback if r.get("content")
         )
         return {
             "web_context": web_context,
@@ -527,14 +527,14 @@ class EntityAugmentTool(BaseTool):
         # Step 3a: No URL → search_general only
         if not wiki_url:
             logger.info(f"[tavily_fallback] Step 3a — no URL, falling back to search_general")
-            _, fallback = await service.search_combine(name, max_results=5, search_depth="fast", include_answer="basic", time_range="year")
+            _, fallback = await service.search_combine(name, max_results=5, search_depth="fast", time_range="year")
             if not fallback:
                 logger.warning(f"[tavily_fallback] search_general returned empty for '{name}'")
                 return "Không tìm thấy thông tin bổ sung từ web."
-            
+
             logger.info(f"[tavily_fallback] search_general returned {len(fallback)} results")
             web_context = f"## {name}\nSource: web search (general)\n" + "\n".join(
-                r.get("content", "") for r in fallback[:3] if r.get("content")
+                r.get("content", "") for r in fallback if r.get("content")
             )
             # Pack payload for SaveToMemoryNode (general search, no wiki URL)
             resolved_type = getattr(db_entity, "ENTITY_TYPE", "unknown").lower() if db_entity else "unknown"
@@ -558,13 +558,13 @@ class EntityAugmentTool(BaseTool):
             web_context = f"## {name}\nSource: {wiki_url}\n{cleaned}"
         else:
             logger.warning(f"[tavily_fallback] Step 3b — extract failed, falling back to search_general")
-            _, fallback = await service.search_combine(name, max_results=5, search_depth="fast", include_answer="basic", time_range="year")
+            _, fallback = await service.search_combine(name, max_results=5, search_depth="fast", time_range="year")
             if not fallback:
                 logger.warning(f"[tavily_fallback] search_general also returned empty for '{name}'")
                 return "Không tìm thấy thông tin bổ sung từ web."
             logger.info(f"[tavily_fallback] search_general returned {len(fallback)} results")
             web_context = f"## {name}\nSource: web search\n" + "\n".join(
-                r.get("content", "") for r in fallback[:2] if r.get("content")
+                r.get("content", "") for r in fallback if r.get("content")
             )
             # Pack payload for SaveToMemoryNode (wiki extract failed, general search fallback)
             resolved_type = getattr(db_entity, "ENTITY_TYPE", "unknown").lower() if db_entity else "unknown"
