@@ -49,6 +49,7 @@ class SoccerAgent:
     def __init__(self, checkpointer=None):
         # 1. LLM Initialization
         self.planning_llm = get_llm("planning")
+        self.planning_multimodal_llm = get_llm("planning-multimodal")
         self.execution_llm = get_llm("execution")
         self.aggregator_llm = get_llm("aggregator")
         self.guardrail_llm = get_llm("guardrail")
@@ -77,7 +78,7 @@ class SoccerAgent:
         # 4. Node Initialization
         self.history_node = ConversationHistoryNode()
         self.context_retrieval_node = ContextRetrievalNode(self.case_bank_retriever)
-        self.planning_node = UnifiedPlanningNode(self.planning_llm, self.tools)
+        self.planning_node = UnifiedPlanningNode(self.planning_llm, self.planning_multimodal_llm, self.tools)
         self.worker_nodes = WorkerNodes(self.execution_llm_with_tools, self.tools)
         self.aggregator_node = AggregatorNode(self.aggregator_llm)
         self.memory_saving_node = SaveToMemoryNode()
@@ -121,6 +122,7 @@ class SoccerAgent:
         await asyncio.gather(
             self.case_bank_retriever.warmup(),
             _warm("planning", self.planning_llm, planning_system),
+            _warm("planning-multimodal", self.planning_multimodal_llm, planning_system),
             _warm("execution", self.execution_llm, execution_system),
             _warm("aggregator", self.aggregator_llm, aggregator_system),
             _warm("guardrail", self.guardrail_llm, guardrail_system),

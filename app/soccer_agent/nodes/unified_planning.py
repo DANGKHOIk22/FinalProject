@@ -14,8 +14,9 @@ from app.soccer_agent.prompts.agent import get_unified_planning_prompt_template
 logger = logging.getLogger(__name__)
 
 class UnifiedPlanningNode:
-    def __init__(self, planning_llm, tools):
+    def __init__(self, planning_llm, planning_multimodal_llm, tools):
         self.planning_llm = planning_llm
+        self.planning_multimodal_llm = planning_multimodal_llm
         self.tools = tools
         self.parser = PydanticOutputParser(pydantic_object=UnifiedPlanningOutput)
 
@@ -167,7 +168,9 @@ class UnifiedPlanningNode:
         })
         prompt_messages = prompt_value.to_messages()
 
-        response = await self.planning_llm.ainvoke(prompt_messages, config=config)
+        has_media = bool(additional_material.get("image_id") or additional_material.get("video_id"))
+        llm = self.planning_multimodal_llm if has_media else self.planning_llm
+        response = await llm.ainvoke(prompt_messages, config=config)
         response_text = response.text if hasattr(response, 'text') else str(response.content)
     
         try:

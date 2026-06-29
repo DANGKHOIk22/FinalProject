@@ -8,7 +8,7 @@ model_list:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
       max_completion_tokens: 2000
-      reasoning_effort: medium
+      reasoning_effort: low
       stream: false
 
   # NOTE: Gemini thinking is controlled via `reasoning_effort` (LiteLLM maps it to
@@ -17,10 +17,10 @@ model_list:
   # Gemini's default thinking. `low` is the floor for gemini-3.1-flash.
   - model_name: planning
     litellm_params:
-      model: openai/gpt-5.4-nano
-      api_key: os.environ/OPENAI_API_KEY
+      model: cerebras/gpt-oss-120b
+      api_key: os.environ/CEREBRAS_API_KEY
       max_completion_tokens: 2000
-      reasoning_effort: medium
+      reasoning_effort: low
       stream: false
 
   # ── Execution: iterative tool calling inside workers ─────────────────────────
@@ -30,7 +30,7 @@ model_list:
       model: cerebras/gpt-oss-120b
       api_key: os.environ/CEREBRAS_API_KEY
       max_completion_tokens: 2000
-      reasoning_effort: medium
+      reasoning_effort: low
       stream: false
 
   - model_name: execution-backup
@@ -93,6 +93,15 @@ model_list:
       max_completion_tokens: 2000
       reasoning_effort: low
       stream: false
+  # ── Planning multimodal: used when image_ids or video_id are present ────────
+  - model_name: planning-multimodal
+    litellm_params:
+      model: openai/gpt-5.4-nano
+      api_key: os.environ/OPENAI_API_KEY
+      max_completion_tokens: 2000
+      reasoning_effort: low
+      stream: false
+
   # ── Guardrail: soccer-topic classification before planning ───────────────────
   # Primary is Gemini flash-lite — measured ~1s here vs ~7-8s on the OpenAI path.
   - model_name: guardrail-backup
@@ -127,6 +136,7 @@ router_settings:
     - execution: [execution-backup]
     - retrieval-augment: [retrieval-augment-backup]
     - aggregator: [aggregator-backup]
+    - planning-multimodal: [gemini-backup]
     - tool-text-only: [gemini-backup]
     - tool-multi-modal: [gemini-backup]
     - guardrail: [guardrail-backup]
