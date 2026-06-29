@@ -3,7 +3,7 @@ model_list:
   # reasoning_effort low (was high): tool-chain selection benefits from some
   # reasoning but `high` burns thousands of hidden reasoning tokens → 2-6s.
   # Bump back to medium only if planning quality regresses.
-  - model_name: planning
+  - model_name: planning-backup
     litellm_params:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
@@ -15,7 +15,7 @@ model_list:
   # thinkingLevel for Gemini 3+). `thinking_level` is NOT a LiteLLM param — it was
   # silently dropped by litellm.drop_params, so these backups were running at
   # Gemini's default thinking. `low` is the floor for gemini-3.1-flash.
-  - model_name: planning-backup
+  - model_name: planning
     litellm_params:
       model: openai/gpt-5.4-nano
       api_key: os.environ/OPENAI_API_KEY
@@ -88,9 +88,8 @@ model_list:
     
   - model_name: tool-multi-modal
     litellm_params:
-      model: gemini/gemini-3.1-flash-lite
-      api_key: os.environ/GOOGLE_API_KEY
-      temperature: 0
+      model: openai/gpt-5.4-nano
+      api_key: os.environ/OPENAI_API_KEY
       max_completion_tokens: 2000
       reasoning_effort: low
       stream: false

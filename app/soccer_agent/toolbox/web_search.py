@@ -27,7 +27,7 @@ def _get_tavily() -> TavilyService:
 def _get_llm():
     global _llm
     if _llm is None:
-        _llm = get_llm("tool")
+        _llm = get_llm("tool-text-only")
     return _llm
 
 
