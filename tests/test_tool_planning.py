@@ -24,6 +24,7 @@ def mock_planning_llm():
 def planning_node(mock_planning_llm):
     return UnifiedPlanningNode(
         planning_llm=mock_planning_llm,
+        planning_multimodal_llm=mock_planning_llm,
         tools=[]
     )
 
