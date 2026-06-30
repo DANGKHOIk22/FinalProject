@@ -30,6 +30,13 @@ def _serialize_content(content) -> Any:
         for block in content:
             if hasattr(block, 'model_dump'):
                 block = block.model_dump()
+
+            if isinstance(block, str):
+                blocks.append({
+                    "type": "text",
+                    "text": block
+                })
+                continue
             
             if not isinstance(block, dict):
                 continue
