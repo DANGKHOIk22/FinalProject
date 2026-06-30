@@ -41,6 +41,7 @@ class SemanticCache:
                 metadata_schema=[
                     {"name": "response", "type": "text"},
                     {"name": "image_id", "type": "tag"},
+                    {"name": "video_id", "type": "tag"},
                     {"name": "game_id", "type": "tag"},
                     {"name": "timestamp", "type": "numeric"},
                 ]
@@ -68,6 +69,7 @@ class SemanticCache:
         additional_material = additional_material or {}
         game_id = additional_material.get("game_id")
         image_id = additional_material.get("image_id")
+        video_id = additional_material.get("video_id")
 
         try:
             if game_id is not None:
@@ -84,14 +86,17 @@ class SemanticCache:
                     f"window=[{ts_min:.1f}s, {ts:.1f}s] query='{query}'"
                 )
             else:
-                # Non-video path: filter by image_id, exclude video-scoped entries
+                # Non-video path: filter by image_id & video_id, exclude video-scoped entries
                 image_id_str = _image_tag(image_id)
+                video_id_str = str(video_id) if video_id else "None"
                 filter_condition = (
                     (Tag("image_id") == image_id_str)
+                    & (Tag("video_id") == video_id_str)
                     & (Tag("game_id") == _NO_VIDEO)
                 )
                 logger.debug(
-                    f"Checking Semantic cache | image_id='{image_id_str}' query='{query}'"
+                    f"Checking Semantic cache | image_id='{image_id_str}' "
+                    f"video_id='{video_id_str}' query='{query}'"
                 )
 
             docs = self.vector_store.similarity_search_with_score(
@@ -104,7 +109,7 @@ class SemanticCache:
                 logger.info(f"🎯 Semantic cache HIT for query: '{query}'")
                 return docs[0][0].metadata.get("response")
 
-            logger.debug(f"Semantic cache MISS for query: '{query}'")
+            logger.info(f"⏳ Semantic cache MISS for query: '{query}'")
         except Exception as e:
             logger.error(f"Semantic cache lookup error: {e}")
 
@@ -123,12 +128,14 @@ class SemanticCache:
         additional_material = additional_material or {}
         game_id = additional_material.get("game_id")
         image_id = additional_material.get("image_id")
+        video_id = additional_material.get("video_id")
 
         try:
             if game_id is not None:
                 metadata = {
                     "response": response,
                     "image_id": "None",
+                    "video_id": "None",
                     "game_id": game_id,
                     "timestamp": current_time if current_time is not None else 0.0,
                 }
@@ -138,14 +145,17 @@ class SemanticCache:
                 )
             else:
                 image_id_str = _image_tag(image_id)
+                video_id_str = str(video_id) if video_id else "None"
                 metadata = {
                     "response": response,
                     "image_id": image_id_str,
+                    "video_id": video_id_str,
                     "game_id": _NO_VIDEO,
                     "timestamp": 0.0,
                 }
                 logger.debug(
-                    f"Saved to Semantic cache | image_id='{image_id_str}' query='{query}'"
+                    f"Saved to Semantic cache | image_id='{image_id_str}' "
+                    f"video_id='{video_id_str}' query='{query}'"
                 )
 
             self.vector_store.add_texts(texts=[query], metadatas=[metadata])
