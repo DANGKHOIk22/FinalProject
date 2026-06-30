@@ -1,9 +1,9 @@
 import asyncio
 import logging
-from typing import List, Literal, Optional, Tuple, Type
+from typing import Annotated, List, Literal, Optional, Tuple, Type
 
 import requests
-from langchain.tools import BaseTool
+from langchain.tools import BaseTool, InjectedState
 from langchain_core.callbacks import AsyncCallbackManagerForToolRun, CallbackManagerForToolRun
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
@@ -89,9 +89,8 @@ class WebNewsSearchInput(BaseModel):
             f"query spans multiple entities. Clamped to [{_MIN_RESULTS}, {_MAX_RESULTS}]."
         ),
     )
-    time_context: Optional[str] = Field(
-        default=None,
-        description="Current date and time for temporal reasoning.",
+    execution_agent_state: Annotated[dict, InjectedState] = Field(
+        description="Injected worker state — provides time_context for temporal reasoning."
     )
 
 
@@ -118,19 +117,20 @@ class WebNewsSearchTool(BaseTool):
     def _run(
         self,
         query: str,
+        execution_agent_state: Annotated[dict, InjectedState],
         max_results: int = 5,
-        time_context: Optional[str] = None,
         _run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, List[dict]]:
-        return asyncio.run(self._arun(query, max_results=max_results, time_context=time_context))
+        return asyncio.run(self._arun(query, execution_agent_state, max_results=max_results))
 
     async def _arun(
         self,
         query: str,
+        execution_agent_state: Annotated[dict, InjectedState],
         max_results: int = 5,
-        time_context: Optional[str] = None,
         _run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> Tuple[str, List[dict]]:
+        time_context = (execution_agent_state or {}).get("time_context")
         top_k = min(max(max_results, _MIN_RESULTS), _MAX_RESULTS)
 
         # 1. Search — Serper returns the full top-10; keep the top_k organic hits.
