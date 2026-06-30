@@ -24,8 +24,11 @@ def get_commentary_generation_prompt_template() -> ChatPromptTemplate:
                     "text": "{query_context}### OUTPUT FORMAT\n{output_format}\n"
                 },
                 {
-                    "type": "video_url",
-                    "video_url": {"url": "{video_url}"}
+                    "type": "file",
+                    "file": {
+                        "file_id": "{video_url}",
+                        "format": "video/mp4",
+                    }
                 }
             ]
         ),

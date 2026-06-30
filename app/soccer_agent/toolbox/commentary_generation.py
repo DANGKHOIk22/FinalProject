@@ -129,7 +129,7 @@ class CommentaryGenerationTool(BaseTool):
         
         query_context = f"\n### USER QUERY/CONTEXT\nFocus commentary on: {query}\n" if query else ""
 
-        # Use video URL for generation
+        # LiteLLM routes Gemini video input through the unified file message type.
         prompt_value = prompt_template.invoke(
             {
                 "output_format": parser.get_format_instructions(),
@@ -138,10 +138,28 @@ class CommentaryGenerationTool(BaseTool):
             }
         )
         response = self._vlm.invoke(prompt_value)
-        response_text = response.content[1] if isinstance(response.content, list) else str(response.content)
+        response_text = self._extract_text_content(response.content)
 
         output: _CommentaryGenerationOutput = parser.parse(response_text) # type: ignore
         return output
+
+    @staticmethod
+    def _extract_text_content(content: Any) -> str:
+        """Extract parseable text from multimodal LLM responses."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts: List[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    text_parts.append(part)
+                elif isinstance(part, dict) and part.get("type") == "text":
+                    text = part.get("text")
+                    if isinstance(text, str):
+                        text_parts.append(text)
+            if text_parts:
+                return "\n".join(text_parts)
+        return str(content)
 
     @staticmethod
     def validate_tool_input(media_id: str, media_registry: Any, user_id: str, thread_id: str) -> None:
