@@ -9,6 +9,7 @@ model_list:
       api_key: os.environ/GOOGLE_API_KEY
       max_completion_tokens: 2000
       reasoning_effort: low
+      temperature: 0.3
       stream: false
 
   # NOTE: Gemini thinking is controlled via `reasoning_effort` (LiteLLM maps it to
@@ -21,6 +22,7 @@ model_list:
       api_key: os.environ/CEREBRAS_API_KEY
       max_completion_tokens: 2000
       reasoning_effort: low
+      temperature: 0.3
       stream: false
 
   # ── Execution: iterative tool calling inside workers ─────────────────────────
@@ -31,6 +33,7 @@ model_list:
       api_key: os.environ/CEREBRAS_API_KEY
       max_completion_tokens: 2000
       reasoning_effort: low
+      temperature: 0.3
       stream: false
 
   - model_name: execution-backup
@@ -39,6 +42,7 @@ model_list:
       api_key: os.environ/GOOGLE_API_KEY
       max_completion_tokens: 1000
       reasoning_effort: low
+      temperature: 0.3
       stream: false
 
   # ── Retrieval-Augment: retrieve and augment information ─────────────────────
@@ -48,6 +52,7 @@ model_list:
       api_key: os.environ/CEREBRAS_API_KEY
       max_completion_tokens: 2000
       reasoning_effort: low
+      temperature: 0.3
       stream: false
 
   - model_name: retrieval-augment-backup
@@ -56,6 +61,7 @@ model_list:
       api_key: os.environ/GOOGLE_API_KEY
       max_completion_tokens: 1000
       reasoning_effort: medium
+      temperature: 0.3
       stream: false
 
   # ── Aggregator: synthesise parallel worker results ───────────────────────────
@@ -67,6 +73,7 @@ model_list:
       api_key: os.environ/CEREBRAS_API_KEY
       max_completion_tokens: 3000
       reasoning_effort: low
+      temperature: 0.3
       stream: true
 
   - model_name: aggregator-backup
@@ -75,6 +82,7 @@ model_list:
       api_key: os.environ/GOOGLE_API_KEY
       max_completion_tokens: 1000
       reasoning_effort: low
+      temperature: 0.3
       stream: true
 
   # ── Tool: shared by tools, query-understanding pipeline ──────────────────────
@@ -84,6 +92,7 @@ model_list:
       api_key: os.environ/CEREBRAS_API_KEY
       max_completion_tokens: 3000
       reasoning_effort: low
+      temperature: 0.3
       stream: false
     
   - model_name: tool-multi-modal
@@ -92,7 +101,18 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
       max_completion_tokens: 2000
       reasoning_effort: low
+      temperature: 0.3
       stream: false
+  # ── Tool video: dedicated for video input (gpt-5.4-nano doesn't support video) ─
+  - model_name: tool-video
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite
+      api_key: os.environ/GOOGLE_API_KEY
+      max_completion_tokens: 2000
+      reasoning_effort: low
+      temperature: 0.3
+      stream: false
+
   # ── Planning multimodal: used when image_ids or video_id are present ────────
   - model_name: planning-multimodal
     litellm_params:
@@ -100,6 +120,7 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
       max_completion_tokens: 2000
       reasoning_effort: low
+      temperature: 0.3
       stream: false
 
   # ── Guardrail: soccer-topic classification before planning ───────────────────
@@ -127,6 +148,7 @@ model_list:
     litellm_params:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
+      temperature: 0.3
       max_completion_tokens: 1000
       reasoning_effort: low
 
@@ -139,6 +161,7 @@ router_settings:
     - planning-multimodal: [gemini-backup]
     - tool-text-only: [gemini-backup]
     - tool-multi-modal: [gemini-backup]
+    - tool-video: [gemini-backup]
     - guardrail: [guardrail-backup]
 litellm_settings:
   drop_params: true

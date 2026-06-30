@@ -64,7 +64,7 @@ class CommentaryGenerationTool(BaseTool):
 
     def __init__(self):
         super().__init__(description=tool_description("commentary_generation"))
-        self._vlm = get_llm("tool-multi-modal")
+        self._vlm = get_llm("tool-video")
 
     async def warmup(self) -> None:
         from app.soccer_agent.factory.llm_provider import warm_llm

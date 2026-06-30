@@ -42,8 +42,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Suppress noisy third-party loggers
-logging.getLogger("LiteLLM").setLevel(logging.WARNING)
-logging.getLogger("LiteLLM Router").setLevel(logging.WARNING)
+logging.getLogger("LiteLLM").setLevel(logging.ERROR)
+logging.getLogger("LiteLLM Router").setLevel(logging.ERROR)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Global variables for database connections
