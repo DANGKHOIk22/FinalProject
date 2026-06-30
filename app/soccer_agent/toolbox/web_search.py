@@ -1,27 +1,44 @@
 import asyncio
 import logging
-from typing import Any, List, Literal, Optional, Tuple, Type
+from typing import List, Literal, Optional, Tuple, Type
 
+import requests
 from langchain.tools import BaseTool
 from langchain_core.callbacks import AsyncCallbackManagerForToolRun, CallbackManagerForToolRun
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from app.config import settings
 from app.soccer_agent.factory.llm_provider import get_llm
-from app.soccer_agent.services.tavily_service import TavilyService
 from app.soccer_agent.toolbox._config_loader import tool_description
 
 logger = logging.getLogger(__name__)
 
-_tavily_service: Optional[TavilyService] = None
+_SEARCH_URL = "https://google.serper.dev/search"
+_SCRAPE_URL = "https://scrape.serper.dev"
+# Serper /search always returns ~10 organic hits; we keep the top N in [5, 7].
+_MIN_RESULTS = 5
+_MAX_RESULTS = 7
+# Per-document char cap — keeps the lead of each article (where the key facts
+# usually are) without blowing up prompt size when a page scrapes to 100k+ chars.
+_MAX_DOC_CHARS = 8000
+
 _llm = None
-
-
-def _get_tavily() -> TavilyService:
-    global _tavily_service
-    if _tavily_service is None:
-        _tavily_service = TavilyService()
-    return _tavily_service
+_SYNTHESIS_SYSTEM = (
+    "You are a soccer news analyst. You are given several full web articles. "
+    "Write a concise, factual summary that directly answers the query, citing the "
+    "concrete facts (dates, scores, names) found in the articles. English only. "
+    "Flowing prose, no bullet points. Max 300 words.\n\n"
+    "TEMPORAL FILTERING (mandatory): Treat the provided current date/time as 'now'. "
+    "Classify every event mentioned in the articles relative to 'now': an event dated "
+    "before 'now' has ALREADY OCCURRED (past); an event dated after 'now' has NOT YET "
+    "OCCURRED (upcoming). Then filter to the query intent:\n"
+    "- If the query asks about 'upcoming'/'next'/'schedule'/'fixtures', report ONLY events "
+    "dated after 'now'; do not present already-played matches as upcoming.\n"
+    "- If the query asks about 'recent'/'latest result', report ONLY events dated at or before "
+    "'now'; do not present a not-yet-played match as a result.\n"
+    "Articles may be outdated or mix past and future events — always reconcile against 'now'."
+)
 
 
 def _get_llm():
@@ -31,55 +48,50 @@ def _get_llm():
     return _llm
 
 
+def _serper_search(query: str) -> List[dict]:
+    """Run a Serper Google search; return the organic results (title/link/snippet)."""
+    resp = requests.post(
+        _SEARCH_URL,
+        headers={"X-API-KEY": settings.SERPER_API_KEY, "Content-Type": "application/json"},
+        json={"q": query, "gl": "us", "hl": "en"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json().get("organic") or []
+
+
+def _serper_scrape(url: str) -> str:
+    """Fetch full page text/markdown for a single URL via Serper's scrape endpoint."""
+    resp = requests.post(
+        _SCRAPE_URL,
+        headers={"X-API-KEY": settings.SERPER_API_KEY, "Content-Type": "application/json"},
+        json={"url": url, "includeMarkdown": False},
+        timeout=3,
+    )
+    resp.raise_for_status()
+    return resp.json().get("text") or ""
+
+
 class WebNewsSearchInput(BaseModel):
     query: str = Field(
         description=(
-            "The news search query. Should be specific and include the entity name "
-            "(player/team/league) plus the news angle (transfer, injury, match result, etc.). "
+            "The web search query. Should be specific and include the entity name "
+            "(player/team/league) plus the angle (transfer, injury, match result, fixture, etc.). "
             "Example: 'Erling Haaland injury update', 'Real Madrid transfer news', "
-            "'Premier League results this week'."
+            "'Lionel Messi World Cup 2026 schedule'."
         )
-    )
-    time_range: Literal["day", "week", "month", "year"] = Field(
-        default="month",
-        description=(
-            "Recency filter based on the temporal scope of the user query. "
-            "'day': hôm nay / hôm qua / today / yesterday / breaking news. "
-            "'week': tuần này / tuần trước / this week / last week / recent days. "
-            "'month': tháng này / tháng trước / gần đây / recently / this month / last month (default). "
-            "'year': mùa giải / năm nay / năm ngoái / this season / last season / this year / last year."
-        ),
-    )
-    exact_match: bool = Field(
-        default=False,
-        description=(
-            "When True, wraps the query in quotes for exact phrase matching. "
-            "Use when the user asks about a very specific team name, player name, "
-            "or match title and broad results are likely to be noisy."
-        ),
-    )
-    start_date: Optional[str] = Field(
-        default=None,
-        description=(
-            "Start date filter in YYYY-MM-DD format (with leading zeros, e.g. '2026-05-03'). "
-            "When provided, overrides time_range. "
-            "Use when the user specifies a concrete date or date range start "
-            "(e.g. 'ngày 3/5/2026' → '2026-05-03'). Leave None for relative ranges."
-        ),
     )
     max_results: int = Field(
         default=5,
         description=(
-            "Number of results to return per source (news + general), then merged. "
-            "Use 5 (default) for a focused single-entity query. "
-            "Increase to 8–10 when the query covers multiple entities at once "
-            "(e.g. 'top scorers across 3 leagues', 'transfers for MU, Arsenal and Chelsea'). "
-            "Hard cap: 10."
+            "How many top search results to fetch and read in full. "
+            "Use 5 (default) for a focused single-entity query; increase toward 7 when the "
+            f"query spans multiple entities. Clamped to [{_MIN_RESULTS}, {_MAX_RESULTS}]."
         ),
     )
     time_context: Optional[str] = Field(
         default=None,
-        description="Current date and time for temporal reasoning."
+        description="Current date and time for temporal reasoning.",
     )
 
 
@@ -94,109 +106,81 @@ class WebNewsSearchTool(BaseTool):
     entity_augment for those. Do NOT use for specific past match data — use game tools for those.
     """
     args_schema: Type[BaseModel] = WebNewsSearchInput  # type: ignore
-
-    _llm: Any = None
+    response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
 
     def __init__(self):
         super().__init__(description=tool_description("web_news_search"))
 
     async def warmup(self) -> None:
         from app.soccer_agent.factory.llm_provider import warm_llm
-        await warm_llm(
-            _get_llm(),
-            SystemMessage(content=(
-                "You are a soccer news analyst. Given web search results, write a concise, "
-                "factual summary that directly answers the query. English only. "
-                "No bullet points — flowing prose. Max 300 words."
-            )),
-            "web_news_search",
-        )
+        await warm_llm(_get_llm(), SystemMessage(content=_SYNTHESIS_SYSTEM), "web_news_search")
 
     def _run(
         self,
         query: str,
-        time_range: Literal["day", "week", "month", "year"] = "week",
-        exact_match: bool = False,
-        start_date: Optional[str] = None,
         max_results: int = 5,
+        time_context: Optional[str] = None,
         _run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, List[dict]]:
-        return asyncio.run(self._arun(query, time_range, exact_match, start_date, max_results=max_results))
+        return asyncio.run(self._arun(query, max_results=max_results, time_context=time_context))
 
     async def _arun(
         self,
         query: str,
-        time_range: Literal["day", "week", "month", "year"] = "week",
-        exact_match: bool = False,
-        start_date: Optional[str] = None,
         max_results: int = 5,
         time_context: Optional[str] = None,
         _run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> Tuple[str, List[dict]]:
-        per_source = min(max(max_results, 1), 10)
-        _RANGE_UP: dict[str, str] = {"day": "week", "week": "month", "month": "year", "year": "year"}
-        general_time_range = _RANGE_UP[time_range]
+        top_k = min(max(max_results, _MIN_RESULTS), _MAX_RESULTS)
 
-        service = _get_tavily()
+        # 1. Search — Serper returns the full top-10; keep the top_k organic hits.
         try:
-            (news_answer, news_results), (general_answer, general_results) = await asyncio.gather(
-                service.search_news(
-                    query=query, time_range=time_range, start_date=start_date,
-                    exact_match=exact_match, max_results=per_source, search_depth="basic",
-                ),
-                service.search_general(
-                    query, max_results=per_source, time_range=general_time_range, search_depth="basic",
-                ),
-            )
+            organic = await asyncio.to_thread(_serper_search, query)
         except Exception as e:
-            logger.error(f"web_news_search failed: {e}", exc_info=True)
-            return (
-                f"An error occurred while searching for news: {str(e)}.",
-                [],
-            )
+            logger.error(f"web_news_search search failed: {e}", exc_info=True)
+            return f"An error occurred while searching the web: {str(e)}.", []
 
-        seen: dict[str, dict] = {}
-        for r in general_results:
-            url = r.get("url") or ""
-            if url:
-                seen[url] = r
-        for r in news_results:
-            url = r.get("url") or ""
-            if url:
-                seen[url] = r
-        results = sorted(seen.values(), key=lambda r: r.get("score") or 0.0, reverse=True)
+        organic = organic[:top_k]
+        if not organic:
+            return f"No web results found for: {query}", []
 
-        parts = [a for a in (news_answer, general_answer) if a]
-        tavily_answer = "\n\n".join(parts) if parts else None
+        # 2. Scrape the top_k URLs in parallel — one document per URL.
+        async def _fetch(hit: dict) -> dict:
+            link = hit.get("link") or ""
+            try:
+                text = await asyncio.to_thread(_serper_scrape, link)
+            except Exception as e:
+                logger.warning(f"web_news_search scrape failed for {link}: {e}")
+                text = ""
+            # Fall back to the snippet when the page can't be scraped; cap length.
+            content = (text or hit.get("snippet") or "")[:_MAX_DOC_CHARS]
+            return {
+                "title": hit.get("title") or "",
+                "link": link,
+                "content": content,
+            }
 
-        if not results and not tavily_answer:
-            return f"No recent news found for: {query}", []
+        results = await asyncio.gather(*(_fetch(h) for h in organic))
+        results = [r for r in results if r.get("content")]
+        if not results:
+            return f"No readable web content found for: {query}", []
 
-        raw_lines = []
-        if tavily_answer:
-            raw_lines.append(f"Answer: {tavily_answer}")
+        # 3. Combine documents and synthesize an answer.
+        doc_lines = []
         for i, r in enumerate(results, 1):
-            title = r.get("title", "")
-            content = r.get("content", "")
-            raw_lines.append(f"\n{i}. {title}")
-            if content:
-                raw_lines.append(f"   {content[:400]}")
-        raw_context = "\n".join(raw_lines)
+            doc_lines.append(f"\n=== Document {i}: {r['title']} ===")
+            doc_lines.append(r["content"])
+        documents = "\n".join(doc_lines)
 
+        time_line = f"Current date/time: {time_context}\n" if time_context else ""
         try:
             synthesis = await _get_llm().ainvoke([
-                SystemMessage(content=(
-                    "You are a soccer news analyst. Given web search results, write a concise, "
-                    "factual summary that directly answers the query. English only. "
-                    "No bullet points — flowing prose. Max 300 words."
-                )),
-                HumanMessage(content=(
-                    f"Query: {query}\n\nSearch results:\n{raw_context}"
-                )),
+                SystemMessage(content=_SYNTHESIS_SYSTEM),
+                HumanMessage(content=f"{time_line}Query: {query}\n\nArticles:\n{documents}"),
             ])
             answer = synthesis.content if hasattr(synthesis, "content") else str(synthesis)
         except Exception as e:
-            logger.warning(f"web_news_search LLM synthesis failed: {e}, returning raw results")
-            answer = raw_context
+            logger.warning(f"web_news_search LLM synthesis failed: {e}, returning raw documents")
+            answer = documents
 
         return answer, results

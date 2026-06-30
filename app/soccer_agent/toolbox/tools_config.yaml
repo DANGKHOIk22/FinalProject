@@ -41,19 +41,14 @@ tools:
       Do NOT use for: specific historical match data — use game tools.
     inputs:
       query: >
-        Specific news search query including the entity name and news angle.
+        Specific search query including the entity name and news angle.
         The query MUST be in English regardless of the user's input language.
         Examples: "Erling Haaland injury update", "Real Madrid summer transfer news",
-        "Premier League top scorer 2025".
-      time_range: >
-        Recency filter: "day" (last 24 h, breaking news), "week" (last 7 days, default),
-        "month" (last 30 days, background context).
+        "Lionel Messi World Cup 2026 schedule".
       max_results: >
-        Number of results to return per source (news + general), then merged and ranked by score.
-        Default is 5 for a focused single-entity query.
-        Increase to 8–10 when the query covers multiple entities at once
-        (e.g. "top scorers across 3 leagues", "transfers for MU, Arsenal and Chelsea").
-        Hard cap: 10.
+        How many top search results to fetch and read in full.
+        Default is 5 for a focused single-entity query; increase toward 7 when the
+        query spans multiple entities. Clamped to [5, 7].
 
   game_info_retrieval:
     description: >

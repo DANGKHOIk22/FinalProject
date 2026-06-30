@@ -390,7 +390,7 @@ class TavilyService:
         max_results: int = 10,
         score_threshold: float = 0.5,
         search_depth: str = "basic",
-        include_answer: str = "basic",
+        include_answer: str =None,
     ) -> tuple[Optional[str], List[dict]]:
         """Search recent soccer news via Tavily ``topic="news"``.
 
@@ -437,7 +437,7 @@ class TavilyService:
         max_results: int = 20,
         score_threshold: float = 0.5,
         search_depth: str = "basic",
-        include_answer: str = "basic",
+        include_answer: str = None,
         time_range: str = "month",
     ) -> tuple[Optional[str], List[dict]]:
         """Domain-less fallback search — used when extraction fails entirely."""

@@ -66,6 +66,9 @@ class Settings:
         if k.strip()
     ]
 
+    # Serper (Google Search API) — used by web_news_search for search + scrape.
+    SERPER_API_KEY: str = os.getenv('SERPER_API_KEY', '')
+
 
     @classmethod
     def validate(cls) -> bool:
