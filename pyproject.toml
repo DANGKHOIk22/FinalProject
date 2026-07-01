@@ -8,7 +8,7 @@ requires-python = ">=3.11,<3.12"
 dependencies = [
     "fastapi>=0.118.2",
     "python-dotenv>=1.1.1",
-    "requests>=2.32.5",
+    "requests[socks]>=2.32.5",
     "structlog>=25.4.0",
     "uvicorn>=0.37.0",
     "pandas>=2.3.0",
@@ -54,6 +54,7 @@ dependencies = [
     "azure-storage-blob>=12.28.0",
     "python-multipart>=0.0.29",
     "fastembed>=0.4.0",
+    "httpx[socks]>=0.28.1",
 ]
 
 [tool.pytest.ini_options]

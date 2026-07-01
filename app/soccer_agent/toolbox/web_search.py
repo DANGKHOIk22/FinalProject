@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from typing import Annotated, List, Literal, Optional, Tuple, Type
 
 import requests
@@ -16,6 +17,13 @@ logger = logging.getLogger(__name__)
 
 _SEARCH_URL = "https://google.serper.dev/search"
 _SCRAPE_URL = "https://scrape.serper.dev"
+_TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
+
+# Optional outbound proxy — set WEB_SEARCH_PROXY in .env to route web_search through a US VPS.
+# e.g. WEB_SEARCH_PROXY=socks5h://localhost:1080  (requires: uv add 'requests[socks]')
+# Intentionally NOT reading HTTP_PROXY/HTTPS_PROXY to avoid routing LiteLLM/Qdrant/Mongo through the proxy.
+_proxy_url = os.environ.get("WEB_SEARCH_PROXY")
+_PROXIES: dict | None = {"http": _proxy_url, "https": _proxy_url} if _proxy_url else None
 # Serper /search always returns ~10 organic hits; we keep the top N in [5, 7].
 _MIN_RESULTS = 5
 _MAX_RESULTS = 7
@@ -25,19 +33,35 @@ _MAX_DOC_CHARS = 8000
 
 _llm = None
 _SYNTHESIS_SYSTEM = (
-    "You are a soccer news analyst. You are given several full web articles. "
-    "Write a concise, factual summary that directly answers the query, citing the "
-    "concrete facts (dates, scores, names) found in the articles. English only. "
-    "Flowing prose, no bullet points. Max 300 words.\n\n"
-    "TEMPORAL FILTERING (mandatory): Treat the provided current date/time as 'now'. "
-    "Classify every event mentioned in the articles relative to 'now': an event dated "
-    "before 'now' has ALREADY OCCURRED (past); an event dated after 'now' has NOT YET "
-    "OCCURRED (upcoming). Then filter to the query intent:\n"
-    "- If the query asks about 'upcoming'/'next'/'schedule'/'fixtures', report ONLY events "
-    "dated after 'now'; do not present already-played matches as upcoming.\n"
-    "- If the query asks about 'recent'/'latest result', report ONLY events dated at or before "
-    "'now'; do not present a not-yet-played match as a result.\n"
-    "Articles may be outdated or mix past and future events — always reconcile against 'now'."
+    "You are a soccer news analyst. Synthesize web articles into a concise factual answer.\n"
+    "Follow this MANDATORY 3-step process before writing anything.\n\n"
+    "## STEP 1 — Establish NOW\n"
+    "The user message begins with: 'Current date/time (ICT/UTC+7): <timestamp>'\n"
+    "Parse that timestamp as NOW. All date comparisons below use this value.\n"
+    "If no timestamp is given, report facts without filtering and note the uncertainty.\n\n"
+    "## STEP 2 — Classify query temporal intent\n"
+    "Read the query and determine which time window the user is asking about:\n"
+    "  FUTURE — user wants events that have NOT yet happened as of NOW:\n"
+    "    Signals: 'next', 'upcoming', 'schedule', 'fixture', 'when will', 'sắp tới',\n"
+    "    'tiếp theo', 'lịch thi đấu', 'khi nào', 'trận tới'\n"
+    "  PAST — user wants events that have ALREADY happened before NOW:\n"
+    "    Signals: 'recent', 'latest result', 'last match', 'scored', 'gần đây', 'vừa',\n"
+    "    'mới nhất', 'kết quả', 'ai thắng', 'trận vừa rồi'\n"
+    "  GENERAL — career stats, biography, standings (no strict date filtering needed)\n\n"
+    "## STEP 3 — Filter events, then synthesize\n"
+    "For every match or event in the articles that has an explicit date:\n"
+    "  date < NOW  → mark PAST (already occurred)\n"
+    "  date > NOW  → mark FUTURE (not yet played)\n"
+    "Apply the filter:\n"
+    "  FUTURE query  → keep ONLY events marked FUTURE; discard all PAST events\n"
+    "  PAST query    → keep ONLY events marked PAST; discard all FUTURE events\n"
+    "  GENERAL       → keep all relevant facts\n"
+    "If no events survive the filter, say so explicitly:\n"
+    "  e.g. 'No upcoming matches found after [NOW] in the available sources.'\n\n"
+    "## OUTPUT\n"
+    "Write a concise factual summary (max 300 words), flowing English prose, no bullet points.\n"
+    "Cite concrete facts: dates, scores, names.\n"
+    "NEVER present a past event as upcoming. NEVER present a future event as a completed result."
 )
 
 
@@ -54,6 +78,7 @@ def _serper_search(query: str) -> List[dict]:
         _SEARCH_URL,
         headers={"X-API-KEY": settings.SERPER_API_KEY, "Content-Type": "application/json"},
         json={"q": query, "gl": "us", "hl": "en"},
+        proxies=_PROXIES,
         timeout=10,
     )
     resp.raise_for_status()
@@ -61,15 +86,37 @@ def _serper_search(query: str) -> List[dict]:
 
 
 def _serper_scrape(url: str) -> str:
-    """Fetch full page text/markdown for a single URL via Serper's scrape endpoint."""
+    """Fetch full page text for a single URL via Serper's scrape endpoint."""
     resp = requests.post(
         _SCRAPE_URL,
         headers={"X-API-KEY": settings.SERPER_API_KEY, "Content-Type": "application/json"},
         json={"url": url, "includeMarkdown": False},
+        proxies=_PROXIES,
         timeout=3,
     )
     resp.raise_for_status()
     return resp.json().get("text") or ""
+
+
+def _tavily_scrape(url: str) -> str:
+    """Fetch full page text for a single URL via Tavily's extract endpoint."""
+    api_key = settings.TAVILY_API_KEYS[0] if settings.TAVILY_API_KEYS else ""
+    resp = requests.post(
+        _TAVILY_EXTRACT_URL,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={"urls": [url], "extract_depth": "advanced", "format": "text"},
+        proxies=_PROXIES,
+        timeout=10,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    results = body.get("results") or []
+    if results:
+        return results[0].get("raw_content") or ""
+    # Log failed_results so we know WHY the URL wasn't extracted (auth wall, paywall, etc.)
+    for failed in body.get("failed_results") or []:
+        logger.warning(f"tavily_scrape failed for {failed.get('url')}: {failed.get('error')}")
+    return ""
 
 
 class WebNewsSearchInput(BaseModel):
@@ -148,7 +195,7 @@ class WebNewsSearchTool(BaseTool):
         async def _fetch(hit: dict) -> dict:
             link = hit.get("link") or ""
             try:
-                text = await asyncio.to_thread(_serper_scrape, link)
+                text = await asyncio.to_thread(_tavily_scrape, link)
             except Exception as e:
                 logger.warning(f"web_news_search scrape failed for {link}: {e}")
                 text = ""
@@ -172,7 +219,7 @@ class WebNewsSearchTool(BaseTool):
             doc_lines.append(r["content"])
         documents = "\n".join(doc_lines)
 
-        time_line = f"Current date/time: {time_context}\n" if time_context else ""
+        time_line = f"Current date/time (ICT/UTC+7): {time_context}\n" if time_context else ""
         try:
             synthesis = await _get_llm().ainvoke([
                 SystemMessage(content=_SYNTHESIS_SYSTEM),

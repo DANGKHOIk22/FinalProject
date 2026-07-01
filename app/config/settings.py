@@ -69,6 +69,11 @@ class Settings:
     # Serper (Google Search API) — used by web_news_search for search + scrape.
     SERPER_API_KEY: str = os.getenv('SERPER_API_KEY', '')
 
+    # Optional SOCKS5/HTTP proxy for web_search requests only (Serper + Tavily).
+    # Set to e.g. socks5h://localhost:1080 to route through a US VPS.
+    # Does NOT affect LiteLLM / Qdrant / MongoDB / other services.
+    WEB_SEARCH_PROXY: str = os.getenv('WEB_SEARCH_PROXY', '')
+
 
     @classmethod
     def validate(cls) -> bool:

@@ -30,8 +30,8 @@ class LongTermMemoryManager:
             output_dimensionality=768
         )
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1024, 
-            chunk_overlap=128,
+            chunk_size=2024, 
+            chunk_overlap=256,
         )
         self.pool = get_connection_pool()
 
