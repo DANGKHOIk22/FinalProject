@@ -42,13 +42,25 @@ tools:
     inputs:
       query: >
         Specific search query including the entity name and news angle.
-        The query MUST be in English regardless of the user's input language.
-        Examples: "Erling Haaland injury update", "Real Madrid summer transfer news",
-        "Lionel Messi World Cup 2026 schedule".
+        The query MUST be in VIETNAMESE regardless of the user's input language
+        (this tool searches with gl=vn, hl=vi — a Vietnamese query returns more
+        relevant Vietnamese-indexed results).
+        Examples: "Chấn thương của Erling Haaland mới nhất", "Tin chuyển nhượng
+        Real Madrid mùa hè", "Lịch thi đấu Lionel Messi World Cup 2026".
       max_results: >
         How many top search results to fetch and read in full.
         Default is 5 for a focused single-entity query; increase toward 7 when the
         query spans multiple entities. Clamped to [5, 7].
+      time_range: >
+        Optional recency filter on search results by publish time:
+        'h' past hour, 'd' past day, 'w' past week, 'm' past month, 'y' past year.
+        Choose by the query's temporal intent:
+        - FUTURE/upcoming (next match, upcoming fixtures, schedule, "when will X play") → 'd' or 'w' only.
+          Fixture news is announced shortly before it happens, so results older than a
+          week are usually stale or about a different, already-played fixture.
+        - RECENT/current state (recent form, current coach, injury status, latest transfer) → 'm'.
+        - Vague or no clear timeframe (general "what's new with X", broad news, unclear intent) → 'y'.
+        OMIT (null) for timeless facts (career history, founding) or when recency is irrelevant.
 
   game_info_retrieval:
     description: >

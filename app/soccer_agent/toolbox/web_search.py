@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.soccer_agent.factory.llm_provider import get_llm
+from app.soccer_agent.services.content_cleaner import clean_wiki_markdown
 from app.soccer_agent.toolbox._config_loader import tool_description
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ _MIN_RESULTS = 5
 _MAX_RESULTS = 7
 # Per-document char cap — keeps the lead of each article (where the key facts
 # usually are) without blowing up prompt size when a page scrapes to 100k+ chars.
-_MAX_DOC_CHARS = 8000
+_MAX_DOC_CHARS = 15000
 
 _llm = None
 _SYNTHESIS_SYSTEM = (
@@ -90,12 +91,18 @@ def _get_llm():
     return _llm
 
 
-def _serper_search(query: str) -> List[dict]:
-    """Run a Serper Google search; return the organic results (title/link/snippet)."""
+def _serper_search(query: str, time_range: Optional[str] = None) -> List[dict]:
+    """Run a Serper Google search; return the organic results (title/link/snippet).
+
+    ``time_range`` (h/d/w/m/y) maps to Google's recency operator ``tbs=qdr:<x>``
+    (past hour/day/week/month/year); omitted entirely when not provided."""
+    payload = {"q": query, "gl": "vn", "hl": "vi"}
+    if time_range:
+        payload["tbs"] = f"qdr:{time_range}"
     resp = requests.post(
         _SEARCH_URL,
         headers={"X-API-KEY": settings.SERPER_API_KEY, "Content-Type": "application/json"},
-        json={"q": query, "gl": "us", "hl": "en"},
+        json=payload,
         proxies=_PROXIES,
         timeout=10,
     )
@@ -117,20 +124,21 @@ def _serper_scrape(url: str) -> str:
 
 
 def _tavily_scrape(url: str) -> str:
-    """Fetch full page text for a single URL via Tavily's extract endpoint."""
+    """Fetch a single URL as markdown via Tavily's extract endpoint, then strip
+    chrome/link/reference noise with clean_wiki_markdown before returning."""
     api_key = settings.TAVILY_API_KEYS[0] if settings.TAVILY_API_KEYS else ""
     resp = requests.post(
         _TAVILY_EXTRACT_URL,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={"urls": [url], "extract_depth": "advanced", "format": "text"},
+        json={"urls": [url], "extract_depth": "basic", "format": "markdown"},
         proxies=_PROXIES,
-        timeout=10,
+        timeout=5,
     )
     resp.raise_for_status()
     body = resp.json()
     results = body.get("results") or []
     if results:
-        return results[0].get("raw_content") or ""
+        return clean_wiki_markdown(results[0].get("raw_content") or "")
     # Log failed_results so we know WHY the URL wasn't extracted (auth wall, paywall, etc.)
     for failed in body.get("failed_results") or []:
         logger.warning(f"tavily_scrape failed for {failed.get('url')}: {failed.get('error')}")
@@ -140,10 +148,11 @@ def _tavily_scrape(url: str) -> str:
 class WebNewsSearchInput(BaseModel):
     query: str = Field(
         description=(
-            "The web search query. Should be specific and include the entity name "
-            "(player/team/league) plus the angle (transfer, injury, match result, fixture, etc.). "
-            "Example: 'Erling Haaland injury update', 'Real Madrid transfer news', "
-            "'Lionel Messi World Cup 2026 schedule'."
+            "The web search query, MUST be in VIETNAMESE regardless of the user's input "
+            "language. Should be specific and include the entity name (player/team/league) "
+            "plus the angle (transfer, injury, match result, fixture, etc.). "
+            "Example: 'Chấn thương của Erling Haaland mới nhất', 'Tin chuyển nhượng Real Madrid "
+            "mùa hè', 'Lịch thi đấu Lionel Messi World Cup 2026'."
         )
     )
     max_results: int = Field(
@@ -152,6 +161,21 @@ class WebNewsSearchInput(BaseModel):
             "How many top search results to fetch and read in full. "
             "Use 5 (default) for a focused single-entity query; increase toward 7 when the "
             f"query spans multiple entities. Clamped to [{_MIN_RESULTS}, {_MAX_RESULTS}]."
+        ),
+    )
+    time_range: Optional[Literal["h", "d", "w", "m", "y"]] = Field(
+        default="w",
+        description=(
+            "Optional recency filter — restrict results by how recently they were published: "
+            "'h' past hour, 'd' past day, 'w' past week, 'm' past month, 'y' past year. "
+            "Choose by the query's temporal intent:\n"
+            "- FUTURE/upcoming (next match, upcoming fixtures, schedule, 'when will X play') "
+            "→ 'd' or 'w' ONLY. Fixture news is announced shortly before it happens, so results "
+            "older than a week are usually stale or about a different, already-played fixture.\n"
+            "- RECENT/current state (recent form, current coach, injury status, latest transfer) → 'm'.\n"
+            "- Vague or no clear timeframe (general news, unclear intent) → 'y'.\n"
+            "OMIT it (leave null) for timeless facts (career history, founding) or when recency "
+            "does not matter."
         ),
     )
     execution_agent_state: Annotated[dict, InjectedState] = Field(
@@ -184,15 +208,17 @@ class WebNewsSearchTool(BaseTool):
         query: str,
         execution_agent_state: Annotated[dict, InjectedState],
         max_results: int = 5,
+        time_range: Optional[str] = None,
         _run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Tuple[str, List[dict]]:
-        return asyncio.run(self._arun(query, execution_agent_state, max_results=max_results))
+        return asyncio.run(self._arun(query, execution_agent_state, max_results=max_results, time_range=time_range))
 
     async def _arun(
         self,
         query: str,
         execution_agent_state: Annotated[dict, InjectedState],
         max_results: int = 5,
+        time_range: Optional[str] = None,
         _run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> Tuple[str, List[dict]]:
         time_context = (execution_agent_state or {}).get("time_context")
@@ -200,7 +226,7 @@ class WebNewsSearchTool(BaseTool):
 
         # 1. Search — Serper returns the full top-10; keep the top_k organic hits.
         try:
-            organic = await asyncio.to_thread(_serper_search, query)
+            organic = await asyncio.to_thread(_serper_search, query, time_range)
         except Exception as e:
             logger.error(f"web_news_search search failed: {e}", exc_info=True)
             return f"An error occurred while searching the web: {str(e)}.", []
