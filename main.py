@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
+import asyncio
 from contextlib import asynccontextmanager
 import logging
 import uvicorn
@@ -127,6 +128,11 @@ async def lifespan(app: FastAPI):
 
             # Warmup all internal services (case bank, guardrail LLM, ...)
             await agent_service.warmup()
+
+            # Give the provider side (Cerebras/Gemini/OpenAI) 30s to settle after the
+            # warmup burst of concurrent LLM calls before accepting real traffic.
+            logger.info("⏳ Cooling down 30s after warmup before marking the app ready...")
+            await asyncio.sleep(30)
 
             # Initialize MediaRegistryService
             media_service = MediaRegistryService(
