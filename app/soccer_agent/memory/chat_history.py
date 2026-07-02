@@ -97,7 +97,9 @@ class ConversationHistoryManager:
                 self.session_id,
                 sync_connection=conn
             )
-            return history_db.messages
+            messages = history_db.messages
+            conn.rollback()  # read-only: close the SELECT's transaction before returning the conn to the pool
+            return messages
         except Exception as e:
             logger.warning(f"DB load error: {e}. Attempting rollback and retry...")
             self._safe_rollback(conn)
@@ -107,7 +109,9 @@ class ConversationHistoryManager:
                     self.session_id,
                     sync_connection=conn
                 )
-                return history_db.messages
+                messages = history_db.messages
+                conn.rollback()
+                return messages
             except Exception as e2:
                 logger.error(f"Failed to load memory after retry: {e2}.")
                 raise e2
