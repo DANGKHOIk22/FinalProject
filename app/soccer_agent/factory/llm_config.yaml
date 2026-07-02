@@ -1,8 +1,18 @@
 model_list:
   # ── Planning: query decomposition + tool-chain selection ─────────────────────
-  # reasoning_effort low (was high): tool-chain selection benefits from some
-  # reasoning but `high` burns thousands of hidden reasoning tokens → 2-6s.
-  # Bump back to medium only if planning quality regresses.
+  # gemma-4-31b reasoning notes (applies to every cerebras/gemma-4-31b role below):
+  # low/medium/high are all EQUIVALENT (full reasoning, no graduated effort control —
+  # unlike gpt-oss-120b). When reasoning is on, the model writes reasoning FIRST,
+  # then content — both draw from the SAME max_completion_tokens budget. If that
+  # budget runs out mid-reasoning (finish_reason=length), content is never written
+  # and comes back None/empty, which LiteLLM/LangChain treat as an empty response
+  # (this caused the guardrail TimeoutError / retry storm during the first
+  # gpt-oss-120b -> gemma-4-31b migration). Verified empirically: content DOES
+  # populate correctly once max_completion_tokens gives enough headroom (>=500;
+  # reasoning alone measured ~250-450 tokens on trivial prompts, more on complex
+  # ones). All roles here use budgets >=2000 so `low` is safe; the sole exception
+  # is `guardrail` (200-token budget — reasoning alone can exceed it), which stays
+  # on `none` to guarantee content is always populated.
   - model_name: planning-backup
     litellm_params:
       model: gemini/gemini-3.1-flash-lite
@@ -20,15 +30,18 @@ model_list:
       model: cerebras/gpt-oss-120b
       api_key: os.environ/CEREBRAS_API_KEY
       max_completion_tokens: 2000
-      reasoning_effort: low
+      reasoning_effort: medium
       temperature: 0.3
       stream: false
 
   # ── Execution: iterative tool calling inside workers ─────────────────────────
-  # low reasoning — picking which tool to call next is not a reasoning task.
+  # gpt-oss-120b (not gemma-4-31b): execution is called repeatedly per worker, so
+  # it needs gpt-oss-120b's REAL graduated reasoning_effort (low = minimal/fast) —
+  # gemma-4-31b's low/medium/high are all equivalent to full reasoning, too costly
+  # to pay on every iteration of the tool-calling loop.
   - model_name: execution
     litellm_params:
-      model: cerebras/gpt-oss-120b
+      model: cerebras/gemma-4-31b
       api_key: os.environ/CEREBRAS_API_KEY
       max_completion_tokens: 2000
       reasoning_effort: low
@@ -44,12 +57,24 @@ model_list:
       stream: false
 
   # ── Retrieval-Augment: retrieve and augment information ─────────────────────
+  # NO reasoning_effort here — deliberately. litellm's supported_openai_params
+  # for cerebras/gemma-4-31b doesn't list reasoning_effort (unlike gpt-oss-120b),
+  # so with the global `litellm.drop_params = True` a top-level reasoning_effort
+  # is silently dropped anyway (verified via debug logging: payload always had
+  # reasoning_tokens=0 regardless). It CAN be forced through via
+  # `extra_body: {reasoning_effort: low}`, which does reach Cerebras — but doing
+  # so changes AIMessage.content from a plain string into a list of
+  # {'type': 'thinking'|'text', ...} blocks (LangChain's reasoning-content
+  # handling). That breaks every `.content`-as-string consumer downstream
+  # (confirmed: web_search.py's `synthesis.content` branch, and this role's
+  # response also flows straight into aggregator/CopilotKit streaming). Not
+  # worth it for a model whose low/medium/high are equivalent anyway — leave
+  # reasoning off.
   - model_name: retrieval-augment
     litellm_params:
-      model: cerebras/gpt-oss-120b
+      model: cerebras/gemma-4-31b
       api_key: os.environ/CEREBRAS_API_KEY
       max_completion_tokens: 2000
-      reasoning_effort: low
       temperature: 0.3
       stream: false
 
@@ -62,14 +87,14 @@ model_list:
       stream: false
 
   # ── Aggregator: synthesise parallel worker results ───────────────────────────
-  # reasoning_effort low (was medium) + 8k budget (was 50k): synthesis is mostly
-  # rewriting worker outputs, not deep reasoning. Streaming kept for TTFT.
+  # NO reasoning_effort — see the note on `retrieval-augment` above. This role's
+  # output is especially sensitive: it flows straight into CopilotKit streaming
+  # as the user-visible final answer, so content MUST stay a plain string.
   - model_name: aggregator
     litellm_params:
-      model: cerebras/gpt-oss-120b
+      model: cerebras/gemma-4-31b
       api_key: os.environ/CEREBRAS_API_KEY
       max_completion_tokens: 3000
-      reasoning_effort: low
       temperature: 0.3
       stream: true
 
@@ -82,15 +107,18 @@ model_list:
       stream: true
 
   # ── Tool: shared by tools, query-understanding pipeline ──────────────────────
+  # NO reasoning_effort — see the note on `retrieval-augment` above. web_search.py
+  # reads `synthesis.content` directly (always takes that branch since AIMessage
+  # always has `.content`), so a list-of-blocks content would leak Python repr
+  # into the user-facing search summary.
   - model_name: tool-text-only
     litellm_params:
-      model: cerebras/gpt-oss-120b
+      model: cerebras/gemma-4-31b
       api_key: os.environ/CEREBRAS_API_KEY
       max_completion_tokens: 3000
-      reasoning_effort: low
       temperature: 0.3
       stream: false
-    
+
   - model_name: tool-multi-modal
     litellm_params:
       model: openai/gpt-5.4-nano
@@ -118,23 +146,22 @@ model_list:
       temperature: 0.3
       stream: false
 
-  # ── Guardrail: soccer-topic classification before planning ───────────────────
-  # Primary is Gemini flash-lite — measured ~1s here vs ~7-8s on the OpenAI path.
   - model_name: guardrail-backup
     litellm_params:
       model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
-      max_completion_tokens: 200
+      max_completion_tokens: 1000
       reasoning_effort: low
+      timeout: 4
       stream: false
 
   - model_name: guardrail
     litellm_params:
-      model: cerebras/gpt-oss-120b
+      model: cerebras/gemma-4-31b
       api_key: os.environ/CEREBRAS_API_KEY
       temperature: 0
-      max_completion_tokens: 200
-      reasoning_effort: low
+      max_completion_tokens: 1000
+      timeout: 4
       stream: false
 
   # ── Fallbacks (Gemini as backup now) ────────────────────────────────────────

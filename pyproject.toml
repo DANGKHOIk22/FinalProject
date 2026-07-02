@@ -55,6 +55,7 @@ dependencies = [
     "python-multipart>=0.0.29",
     "fastembed>=0.4.0",
     "httpx[socks]>=0.28.1",
+    "litellm>=1.90.2",
 ]
 
 [tool.pytest.ini_options]

@@ -39,6 +39,11 @@ def _get_router() -> Router:
             num_retries=0,
             # Override: retry only Timeout errors before giving up / falling back.
             retry_policy=RetryPolicy(TimeoutErrorRetries=LLM_TIMEOUT_RETRIES),
+            # guardrail is wrapped in its own hard 10s ceiling (GUARDRAIL_TIMEOUT_SECONDS,
+            # guardrail.py) that is SHORTER than LLM_REQUEST_TIMEOUT. Retrying the same
+            # (already timed-out) deployment there just burns that budget for nothing —
+            # skip straight to the guardrail-backup fallback on any timeout instead.
+            model_group_retry_policy={"guardrail": RetryPolicy(TimeoutErrorRetries=0)},
         )
     return _router
 
